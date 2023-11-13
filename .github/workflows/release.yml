@@ -2,13 +2,8 @@ name: Create Release on Push
 
 on:
   push:
-    branches: 
-      - main
-    paths:
-      - 'setup.py'
-  pull_request:
     branches:
-      - "main"
+      - main
     paths:
       - 'setup.py'
 
@@ -18,45 +13,59 @@ jobs:
     outputs:
       version_changed: ${{ steps.version-change.outputs.version_changed }}
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    - name: Check if version changed
-      id: version-change
-      run: |
-        VERSION_CHANGE=$(git diff HEAD^ HEAD -- setup.py | grep -e "^+.*version.*=" -e "^-.*version.*=" | wc -l)
-        if [ "$VERSION_CHANGE" -eq 0 ]; then
-          echo "Version not changed"
-          echo "::set-output name=version_changed::false"
-        else
-          echo "Version changed"
-          echo "::set-output name=version_changed::true"
-        fi
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Fetch all history for all tags and branches
+        run: git fetch --unshallow
+      - name: Check if version changed
+        id: version-change
+        run: |
+          # Get the latest commit on main before the merge
+          MAIN_COMMIT=$(git rev-parse origin/main)
+
+          # Get the version from the main branch before the merge
+          MAIN_VERSION=$(git show "$MAIN_COMMIT:setup.py" | grep -Po "version='\K.*?(?=')")
+
+          # Get the version from the latest commit on the incoming branch
+          HEAD_VERSION=$(grep -Po "version='\K.*?(?=')" setup.py)
+
+          echo "Main version: $MAIN_VERSION"
+          echo "Head version: $HEAD_VERSION"
+
+          # Compare versions
+          if [ "$MAIN_VERSION" != "$HEAD_VERSION" ]; then
+            echo "Version changed"
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version not changed"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
 
   release:
     needs: check-version-changed
     if: needs.check-version-changed.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    - name: Extract Version from setup.py
-      id: get_version
-      run: |
-        echo "::set-output name=VERSION::$(python setup.py --version)"
-    - name: Create and Push Tag
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git tag v${{ steps.get_version.outputs.VERSION }}
-        git push origin v${{ steps.get_version.outputs.VERSION }}
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        name: neuralnetlib v${{ steps.get_version.outputs.VERSION }}
-        tag_name: v${{ steps.get_version.outputs.VERSION }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Extract Version from setup.py
+        id: get_version
+        run: |
+          echo "VERSION=$(python setup.py --version)" >> $GITHUB_OUTPUT
+      - name: Create and Push Tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag v${{ steps.get_version.outputs.VERSION }}
+          git push origin v${{ steps.get_version.outputs.VERSION }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "neuralnetlib v${{ steps.get_version.outputs.VERSION }}"
+          tag_name: "v${{ steps.get_version.outputs.VERSION }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
