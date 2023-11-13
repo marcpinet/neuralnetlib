@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 
@@ -23,6 +25,13 @@ def dict_with_list_to_dict_with_ndarray(d: dict) -> dict:
             d[k] = np.array(v)
     return d
 
-def apply_threshold(y_pred, threshold=0.5):
+
+def apply_threshold(y_pred, threshold: float = 0.5):
     """Applies a threshold to the predictions. Typically used for binary classification."""
     return (y_pred > threshold).astype(int)
+
+
+def shuffle(x, y, random_state: int = None) -> tuple:
+    rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
+    indices = rng.permutation(len(x))
+    return x[indices], y[indices]
