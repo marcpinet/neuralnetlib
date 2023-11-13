@@ -2,61 +2,54 @@ name: Create Release on Push
 
 on:
   push:
-    branches: 
-      - main
-    paths:
-      - 'setup.py'
-  pull_request:
     branches:
-      - "main"
+      - main
     paths:
       - 'setup.py'
 
 jobs:
-  check-version-changed:
-    runs-on: ubuntu-latest
-    outputs:
-      version_changed: ${{ steps.version-change.outputs.version_changed }}
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    - name: Check if version changed
-      id: version-change
-      run: |
-        VERSION_CHANGE=$(git diff HEAD^ HEAD -- setup.py | grep -e "^+.*version.*=" -e "^-.*version.*=" | wc -l)
-        if [ "$VERSION_CHANGE" -eq 0 ]; then
-          echo "Version not changed"
-          echo "::set-output name=version_changed::false"
-        else
-          echo "Version changed"
-          echo "::set-output name=version_changed::true"
-        fi
+  # ... (previous jobs)
 
   release:
     needs: check-version-changed
     if: needs.check-version-changed.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    - name: Extract Version from setup.py
-      id: get_version
-      run: |
-        echo "::set-output name=VERSION::$(python setup.py --version)"
-    - name: Create and Push Tag
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git tag v${{ steps.get_version.outputs.VERSION }}
-        git push origin v${{ steps.get_version.outputs.VERSION }}
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        name: neuralnetlib v${{ steps.get_version.outputs.VERSION }}
-        tag_name: v${{ steps.get_version.outputs.VERSION }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Ensure all tags are fetched
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Extract Version from setup.py
+        id: get_version
+        run: |
+          echo "VERSION=$(python setup.py --version)" >> $GITHUB_OUTPUT
+      - name: Get last tag
+        id: get_last_tag
+        run: |
+          echo "LAST_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+      - name: Create and Push Tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          NEW_TAG="v${{ steps.get_version.outputs.VERSION }}"
+          git tag $NEW_TAG
+          git push origin $NEW_TAG
+      - name: Generate Release Notes
+        id: generate_release_notes
+        run: |
+          NEW_TAG="v${{ steps.get_version.outputs.VERSION }}"
+          LAST_TAG=${{ steps.get_last_tag.outputs.LAST_TAG }}
+          RELEASE_NOTES=$(git log $LAST_TAG...$NEW_TAG --pretty=format:"- %s" --reverse)
+          echo "RELEASE_NOTES=$RELEASE_NOTES" >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "neuralnetlib ${{ steps.get_version.outputs.VERSION }}"
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          body: ${{ steps.generate_release_notes.outputs.RELEASE_NOTES }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
