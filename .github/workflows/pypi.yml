@@ -6,11 +6,6 @@ on:
       - main
     paths:
       - 'setup.py'
-  pull_request:
-    branches:
-      - "main"
-    paths:
-      - 'setup.py'
 
 jobs:
   check-version-changed:
@@ -23,18 +18,18 @@ jobs:
     - name: Check if version changed
       id: version-change
       run: |
-        VERSION_CHANGE=$(git diff HEAD^ HEAD -- setup.py | grep -e "^+.*version.*=" -e "^-.*version.*=" | wc -l)
+        VERSION_CHANGE=$(git diff $(git rev-parse HEAD~1) $(git rev-parse HEAD) -- setup.py | grep -e "^+.*version.*=" -e "^-.*version.*=" | wc -l)
         if [ "$VERSION_CHANGE" -eq 0 ]; then
           echo "Version not changed"
-          echo "::set-output name=version_changed::false"
+          echo "version_changed=false" >> $GITHUB_ENV
         else
           echo "Version changed"
-          echo "::set-output name=version_changed::true"
+          echo "version_changed=true" >> $GITHUB_ENV
         fi
 
   publish:
     needs: check-version-changed
-    if: needs.check-version-changed.outputs.version_changed == 'true'
+    if: ${{ env.version_changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
     - name: Check out code
