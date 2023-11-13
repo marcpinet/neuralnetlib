@@ -1,11 +1,12 @@
 import json
+import time
 
 import numpy as np
-import time
 
 from neuralnetlib.layers import Layer, Activation, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
+from neuralnetlib.utils import shuffle
 
 
 class Model:
@@ -31,7 +32,8 @@ class Model:
         if self.layers and isinstance(layer, Dense):
             prev_layer = [l for l in self.layers if isinstance(l, Dense)][-1]
             if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
-                raise ValueError(f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
+                raise ValueError(
+                    f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
         self.layers.append(layer)
 
     def __check_layer_compatability(self, layer: Dense) -> bool:
@@ -74,14 +76,12 @@ class Model:
         return loss
 
     def train(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-            verbose: bool = True, metrics: list = None, random_state: int = None):
+              verbose: bool = True, metrics: list = None, random_state: int = None):
         rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-        
+
         for i in range(epochs):
             # Shuffling the data to avoid overfitting
-            indices = rng.permutation(len(x_train))
-            x_train_shuffled = x_train[indices]
-            y_train_shuffled = y_train[indices]
+            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
 
             error = 0
             predictions_list = []
@@ -93,7 +93,7 @@ class Model:
                     x_batch = x_train_shuffled[j:j + batch_size]
                     y_batch = y_train_shuffled[j:j + batch_size]
                     error += self.train_on_batch(x_batch, y_batch)
-                    
+
                     predictions_list.append(self.predictions)
                     y_true_list.append(y_batch)
 
@@ -116,7 +116,6 @@ class Model:
                     print(f'Epoch {i + 1}/{epochs} - loss: {error} - {metrics_str[:-3]}')
                 else:
                     print(f'Epoch {i + 1}/{epochs} - loss: {error}')
-
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
         predictions = self.forward_pass(x_test)
