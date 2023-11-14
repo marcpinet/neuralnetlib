@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 
 from neuralnetlib.model import Model
 from neuralnetlib.utils import one_hot_encode
-from neuralnetlib.metrics import accuracy_score
+from neuralnetlib.metrics import accuracy_score, confusion_matrix
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     y_test = one_hot_encode(y_test, num_classes=10)
 
     # 3. Split the training data into training and validation sets
-    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.2, random_state=42)
+    _, x_val, _, y_val = train_test_split(x_train, y_train, test_size=0.2, random_state=42)
 
     # 4. Load the model
     model: Model = Model.load('my_mnist_model.npz')
@@ -31,6 +31,7 @@ def main():
     y_pred_test = model.predict(x_test)
     accuracy_test = accuracy_score(y_pred_test, y_test)
     print(f'Test Accuracy: {accuracy_test}')
+    print(f'Confusion Matrix:\n{confusion_matrix(y_pred_test, y_test)}')
 
 
 if __name__ == '__main__':
