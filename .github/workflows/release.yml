@@ -73,9 +73,12 @@ jobs:
         id: generate_release_notes
         run: |
           NEW_TAG="v${{ steps.get_version.outputs.VERSION }}"
-          LAST_TAG=${{ steps.get_last_tag.outputs.LAST_TAG }}
-          RELEASE_NOTES=$(git log $LAST_TAG...$NEW_TAG --pretty=format:"- %s" --reverse)
-          echo "RELEASE_NOTES=$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          LAST_TAG=$(git describe --tags --abbrev=0 $NEW_TAG^)
+          # Ensure release notes do not cause format errors
+          RELEASE_NOTES=$(git log $LAST_TAG...$NEW_TAG --pretty=format:"- %s" --reverse | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
