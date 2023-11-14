@@ -7,6 +7,10 @@ def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     """One hot encoded labels are binary vectors representing categorical values,
     with exactly one high (or "hot" = 1) bit indicating the presence of a specific category
     and all other bits low (or "cold" = 0)."""
+    if labels.ndim > 1:
+        labels = labels.reshape(-1)
+
+    labels = labels.astype(int)
     one_hot = np.zeros((labels.size, num_classes))
     one_hot[np.arange(labels.size), labels] = 1
     return one_hot
