@@ -24,10 +24,10 @@ def main():
     y_test = y_test.reshape(-1, 1)
 
     # 4. Model definition
-    input_neurons = 30  # Cancer dataset has 30 features
+    input_neurons = x_train.shape[1:][0]  # Cancer dataset has 30 features
     num_hidden_layers = 5  # Number of hidden layers
     hidden_neurons = 100  # Number of neurons in each hidden layer
-    output_neurons = 1  # Binary classification
+    output_neurons = 1  # Binary classification-regression
 
     model = Model()
     model.add(Dense(input_neurons, hidden_neurons, weights_init='he', random_state=42))

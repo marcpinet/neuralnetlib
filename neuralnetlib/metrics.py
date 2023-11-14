@@ -6,7 +6,7 @@ from neuralnetlib.utils import apply_threshold
 def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     if y_pred.ndim == 1 or y_pred.shape[1] == 1:  # Binary classification
         y_pred_classes = apply_threshold(y_pred, threshold).ravel()
-    else:  # Multiclass classification
+    else:  # Multiclass classification-regression
         y_pred_classes = np.argmax(y_pred, axis=1)
 
     if y_true.ndim == 1 or y_true.shape[1] == 1:  # If y_true is not one-hot encoded
@@ -57,7 +57,7 @@ def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0
 def confusion_matrix(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     if y_pred.ndim == 1 or y_pred.shape[1] == 1:  # Binary classification
         y_pred_classes = apply_threshold(y_pred, threshold).ravel()
-    else:  # Multiclass classification
+    else:  # Multiclass classification-regression
         y_pred_classes = np.argmax(y_pred, axis=1)
 
     if y_true.ndim == 1 or y_true.shape[1] == 1:  # If y_true is not one-hot encoded
