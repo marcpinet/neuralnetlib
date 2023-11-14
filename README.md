@@ -29,7 +29,7 @@ pip install neuralnetlib
 
 ## 💡 How to use
 
-See [this file](examples/simple_mnist_example.py) for a simple example of how to use the library.
+See [this file](examples/classification-regression/simple_mnist_multiclass.py) for a simple example of how to use the library.
 More examples in [this folder](examples).
 
 You are free to tweak the hyperparameters and the network architecture to see how it affects the results.

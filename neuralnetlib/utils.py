@@ -31,7 +31,7 @@ def dict_with_list_to_dict_with_ndarray(d: dict) -> dict:
 
 
 def apply_threshold(y_pred, threshold: float = 0.5):
-    """Applies a threshold to the predictions. Typically used for binary classification."""
+    """Applies a threshold to the predictions. Typically used for binary classification-regression."""
     return (y_pred > threshold).astype(int)
 
 

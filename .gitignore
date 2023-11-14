@@ -1,6 +1,11 @@
 # Dist generator
 dist_gen.bat
 
+# Datasets formats
+*.csv
+*.npz
+*.arff
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -8,9 +13,6 @@ __pycache__/
 
 # PyCharm
 .idea/
-
-# .npz files
-*.npz
 
 # C extensions
 *.so

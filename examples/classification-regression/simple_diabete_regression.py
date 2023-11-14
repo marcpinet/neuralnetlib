@@ -22,7 +22,7 @@ def main():
     y_test = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
 
     # 3. Model definition
-    input_neurons = 10
+    input_neurons = x_train.shape[1:][0]
     num_hidden_layers = 2
     hidden_neurons = 2
     output_neurons = 1
@@ -53,7 +53,7 @@ def main():
     print("MAE: ", MeanAbsoluteError()(y_test, y_pred))
 
     # 8. We won't print metrics such as accuracy or f1-score because this is a regression problem
-    # not a classification one.
+    # not a classification-regression one.
 
 if __name__ == '__main__':
     main()

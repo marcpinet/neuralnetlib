@@ -22,7 +22,7 @@ def main():
     y_test = one_hot_encode(y_test, num_classes=10)  # One-hot encoding of the labels
 
     # 3. Model definition
-    input_neurons = 784  # MNIST images are 28x28
+    input_neurons = x_train.shape[1:][0]  # MNIST images are 28x28
     num_hidden_layers = 2  # Number of hidden layers
     hidden_neurons = 30  # Number of neurons in each hidden layer
     output_neurons = 10  # Assuming 10 classes for MNIST
