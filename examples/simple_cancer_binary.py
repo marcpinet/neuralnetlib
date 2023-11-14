@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 
 
 def main():
-    # 1. Loading a dataset (in this case, IMDB)
+    # 1. Loading a dataset (in this case, Breast Cancer dataset)
     data = load_breast_cancer()
     X, y = data.data, data.target
 

@@ -77,8 +77,6 @@ class Model:
 
     def train(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
               verbose: bool = True, metrics: list = None, random_state: int = None):
-        rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-
         for i in range(epochs):
             # Shuffling the data to avoid overfitting
             x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
@@ -92,8 +90,11 @@ class Model:
                 for j in range(0, x_train.shape[0], batch_size):
                     x_batch = x_train_shuffled[j:j + batch_size]
                     y_batch = y_train_shuffled[j:j + batch_size]
-                    error += self.train_on_batch(x_batch, y_batch)
 
+                    # Reshape if it's a regression (single output neuron)
+                    if y_batch.ndim == 1:
+                        y_batch = y_batch.reshape(-1, 1)
+                    error += self.train_on_batch(x_batch, y_batch)
                     predictions_list.append(self.predictions)
                     y_true_list.append(y_batch)
 
