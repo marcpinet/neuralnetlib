@@ -2,7 +2,7 @@
 
 ## 📝 Description
 
-This is a handmade neural network library, made in python, **using numpy as the only dependency**.
+This is a handmade convolutional neural network library, made in python, **using numpy as the only dependency**.
 
 I made it to challenge myself and to learn more about neural networks, how they work in depth.
 
