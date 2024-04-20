@@ -26,37 +26,77 @@ class Layer:
             return Dense.from_config(config)
         elif config['name'] == 'Activation':
             return Activation.from_config(config)
+        elif config['name'] == 'Conv2D':
+            return Conv2D.from_config(config)
+        elif config['name'] == 'MaxPooling2D':
+            return MaxPooling2D.from_config(config)
+        elif config['name'] == 'Flatten':
+            return Flatten.from_config(config)
+        else:
+            raise ValueError(f'Invalid layer name: {config["name"]}')
+
+
+class Input(Layer):
+    def __init__(self, input_shape: tuple):
+        self.input_shape = input_shape
+
+    def __str__(self):
+        return f'Input(input_shape={self.input_shape})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        return input_data
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        return output_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'input_shape': self.input_shape
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return Input(config['input_shape'])
 
 
 class Dense(Layer):
-    def __init__(self, input_size: int, output_size: int, weights_init: str = "default", bias_init: str = "default",
-                 random_state: int = None):
-        self.input_size = input_size
-        self.output_size = output_size
+    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+        self.units = units
 
-        self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-        if weights_init == "xavier":
-            stddev = np.sqrt(2 / (input_size + output_size))
-            self.weights = self.rng.normal(0, stddev, (input_size, output_size))
-        elif weights_init == "he":
+        self.weights = None
+        self.bias = None
+        self.d_weights = None
+        self.d_bias = None
+
+        self.weights_init = weights_init
+        self.bias_init = bias_init
+        self.random_state = random_state
+
+    def initialize_weights(self, input_size: int):
+        self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
+        if self.weights_init == "xavier":
+            stddev = np.sqrt(2 / (input_size + self.units))
+            self.weights = self.rng.normal(0, stddev, (input_size, self.units))
+        elif self.weights_init == "he":
             stddev = np.sqrt(2 / input_size)
-            self.weights = self.rng.normal(0, stddev, (input_size, output_size))
-        elif weights_init == "default":
-            self.weights = self.rng.normal(0, 0.01, (input_size, output_size))
-        elif weights_init == "lecun":
+            self.weights = self.rng.normal(0, stddev, (input_size, self.units))
+        elif self.weights_init == "default":
+            self.weights = self.rng.normal(0, 0.01, (input_size, self.units))
+        elif self.weights_init == "lecun":
             stddev = np.sqrt(1 / input_size)
-            self.weights = self.rng.normal(0, stddev, (input_size, output_size))
+            self.weights = self.rng.normal(0, stddev, (input_size, self.units))
         else:
             raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', 'lecun' and 'default'.")
 
-        if bias_init == "default":
-            self.bias = np.zeros((1, output_size))
-        elif bias_init == "normal":
-            self.bias = self.rng.normal(0, 0.01, (1, output_size))
-        elif bias_init == "uniform":
-            self.bias = self.rng.uniform(-0.1, 0.1, (1, output_size))
-        elif bias_init == "small":
-            self.bias = np.full((1, output_size), 0.01)
+        if self.bias_init == "default":
+            self.bias = np.zeros((1, self.units))
+        elif self.bias_init == "normal":
+            self.bias = self.rng.normal(0, 0.01, (1, self.units))
+        elif self.bias_init == "uniform":
+            self.bias = self.rng.uniform(-0.1, 0.1, (1, self.units))
+        elif self.bias_init == "small":
+            self.bias = np.full((1, self.units), 0.01)
         else:
             raise ValueError("Invalid bias_init value. Possible values are 'normal', 'uniform', 'small' and 'default'.")
 
@@ -64,9 +104,12 @@ class Dense(Layer):
         self.d_bias = np.zeros_like(self.bias)
 
     def __str__(self):
-        return f'Dense(num_input={self.weights.shape[0]}, num_output={self.weights.shape[1]})'
+        return f'Dense(units={self.units})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        if self.weights is None:
+            self.initialize_weights(input_data.shape[1])
+
         self.input = input_data
         self.output = np.dot(self.input, self.weights) + self.bias
         return self.output
@@ -80,17 +123,20 @@ class Dense(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'weights': self.weights.tolist(),
-            'bias': self.bias.tolist()
+            'weights': self.weights.tolist() if self.weights is not None else None,
+            'bias': self.bias.tolist() if self.bias is not None else None,
+            'units': self.units,
+            'weights_init': self.weights_init,
+            'bias_init': self.bias_init,
+            'random_state': self.random_state
         }
 
     @staticmethod
     def from_config(config: dict):
-        weights = np.array(config['weights'])
-        bias = np.array(config['bias'])
-        layer = Dense(weights.shape[0], weights.shape[1])
-        layer.weights = weights
-        layer.bias = bias
+        layer = Dense(config['units'], config['weights_init'], config['bias_init'], config['random_state'])
+        if config['weights'] is not None:
+            layer.weights = np.array(config['weights'])
+            layer.bias = np.array(config['bias'])
         return layer
 
 
@@ -128,36 +174,41 @@ class Activation(Layer):
 
 
 class Conv2D(Layer):
-    def __init__(self, filters: int, kernel_size: tuple, input_shape: tuple, stride: tuple = (1, 1),
-                 padding: str = 'valid', weights_init: str = "default", bias_init: str = "default",
-                 random_state: int = None):
+    def __init__(self, filters: int, kernel_size: int | tuple, stride: int | tuple = 1, padding: str = 'valid', weights_init: str = "default", bias_init: str = "default", random_state: int = None):
         self.filters = filters
-        self.kernel_size = kernel_size
-        self.input_shape = input_shape
-        self.stride = stride
+        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        self.stride = (stride, stride) if isinstance(stride, int) else stride
         self.padding = padding
 
+        self.weights = None
+        self.bias = None
+        self.d_weights = None
+        self.d_bias = None
+
+        self.weights_init = weights_init
+        self.bias_init = bias_init
+        self.random_state = random_state
+
+    def initialize_weights(self, input_shape: tuple):
         in_channels, _, _ = input_shape
 
-        self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-        if weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(kernel_size) * in_channels)),
-                                           (self.filters, in_channels, *self.kernel_size))
-        elif weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(kernel_size))),
-                                           (self.filters, in_channels, *self.kernel_size))
-        elif weights_init == "default":
+        self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
+        if self.weights_init == "xavier":
+            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)), (self.filters, in_channels, *self.kernel_size))
+        elif self.weights_init == "he":
+            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))), (self.filters, in_channels, *self.kernel_size))
+        elif self.weights_init == "default":
             self.weights = self.rng.normal(0, 0.01, (self.filters, in_channels, *self.kernel_size))
         else:
             raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
-        if bias_init == "default":
+        if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
-        elif bias_init == "normal":
+        elif self.bias_init == "normal":
             self.bias = self.rng.normal(0, 0.01, (1, self.filters))
-        elif bias_init == "uniform":
+        elif self.bias_init == "uniform":
             self.bias = self.rng.uniform(-0.1, 0.1, (1, self.filters))
-        elif bias_init == "small":
+        elif self.bias_init == "small":
             self.bias = np.full((1, self.filters), 0.01)
         else:
             raise ValueError("Invalid bias_init value. Possible values are 'normal', 'uniform', 'small' and 'default'.")
@@ -169,33 +220,38 @@ class Conv2D(Layer):
         return f'Conv2D(num_filters={self.filters}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        if self.weights is None:
+            self.initialize_weights(input_data.shape[1:])
+
         self.input = input_data
         output = self._convolve(self.input, self.weights, self.bias, self.stride, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
-                                                                           self.stride, self.padding)
+        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights, self.stride, self.padding)
         return input_error
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'weights': self.weights.tolist(),
-            'bias': self.bias.tolist(),
+            'weights': self.weights.tolist() if self.weights is not None else None,
+            'bias': self.bias.tolist() if self.bias is not None else None,
             'filters': self.filters,
             'kernel_size': self.kernel_size,
             'stride': self.stride,
-            'padding': self.padding
+            'padding': self.padding,
+            'weights_init': self.weights_init,
+            'bias_init': self.bias_init,
+            'random_state': self.random_state
         }
 
     @staticmethod
     def from_config(config: dict):
-        weights = np.array(config['weights'])
-        bias = np.array(config['bias'])
-        layer = Conv2D(config['filters'], config['kernel_size'], config['stride'], config['padding'])
-        layer.weights = weights
-        layer.bias = bias
+        layer = Conv2D(config['filters'], config['kernel_size'], config['stride'], config['padding'],
+                       config['weights_init'], config['bias_init'], config['random_state'])
+        if config['weights'] is not None:
+            layer.weights = np.array(config['weights'])
+            layer.bias = np.array(config['bias'])
         return layer
 
     @staticmethod

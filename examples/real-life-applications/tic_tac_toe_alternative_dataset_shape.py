@@ -5,7 +5,7 @@ from scipy.io import arff
 from sklearn.model_selection import train_test_split
 
 from neuralnetlib.activations import ReLU, Sigmoid
-from neuralnetlib.layers import Dense, Activation
+from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.model import Model
@@ -58,13 +58,14 @@ def main():
     print(f"y_test shape: {y_test.shape}")
 
     model = Model()
-    model.add(Dense(input_neurones, hidden_neurones, weights_init='he', random_state=42))
+    model.add(Input(input_neurones))
+    model.add(Dense(hidden_neurones, weights_init='he', random_state=42))
     model.add(Activation(ReLU()))
     for _ in range(hidden_layers):
-        model.add(Dense(hidden_neurones, hidden_neurones, weights_init='he', random_state=42))
+        model.add(Dense(hidden_neurones, weights_init='he', random_state=42))
         model.add(Activation(ReLU()))
 
-    model.add(Dense(hidden_neurones, output_neurones, random_state=42))
+    model.add(Dense(output_neurones, random_state=42))
     model.add(Activation(Sigmoid()))
 
     # 6. Compile the model

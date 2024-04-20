@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from neuralnetlib.activations import Sigmoid, ReLU
-from neuralnetlib.layers import Activation, Dense
+from neuralnetlib.layers import Input, Activation, Dense
 from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score, f1_score, recall_score, precision_score
 from neuralnetlib.model import Model
@@ -30,14 +30,15 @@ def main():
     output_neurons = 1  # Binary classification-regression
 
     model = Model()
-    model.add(Dense(input_neurons, hidden_neurons, weights_init='he', random_state=42))
+    model.add(Input(input_neurons))
+    model.add(Dense(hidden_neurons, weights_init='he', random_state=42))
     model.add(Activation(ReLU()))
 
     for _ in range(num_hidden_layers - 1):
-        model.add(Dense(hidden_neurons, hidden_neurons, weights_init='he', random_state=42))
+        model.add(Dense(hidden_neurons, weights_init='he', random_state=42))
         model.add(Activation(ReLU()))
 
-    model.add(Dense(hidden_neurons, output_neurons, random_state=42))
+    model.add(Dense(output_neurons, random_state=42))
     model.add(Activation(Sigmoid()))
 
     # 5. Model compilation

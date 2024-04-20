@@ -3,7 +3,7 @@ import numpy as np
 from tensorflow.keras.datasets import mnist
 
 from neuralnetlib.activations import Sigmoid, Softmax
-from neuralnetlib.layers import Dense, Activation
+from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
 from neuralnetlib.model import Model
@@ -28,15 +28,16 @@ def main():
     output_neurons = 10  # Assuming 10 classes for MNIST
 
     model = Model()
-    model.add(Dense(input_neurons, hidden_neurons, weights_init='lecun', random_state=42))  # First hidden layer
+    model.add(Input(input_neurons))
+    model.add(Dense(hidden_neurons, weights_init='lecun', random_state=42))  # First hidden layer
     model.add(Activation(Sigmoid()))  # ...and its function activation
 
     for _ in range(num_hidden_layers - 1):  # Add the rest of the hidden layers
-        model.add(Dense(hidden_neurons, hidden_neurons, weights_init='lecun',
+        model.add(Dense(hidden_neurons, weights_init='lecun',
                         random_state=42))  # Hidden layer must have the same number of neurons as the previous one
         model.add(Activation(Sigmoid()))  # ...and its function activation
 
-    model.add(Dense(hidden_neurons, output_neurons, random_state=42))  # Output layer
+    model.add(Dense(output_neurons, random_state=42))  # Output layer
     model.add(Activation(Softmax()))  # ...and its function activation
 
     # 4. Model compilation

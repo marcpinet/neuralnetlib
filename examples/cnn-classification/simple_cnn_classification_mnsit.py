@@ -3,7 +3,7 @@ import numpy as np
 from tensorflow.keras.datasets import mnist
 
 from neuralnetlib.activations import ReLU, Softmax
-from neuralnetlib.layers import Conv2D, MaxPooling2D, Flatten, Dense, Activation
+from neuralnetlib.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation
 from neuralnetlib.losses import CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
 from neuralnetlib.model import Model
@@ -23,18 +23,19 @@ def main():
 
     # 3. Model definition
     model = Model()
-    model.add(Conv2D(filters=16, kernel_size=(2, 2), input_shape=(1, 28, 28), padding='same', weights_init='he',
+    model.add(Input(input_shape=(1, 28, 28)))
+    model.add(Conv2D(filters=16, kernel_size=(2, 2), padding='same', weights_init='he',
                      random_state=42))
     model.add(Activation(ReLU()))
     model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Conv2D(filters=32, kernel_size=(2, 2), input_shape=(16, 14, 14), padding='same', weights_init='he',
+    model.add(Conv2D(filters=32, kernel_size=(2, 2), padding='same', weights_init='he',
                      random_state=42))
     model.add(Activation(ReLU()))
     model.add(MaxPooling2D(pool_size=(2, 2)))
     model.add(Flatten())
-    model.add(Dense(1152, 64, weights_init='he', random_state=42))
+    model.add(Dense(64, weights_init='he', random_state=42))
     model.add(Activation(ReLU()))
-    model.add(Dense(64, 10, weights_init='he', random_state=42))
+    model.add(Dense(10, weights_init='he', random_state=42))
     model.add(Activation(Softmax()))
 
     # 4. Model compilation

@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Activation, Dense, Flatten, Conv2D
+from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
@@ -30,23 +30,14 @@ class Model:
         return model_summary
 
     def add(self, layer: Layer):
-        if self.layers and isinstance(layer, Dense):
-            prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D, Flatten))][-1]
+        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer, Dense):
+            prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Flatten))][-1]
             if isinstance(prev_layer, Flatten):
                 prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D))][-1]
             if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
                 raise ValueError(
                     f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
         self.layers.append(layer)
-
-    def __check_layer_compatibility(self, layer: Dense) -> bool:
-        if len(self.layers) == 0:
-            return True
-        else:
-            prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D, Flatten))][-1]
-            if isinstance(prev_layer, Flatten):
-                prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D))][-1]
-            return layer.input_size == prev_layer.output_size
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = True):
         self.loss_function = loss_function
