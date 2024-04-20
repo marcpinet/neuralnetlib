@@ -1,6 +1,9 @@
 import unittest
+
 import numpy as np
+
 from neuralnetlib.activations import Sigmoid, ReLU, Tanh, Softmax, Linear, LeakyReLU, ELU, SELU
+
 
 class TestActivationFunctions(unittest.TestCase):
 
@@ -60,6 +63,7 @@ class TestActivationFunctions(unittest.TestCase):
         x = np.array([[1.0, 2.0, 3.0]])
         with self.assertRaises(NotImplementedError):
             softmax.derivative(x)
+
 
 if __name__ == '__main__':
     unittest.main()

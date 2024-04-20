@@ -2,12 +2,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow.keras.datasets import mnist
 
-from neuralnetlib.activations import Sigmoid, Softmax
-from neuralnetlib.layers import Input, Dense, Activation
+from neuralnetlib.activations import ReLU, Softmax
+from neuralnetlib.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Activation
 from neuralnetlib.losses import CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
 from neuralnetlib.model import Model
-from neuralnetlib.optimizers import SGD
+from neuralnetlib.optimizers import Adam
 from neuralnetlib.utils import one_hot_encode
 
 
@@ -16,35 +16,40 @@ def main():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
     # 2. Preprocessing
-    x_train = x_train.reshape(-1, 28 * 28) / 255.0  # Normalization and flattening of the images
-    x_test = x_test.reshape(-1, 28 * 28) / 255.0  # Normalization and flattening of the images
+    x_train = x_train.reshape(-1, 1, 28, 28) / 255.0  # Normalization and reshaping of the images for CNN
+    x_test = x_test.reshape(-1, 1, 28, 28) / 255.0  # Normalization and reshaping of the images for CNN
     y_train = one_hot_encode(y_train, num_classes=10)  # One-hot encoding of the labels
     y_test = one_hot_encode(y_test, num_classes=10)  # One-hot encoding of the labels
 
     # 3. Model definition
-    input_neurons = x_train.shape[1:][0]  # MNIST images are 28x28
-    num_hidden_layers = 2  # Number of hidden layers
-    hidden_neurons = 30  # Number of neurons in each hidden layer
-    output_neurons = 10  # Assuming 10 classes for MNIST
-
     model = Model()
-    model.add(Input(input_neurons))
-    model.add(Dense(hidden_neurons, weights_init='lecun', random_state=42))  # First hidden layer
-    model.add(Activation(Sigmoid()))  # ...and its function activation
-
-    for _ in range(num_hidden_layers - 1):  # Add the rest of the hidden layers
-        model.add(Dense(hidden_neurons, weights_init='lecun',
-                        random_state=42))  # Hidden layer must have the same number of neurons as the previous one
-        model.add(Activation(Sigmoid()))  # ...and its function activation
-
-    model.add(Dense(output_neurons, random_state=42))  # Output layer
-    model.add(Activation(Softmax()))  # ...and its function activation
-
+    model.add(Input(input_shape=(1, 28, 28)))
+    model.add(Conv2D(filters=4, kernel_size=2, random_state=42))
+    model.add(Activation(ReLU()))
+    model.add(MaxPooling2D(pool_size=2))
+    model.add(Conv2D(filters=8, kernel_size=2, random_state=42))
+    model.add(Activation(ReLU()))
+    model.add(MaxPooling2D(pool_size=2))
+    model.add(Flatten())
+    model.add(Dense(64, random_state=42))
+    model.add(Activation(ReLU()))
+    model.add(Dense(10, random_state=42))
+    model.add(Activation(Softmax()))
+    """
+        Side note: if you set the following:
+        
+          - filters to 8 and 16 (in this order)
+          - padding of the Conv2D layers to 'same'
+          - weights initialization to 'he'
+        
+        you'll get an accuracy of ~0.9975 which is actually pretty cool
+    """
     # 4. Model compilation
-    model.compile(loss_function=CategoricalCrossentropy(), optimizer=SGD(learning_rate=0.1))
+    model.compile(loss_function=CategoricalCrossentropy(), optimizer=Adam())
 
     # 5. Model training
-    model.train(x_train, y_train, epochs=20, batch_size=48, metrics=[accuracy_score], random_state=42)
+    model.train(x_train, y_train, epochs=10, batch_size=128, metrics=[accuracy_score], random_state=42,
+                validation_data=(x_test, y_test))
 
     # 6. Model evaluation
     loss = model.evaluate(x_test, y_test)
@@ -67,7 +72,7 @@ def main():
     plt.show()
 
     # 9. Save the model
-    model.save("my_mnist_model.npz")
+    model.save("my_mnist_cnn_model.npz")
 
 
 if __name__ == '__main__':

@@ -1,7 +1,9 @@
-from neuralnetlib.model import Model
 import tkinter as tk
-from PIL import Image, ImageDraw
+
 import numpy as np
+from PIL import Image, ImageDraw
+
+from neuralnetlib.model import Model
 
 
 def main():
@@ -36,7 +38,7 @@ def main():
         img = img.resize((28, 28))
         img = img.convert('L')
         img = np.array(img)
-        img = img.reshape(1, 784)
+        img = img.reshape(1, 1, 28, 28)  # or img = img.reshape(1, 784) if you use simple nn (no cnn)
         img = img.astype('float32') / 255
         prediction = model.predict(img)
         prediction = np.argmax(prediction)

@@ -1,6 +1,9 @@
 import unittest
+
 import numpy as np
+
 from neuralnetlib.optimizers import SGD, Momentum, RMSprop, Adam
+
 
 class TestOptimizers(unittest.TestCase):
 

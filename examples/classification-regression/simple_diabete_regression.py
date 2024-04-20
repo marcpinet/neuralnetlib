@@ -2,11 +2,12 @@ from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-from neuralnetlib.model import Model
-from neuralnetlib.layers import Dense, Activation
 from neuralnetlib.activations import Linear, LeakyReLU
+from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import MeanSquaredError, MeanAbsoluteError
+from neuralnetlib.model import Model
 from neuralnetlib.optimizers import Adam
+
 
 def main():
     # 1. Loading a dataset (in this case, the diabetes dataset)
@@ -28,14 +29,15 @@ def main():
     output_neurons = 1
 
     model = Model()
-    model.add(Dense(input_neurons, hidden_neurons, weights_init='he', random_state=42))
+    model.add(Input(input_neurons))
+    model.add(Dense(hidden_neurons, weights_init='he', random_state=42))
     model.add(Activation(LeakyReLU()))
 
     for _ in range(num_hidden_layers - 1):
-        model.add(Dense(hidden_neurons, hidden_neurons, weights_init='he', random_state=42))
+        model.add(Dense(hidden_neurons, weights_init='he', random_state=42))
         model.add(Activation(LeakyReLU()))
 
-    model.add(Dense(hidden_neurons, output_neurons, random_state=42))
+    model.add(Dense(output_neurons, random_state=42))
     model.add(Activation(Linear()))
 
     # 4. Model compilation
@@ -54,6 +56,7 @@ def main():
 
     # 8. We won't print metrics such as accuracy or f1-score because this is a regression problem
     # not a classification-regression one.
+
 
 if __name__ == '__main__':
     main()

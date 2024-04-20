@@ -3,10 +3,11 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Activation, Dense
+from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
-from neuralnetlib.utils import shuffle
+from neuralnetlib.utils import shuffle, progress_bar
 
 
 class Model:
@@ -29,18 +30,14 @@ class Model:
         return model_summary
 
     def add(self, layer: Layer):
-        if self.layers and isinstance(layer, Dense):
-            prev_layer = [l for l in self.layers if isinstance(l, Dense)][-1]
+        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer, Dense):
+            prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Flatten))][-1]
+            if isinstance(prev_layer, Flatten):
+                prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D))][-1]
             if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
                 raise ValueError(
                     f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
         self.layers.append(layer)
-
-    def __check_layer_compatability(self, layer: Dense) -> bool:
-        if len(self.layers) == 0:
-            return True
-        else:
-            return layer.input_size == [l for l in self.layers if isinstance(l, Dense)][-1].output_size
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = True):
         self.loss_function = loss_function
@@ -72,12 +69,18 @@ class Model:
         predictions = self.predictions.copy()
         loss = self.loss_function(y_batch, predictions)
         error = self.loss_function.derivative(y_batch, predictions)
+
+        if error.ndim == 1:
+            error = error[:, None]
+
         self.backward_pass(error)
         return loss
 
     def train(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-              verbose: bool = True, metrics: list = None, random_state: int = None):
+              verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None):
         for i in range(epochs):
+            start_time = time.time()
+
             # Shuffling the data to avoid overfitting
             x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
 
@@ -98,25 +101,39 @@ class Model:
                     predictions_list.append(self.predictions)
                     y_true_list.append(y_batch)
 
+                    if verbose:
+                        metrics_str = ''
+                        if metrics is not None:
+                            for metric in metrics:
+                                metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                                metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
+                        progress_bar(j / batch_size + 1, num_batches,
+                                     message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+
                 error /= num_batches
             else:
                 error = self.train_on_batch(x_train, y_train)
                 predictions_list.append(self.predictions)
                 y_true_list.append(y_train)
 
-            # Concatenate all predictions and true labels
-            all_predictions = np.vstack(predictions_list)
-            all_y_true = np.vstack(y_true_list)
+                if verbose:
+                    metrics_str = ''
+                    if metrics is not None:
+                        for metric in metrics:
+                            metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                            metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
+                    progress_bar(1, 1,
+                                 message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+
+            if validation_data is not None:
+                x_test, y_test = validation_data
+                val_predictions = self.predict(x_test)
+                val_accuracy = accuracy_score(val_predictions, y_test)
+                if verbose:
+                    print(f' - val_accuracy: {val_accuracy:.4f}', end='')
 
             if verbose:
-                if metrics is not None:
-                    metrics_str = ''
-                    for metric in metrics:
-                        metric_value = metric(all_predictions, all_y_true)
-                        metrics_str += f'{metric.__name__}: {metric_value} - '
-                    print(f'Epoch {i + 1}/{epochs} - loss: {error} - {metrics_str[:-3]}')
-                else:
-                    print(f'Epoch {i + 1}/{epochs} - loss: {error}')
+                print()
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
         predictions = self.forward_pass(x_test)

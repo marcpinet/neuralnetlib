@@ -16,6 +16,7 @@ def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.
 
     return np.mean(y_pred_classes == y_true_classes)
 
+
 def f1_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     precision = precision_score(y_pred, y_true, threshold)
     recall = recall_score(y_pred, y_true, threshold)
