@@ -2,9 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name='neuralnetlib',
-    version='1.0.1',
+    version='2.0.0',
     author='Marc Pinet',
-    description='A simple neural network library with only numpy as dependency',
+    description='A simple convolutional neural network library with only numpy as dependency',
     long_description=open('README.md', encoding="utf-8").read(),
     long_description_content_type='text/markdown',
     url='https://github.com/marcpinet/handmade-neuralnetwork',
