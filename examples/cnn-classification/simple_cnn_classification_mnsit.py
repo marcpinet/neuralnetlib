@@ -35,9 +35,15 @@ def main():
     model.add(Activation(ReLU()))
     model.add(Dense(10, random_state=42))
     model.add(Activation(Softmax()))
-
-    # Side note: if you set the filters to 8 and 16 (in this order), you'll get an accuracy of ~0.9975 which is actually pretty cool
-
+    """
+        Side note: if you set the following:
+        
+          - filters to 8 and 16 (in this order)
+          - padding of the Conv2D layers to 'same'
+          - weights initialization to 'he'
+        
+        you'll get an accuracy of ~0.9975 which is actually pretty cool
+    """
     # 4. Model compilation
     model.compile(loss_function=CategoricalCrossentropy(), optimizer=Adam())
 
