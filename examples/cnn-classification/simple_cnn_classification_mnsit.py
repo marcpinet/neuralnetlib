@@ -24,19 +24,19 @@ def main():
     # 3. Model definition
     model = Model()
     model.add(Input(input_shape=(1, 28, 28)))
-    model.add(Conv2D(filters=16, kernel_size=(2, 2), padding='same', weights_init='he',
-                     random_state=42))
+    model.add(Conv2D(filters=4, kernel_size=2, random_state=42))
     model.add(Activation(ReLU()))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Conv2D(filters=32, kernel_size=(2, 2), padding='same', weights_init='he',
-                     random_state=42))
+    model.add(MaxPooling2D(pool_size=2))
+    model.add(Conv2D(filters=8, kernel_size=2, random_state=42))
     model.add(Activation(ReLU()))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(MaxPooling2D(pool_size=2))
     model.add(Flatten())
-    model.add(Dense(64, weights_init='he', random_state=42))
+    model.add(Dense(64, random_state=42))
     model.add(Activation(ReLU()))
-    model.add(Dense(10, weights_init='he', random_state=42))
+    model.add(Dense(10, random_state=42))
     model.add(Activation(Softmax()))
+
+    # Side note: if you set the filters to 8 and 16 (in this order), you'll get an accuracy of ~0.9975 which is actually pretty cool
 
     # 4. Model compilation
     model.compile(loss_function=CategoricalCrossentropy(), optimizer=Adam())
