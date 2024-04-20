@@ -40,6 +40,9 @@ class SGD(Optimizer):
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "learning_rate": self.learning_rate}
 
+    def __str__(self):
+        return f"{self.__class__.__name__}(learning_rate={self.learning_rate})"
+
     @staticmethod
     def from_config(config: dict):
         return SGD(config['learning_rate'])
@@ -65,6 +68,9 @@ class Momentum(Optimizer):
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "learning_rate": self.learning_rate, "momentum": self.momentum,
                 "velocity": self.velocity}
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(learning_rate={self.learning_rate}, momentum={self.momentum})"
 
     @staticmethod
     def from_config(config: dict):
@@ -99,6 +105,9 @@ class RMSprop(Optimizer):
     @staticmethod
     def from_config(config: dict):
         return RMSprop(config['learning_rate'], config['rho'], config['epsilon'])
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(learning_rate={self.learning_rate}, rho={self.rho}, epsilon={self.epsilon})"
 
 
 class Adam(Optimizer):
@@ -155,3 +164,6 @@ class Adam(Optimizer):
         adam.m_b = dict_with_list_to_dict_with_ndarray(config['m_b'])
         adam.v_b = dict_with_list_to_dict_with_ndarray(config['v_b'])
         return adam
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(learning_rate={self.learning_rate}, beta_1={self.beta_1}, beta_2={self.beta_2}, epsilon={self.epsilon})"

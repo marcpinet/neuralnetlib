@@ -37,6 +37,9 @@ class MeanSquaredError(LossFunction):
         y_true_reshaped = y_true.reshape(-1, 1)
         return 2 * (y_pred - y_true_reshaped) / y_true.shape[0]
 
+    def __str__(self):
+        return "MeanSquaredError"
+
 
 class BinaryCrossentropy(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -46,6 +49,9 @@ class BinaryCrossentropy(LossFunction):
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)
         return y_pred - y_true
+
+    def __str__(self):
+        return "BinaryCrossentropy"
 
 
 class CategoricalCrossentropy(LossFunction):
@@ -60,6 +66,9 @@ class CategoricalCrossentropy(LossFunction):
         except Exception as e:
             print(e, "Make sure to one-hot encode your labels.", sep="\n")
 
+    def __str__(self):
+        return "CategoricalCrossentropy"
+
 
 class MeanAbsoluteError(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -67,6 +76,9 @@ class MeanAbsoluteError(LossFunction):
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         return np.where(y_pred > y_true, 1, -1)
+
+    def __str__(self):
+        return "MeanAbsoluteError"
 
 
 class HuberLoss(LossFunction):
@@ -84,6 +96,9 @@ class HuberLoss(LossFunction):
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         error = y_true - y_pred
         return np.where(np.abs(error) <= self.delta, error, self.delta * np.sign(error))
+
+    def __str__(self):
+        return f"HuberLoss(delta={self.delta})"
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "delta": self.delta}
