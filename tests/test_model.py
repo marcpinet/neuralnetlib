@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from neuralnetlib.activations import Sigmoid
-from neuralnetlib.layers import Dense
+from neuralnetlib.layers import Input, Dense
 from neuralnetlib.model import Model, Activation, CategoricalCrossentropy
 from neuralnetlib.optimizers import SGD
 
@@ -12,7 +12,8 @@ class TestModel(unittest.TestCase):
 
     def setUp(self):
         self.model = Model()
-        self.model.add(Dense(10, 20))
+        self.model.add(Input(10))
+        self.model.add(Dense(20))
         self.model.add(Activation(Sigmoid()))
         self.model.compile(loss_function=CategoricalCrossentropy(), optimizer=SGD())
 

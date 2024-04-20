@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from neuralnetlib.activations import Sigmoid
-from neuralnetlib.layers import Layer, Dense, Activation
+from neuralnetlib.layers import Layer, Input, Dense, Activation
 
 
 class TestLayers(unittest.TestCase):
@@ -18,7 +18,7 @@ class TestLayers(unittest.TestCase):
     def test_dense_layer(self):
         input_data = np.array([[1, 2, 3], [4, 5, 6]])
         output_size = 2
-        dense = Dense(input_data.shape[1], output_size)
+        dense = Dense(output_size)
 
         output = dense.forward_pass(input_data)
         self.assertEqual(output.shape, (input_data.shape[0], output_size))

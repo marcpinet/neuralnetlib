@@ -37,7 +37,9 @@ class Layer:
 
 
 class Input(Layer):
-    def __init__(self, input_shape: tuple):
+    def __init__(self, input_shape: tuple | int):
+        if isinstance(input_shape, int):
+            input_shape = (input_shape,)
         self.input_shape = input_shape
 
     def __str__(self):
