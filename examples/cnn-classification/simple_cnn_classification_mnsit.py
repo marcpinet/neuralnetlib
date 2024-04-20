@@ -2,11 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow.keras.datasets import mnist
 
-from neuralnetlib.model import Model
-from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
-from neuralnetlib.layers import Conv2D, MaxPooling2D, Flatten, Dense, Activation
 from neuralnetlib.activations import ReLU, Softmax
+from neuralnetlib.layers import Conv2D, MaxPooling2D, Flatten, Dense, Activation
 from neuralnetlib.losses import CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
+from neuralnetlib.model import Model
 from neuralnetlib.optimizers import Adam
 from neuralnetlib.utils import one_hot_encode
 
@@ -41,7 +41,8 @@ def main():
     model.compile(loss_function=CategoricalCrossentropy(), optimizer=Adam())
 
     # 5. Model training
-    model.train(x_train, y_train, epochs=10, batch_size=128, metrics=[accuracy_score], random_state=42, validation_data=(x_test, y_test))
+    model.train(x_train, y_train, epochs=10, batch_size=128, metrics=[accuracy_score], random_state=42,
+                validation_data=(x_test, y_test))
 
     # 6. Model evaluation
     loss = model.evaluate(x_test, y_test)

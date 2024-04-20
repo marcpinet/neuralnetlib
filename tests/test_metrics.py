@@ -1,6 +1,9 @@
 import unittest
+
 import numpy as np
+
 from neuralnetlib.metrics import accuracy_score, f1_score, recall_score, confusion_matrix
+
 
 class TestMetrics(unittest.TestCase):
 
@@ -27,6 +30,7 @@ class TestMetrics(unittest.TestCase):
         expected_confusion_matrix = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
         calculated_confusion_matrix = confusion_matrix(self.y_pred, self.y_true)
         self.assertTrue(np.array_equal(calculated_confusion_matrix, expected_confusion_matrix))
+
 
 if __name__ == '__main__':
     unittest.main()

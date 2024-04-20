@@ -1,9 +1,12 @@
 import unittest
+
 import numpy as np
-from neuralnetlib.model import Model, Activation, CategoricalCrossentropy
-from neuralnetlib.layers import Dense
+
 from neuralnetlib.activations import Sigmoid
+from neuralnetlib.layers import Dense
+from neuralnetlib.model import Model, Activation, CategoricalCrossentropy
 from neuralnetlib.optimizers import SGD
+
 
 class TestModel(unittest.TestCase):
 
@@ -33,6 +36,7 @@ class TestModel(unittest.TestCase):
     def test_model_predict(self):
         predictions = self.model.predict(self.x_test)
         self.assertEqual(predictions.shape, self.y_test.shape)
+
 
 if __name__ == '__main__':
     unittest.main()

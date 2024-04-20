@@ -1,9 +1,9 @@
-from tensorflow.keras.datasets import mnist
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.datasets import mnist
 
+from neuralnetlib.metrics import accuracy_score, confusion_matrix
 from neuralnetlib.model import Model
 from neuralnetlib.utils import one_hot_encode
-from neuralnetlib.metrics import accuracy_score, confusion_matrix
 
 
 def main():
@@ -11,8 +11,8 @@ def main():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
     # 2. Preprocessing
-    x_train = x_train.reshape(-1, 28*28) / 255.0
-    x_test = x_test.reshape(-1, 28*28) / 255.0
+    x_train = x_train.reshape(-1, 28 * 28) / 255.0
+    x_test = x_test.reshape(-1, 28 * 28) / 255.0
     y_train = one_hot_encode(y_train, num_classes=10)
     y_test = one_hot_encode(y_test, num_classes=10)
 

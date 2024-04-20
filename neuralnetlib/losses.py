@@ -37,6 +37,7 @@ class MeanSquaredError(LossFunction):
         y_true_reshaped = y_true.reshape(-1, 1)
         return 2 * (y_pred - y_true_reshaped) / y_true.shape[0]
 
+
 class BinaryCrossentropy(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)

@@ -1,7 +1,8 @@
-import time
 import sys
+import time
 
 import numpy as np
+
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     """One hot encoded labels are binary vectors representing categorical values,
@@ -40,6 +41,7 @@ def shuffle(x, y, random_state: int = None) -> tuple:
     indices = rng.permutation(len(x))
     return x[indices], y[indices]
 
+
 def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
     """
     Transform 4 dimensional images to 2 dimensional array.
@@ -57,7 +59,6 @@ def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
     """
     N, C, H, W = input_data.shape
 
-    # Make sure that pad and stride are either integers or tuples
     if isinstance(pad, int):
         pad_h, pad_w = pad, pad
     else:
@@ -69,18 +70,18 @@ def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
         stride_h, stride_w = stride
 
     # Make sure that the convolution can be executed
-    assert (H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
-    assert (W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
+    assert (
+                       H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
+    assert (
+                       W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
 
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
 
-    # Pad the input data
     padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)), mode='constant')
 
     col = np.zeros((N, C, filter_h, filter_w, out_h, out_w))
 
-    # For loops...
     for y in range(filter_h):
         y_max = y + stride_h * out_h
         for x in range(filter_w):
@@ -89,6 +90,7 @@ def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
 
     col = col.transpose(0, 4, 5, 1, 2, 3).reshape(N * out_h * out_w, -1)
     return col
+
 
 def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
     """
@@ -108,7 +110,6 @@ def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
     """
     N, C, H, W = input_shape
 
-    # Make sure that pad and stride are either integers or tuples
     if isinstance(pad, int):
         pad_h, pad_w = pad, pad
     else:
@@ -120,8 +121,10 @@ def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
         stride_h, stride_w = stride
 
     # Make sure that the convolution can be executed
-    assert (H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
-    assert (W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
+    assert (
+                       H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
+    assert (
+                       W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
 
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
@@ -138,7 +141,8 @@ def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
 
     return image[:, :, pad_h:H + pad_h, pad_w:W + pad_w]
 
-def progress_bar(current, total, width=30, message=''):
+
+def progress_bar(current: int, total: int, width: int = 30, message: str = "") -> None:
     progress = current / total
     bar = '=' * int(width * progress) + '-' * (width - int(width * progress))
     percent = int(100 * progress)

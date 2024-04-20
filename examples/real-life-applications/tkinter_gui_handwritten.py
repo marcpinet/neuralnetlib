@@ -1,7 +1,9 @@
-from neuralnetlib.model import Model
 import tkinter as tk
-from PIL import Image, ImageDraw
+
 import numpy as np
+from PIL import Image, ImageDraw
+
+from neuralnetlib.model import Model
 
 
 def main():

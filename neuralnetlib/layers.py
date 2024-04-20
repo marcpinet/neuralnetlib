@@ -128,7 +128,9 @@ class Activation(Layer):
 
 
 class Conv2D(Layer):
-    def __init__(self, filters: int, kernel_size: tuple, input_shape: tuple, stride: tuple = (1, 1), padding: str = 'valid', weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+    def __init__(self, filters: int, kernel_size: tuple, input_shape: tuple, stride: tuple = (1, 1),
+                 padding: str = 'valid', weights_init: str = "default", bias_init: str = "default",
+                 random_state: int = None):
         self.filters = filters
         self.kernel_size = kernel_size
         self.input_shape = input_shape
@@ -139,9 +141,11 @@ class Conv2D(Layer):
 
         self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
         if weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(kernel_size) * in_channels)), (self.filters, in_channels, *self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(kernel_size) * in_channels)),
+                                           (self.filters, in_channels, *self.kernel_size))
         elif weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(kernel_size))), (self.filters, in_channels, *self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(kernel_size))),
+                                           (self.filters, in_channels, *self.kernel_size))
         elif weights_init == "default":
             self.weights = self.rng.normal(0, 0.01, (self.filters, in_channels, *self.kernel_size))
         else:
@@ -170,7 +174,8 @@ class Conv2D(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights, self.stride, self.padding)
+        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
+                                                                           self.stride, self.padding)
         return input_error
 
     def get_config(self) -> dict:
@@ -199,7 +204,6 @@ class Conv2D(Layer):
         batch_size, in_channels, in_height, in_width = input_data.shape
         out_channels, _, kernel_height, kernel_width = weights.shape
 
-        # Make sure the number of input channels matches the number of channels in the weights
         assert in_channels == _
 
         if padding == 'same':
@@ -286,7 +290,8 @@ class MaxPooling2D(Layer):
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)), mode='constant')
+        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
+                              mode='constant')
 
         out_height = (in_height + 2 * pad_height - pool_size[0]) // stride[0] + 1
         out_width = (in_width + 2 * pad_width - pool_size[1]) // stride[1] + 1
@@ -295,13 +300,15 @@ class MaxPooling2D(Layer):
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0], j * stride[1]:j * stride[1] + pool_size[1]]
+                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
 
         return output
 
     @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, stride: tuple, padding: str) -> np.ndarray:
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, stride: tuple,
+                       padding: str) -> np.ndarray:
         batch_size, channels, in_height, in_width = input_data.shape
         _, _, out_height, out_width = output_error.shape
 
@@ -311,15 +318,19 @@ class MaxPooling2D(Layer):
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)), mode='constant')
+        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
+                              mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0], j * stride[1]:j * stride[1] + pool_size[1]]
+                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 mask = (input_slice == np.max(input_slice, axis=(2, 3), keepdims=True))
-                d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0], j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis, np.newaxis] * mask
+                d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-pad_height, pad_width:-pad_width]

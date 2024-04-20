@@ -1,14 +1,15 @@
+import numpy as np
 import pandas as pd
+import requests
 from scipy.io import arff
 from sklearn.model_selection import train_test_split
-from neuralnetlib.model import Model
-from neuralnetlib.layers import Dense, Activation
+
 from neuralnetlib.activations import ReLU, Sigmoid
+from neuralnetlib.layers import Dense, Activation
 from neuralnetlib.losses import BinaryCrossentropy
-from neuralnetlib.optimizers import Adam
 from neuralnetlib.metrics import accuracy_score
-import numpy as np
-import requests
+from neuralnetlib.model import Model
+from neuralnetlib.optimizers import Adam
 
 
 def main():
@@ -24,11 +25,13 @@ def main():
     df = pd.DataFrame(data)
 
     # 3. Data preprocessing
-    char_map = {'b\'x\'': 1, 'b\'o\'': -1, 'b\'b\'': 0}  # We replace the 'x', 'o', 'b' values with 1, -1, 0 from the arff file
+    char_map = {'b\'x\'': 1, 'b\'o\'': -1,
+                'b\'b\'': 0}  # We replace the 'x', 'o', 'b' values with 1, -1, 0 from the arff file
     for col in df.columns[:-1]:
         df[col] = df[col].map(lambda x: char_map.get(str(x), x))
 
-    class_map = {'b\'positive\'': 1, 'b\'negative\'': 0}  # We replace the 'positive', 'negative' values with 1, 0 from the arff file
+    class_map = {'b\'positive\'': 1,
+                 'b\'negative\'': 0}  # We replace the 'positive', 'negative' values with 1, 0 from the arff file
     df['Class'] = df['Class'].map(lambda x: class_map.get(str(x), x))
 
     # 4. Create the dataset and split it into train and test sets

@@ -1,13 +1,13 @@
-from neuralnetlib.activations import Sigmoid, ReLU
-from neuralnetlib.layers import Activation, Dense
-from neuralnetlib.losses import BinaryCrossentropy
-from neuralnetlib.model import Model
-from neuralnetlib.optimizers import Adam
-from neuralnetlib.metrics import accuracy_score, f1_score, recall_score, precision_score
-
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
+from neuralnetlib.activations import Sigmoid, ReLU
+from neuralnetlib.layers import Activation, Dense
+from neuralnetlib.losses import BinaryCrossentropy
+from neuralnetlib.metrics import accuracy_score, f1_score, recall_score, precision_score
+from neuralnetlib.model import Model
+from neuralnetlib.optimizers import Adam
 
 
 def main():

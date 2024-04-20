@@ -2,11 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow.keras.datasets import mnist
 
-from neuralnetlib.model import Model
-from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
-from neuralnetlib.layers import Dense, Activation
 from neuralnetlib.activations import Sigmoid, Softmax
+from neuralnetlib.layers import Dense, Activation
 from neuralnetlib.losses import CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score, f1_score, recall_score
+from neuralnetlib.model import Model
 from neuralnetlib.optimizers import SGD
 from neuralnetlib.utils import one_hot_encode
 
@@ -16,8 +16,8 @@ def main():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
     # 2. Preprocessing
-    x_train = x_train.reshape(-1, 28*28) / 255.0  # Normalization and flattening of the images
-    x_test = x_test.reshape(-1, 28*28) / 255.0  # Normalization and flattening of the images
+    x_train = x_train.reshape(-1, 28 * 28) / 255.0  # Normalization and flattening of the images
+    x_test = x_test.reshape(-1, 28 * 28) / 255.0  # Normalization and flattening of the images
     y_train = one_hot_encode(y_train, num_classes=10)  # One-hot encoding of the labels
     y_test = one_hot_encode(y_test, num_classes=10)  # One-hot encoding of the labels
 
@@ -32,7 +32,8 @@ def main():
     model.add(Activation(Sigmoid()))  # ...and its function activation
 
     for _ in range(num_hidden_layers - 1):  # Add the rest of the hidden layers
-        model.add(Dense(hidden_neurons, hidden_neurons, weights_init='lecun', random_state=42))  # Hidden layer must have the same number of neurons as the previous one
+        model.add(Dense(hidden_neurons, hidden_neurons, weights_init='lecun',
+                        random_state=42))  # Hidden layer must have the same number of neurons as the previous one
         model.add(Activation(Sigmoid()))  # ...and its function activation
 
     model.add(Dense(hidden_neurons, output_neurons, random_state=42))  # Output layer

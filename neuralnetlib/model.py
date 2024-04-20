@@ -1,12 +1,14 @@
 import json
 import time
+
 import numpy as np
 
 from neuralnetlib.layers import Layer, Activation, Dense, Flatten, Conv2D
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
-from neuralnetlib.metrics import accuracy_score
+
 
 class Model:
     def __init__(self):
@@ -77,7 +79,6 @@ class Model:
         loss = self.loss_function(y_batch, predictions)
         error = self.loss_function.derivative(y_batch, predictions)
 
-        # Vérifier et ajuster la forme de error
         if error.ndim == 1:
             error = error[:, None]
 
