@@ -22,7 +22,9 @@ class Layer:
 
     @staticmethod
     def from_config(config: dict) -> 'Layer':
-        if config['name'] == 'Dense':
+        if config['name'] == 'Input':
+            return Input.from_config(config)
+        elif config['name'] == 'Dense':
             return Dense.from_config(config)
         elif config['name'] == 'Activation':
             return Activation.from_config(config)
