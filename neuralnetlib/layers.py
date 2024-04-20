@@ -309,9 +309,12 @@ class Conv2D(Layer):
 
 
 class MaxPooling2D(Layer):
-    def __init__(self, pool_size: tuple, stride: tuple = None, padding: str = 'valid'):
-        self.pool_size = pool_size
-        self.stride = stride if stride is not None else pool_size
+    def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
+        if isinstance(pool_size, int):
+            self.pool_size = (pool_size, pool_size)
+        else:
+            self.pool_size = pool_size
+        self.stride = stride if stride is not None else self.pool_size
         self.padding = padding
 
     def __str__(self):
