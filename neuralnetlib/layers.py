@@ -34,6 +34,8 @@ class Layer:
             return MaxPooling2D.from_config(config)
         elif config['name'] == 'Flatten':
             return Flatten.from_config(config)
+        elif config['name'] == 'Dropout':
+            return Dropout.from_config(config)
         else:
             raise ValueError(f'Invalid layer name: {config["name"]}')
 
@@ -175,6 +177,35 @@ class Activation(Layer):
     def from_config(config: dict):
         activation_function = ActivationFunction.from_config(config['activation_function'])
         return Activation(activation_function)
+
+
+class Dropout(Layer):
+    def __init__(self, rate: float):
+        self.rate = rate
+        self.mask = None
+
+    def __str__(self):
+        return f'Dropout(rate={self.rate})'
+
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        if training:
+            self.mask = np.random.binomial(1, 1 - self.rate, size=input_data.shape) / (1 - self.rate)
+            return input_data * self.mask
+        else:
+            return input_data
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        return output_error * self.mask
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'rate': self.rate
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return Dropout(config['rate'])
 
 
 class Conv2D(Layer):
