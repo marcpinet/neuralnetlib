@@ -28,6 +28,9 @@ class Model:
         model_summary += f'Optimizer: {str(self.optimizer)}\n'
         model_summary += '-------------------------------------------------\n'
         return model_summary
+    
+    def summary(self):
+        print(str(self))
 
     def add(self, layer: Layer):
         if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer,
@@ -43,7 +46,7 @@ class Model:
                 raise ValueError("Cannot add consecutive Dropout layers.")
         self.layers.append(layer)
 
-    def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = True):
+    def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = False):
         self.loss_function = loss_function
         self.optimizer = optimizer
         if verbose:
