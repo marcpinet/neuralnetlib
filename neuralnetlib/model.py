@@ -5,9 +5,9 @@ import numpy as np
 
 from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D, Dropout
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
-from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
+from neuralnetlib.metrics import accuracy_score
 
 
 class Model:

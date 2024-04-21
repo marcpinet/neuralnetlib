@@ -1,6 +1,6 @@
 import numpy as np
 
-from neuralnetlib.utils import apply_threshold
+from neuralnetlib.preprocessing import apply_threshold
 
 
 def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
