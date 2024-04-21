@@ -180,16 +180,18 @@ class Activation(Layer):
 
 
 class Dropout(Layer):
-    def __init__(self, rate: float):
+    def __init__(self, rate: float, seed: int = None):
         self.rate = rate
         self.mask = None
+        self.seed = seed
 
     def __str__(self):
         return f'Dropout(rate={self.rate})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         if training:
-            self.mask = np.random.binomial(1, 1 - self.rate, size=input_data.shape) / (1 - self.rate)
+            rng = np.random.default_rng(self.seed)
+            self.mask = rng.binomial(1, 1 - self.rate, size=input_data.shape) / (1 - self.rate)
             return input_data * self.mask
         else:
             return input_data
@@ -200,12 +202,13 @@ class Dropout(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'rate': self.rate
+            'rate': self.rate,
+            'seed': self.seed
         }
 
     @staticmethod
     def from_config(config: dict):
-        return Dropout(config['rate'])
+        return Dropout(config['rate'], config['seed'])
 
 
 class Conv2D(Layer):
