@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D
+from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D, Dropout
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
@@ -30,13 +30,17 @@ class Model:
         return model_summary
 
     def add(self, layer: Layer):
-        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer, Dense):
+        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer,
+                                                                                                           Dense):
             prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Flatten))][-1]
             if isinstance(prev_layer, Flatten):
                 prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D))][-1]
             if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
                 raise ValueError(
                     f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
+        elif self.layers and isinstance(layer, Dropout):
+            if isinstance(self.layers[-1], Dropout):
+                raise ValueError("Cannot add consecutive Dropout layers.")
         self.layers.append(layer)
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = True):
@@ -45,9 +49,12 @@ class Model:
         if verbose:
             print(str(self))
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+    def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         for layer in self.layers:
-            X = layer.forward_pass(X)
+            if isinstance(layer, Dropout):
+                X = layer.forward_pass(X, training)
+            else:
+                X = layer.forward_pass(X)
         return X
 
     def backward_pass(self, error: np.ndarray):
@@ -141,7 +148,7 @@ class Model:
         return loss
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        return self.forward_pass(X)
+        return self.forward_pass(X, training=False)
 
     def save(self, filename: str):
         model_state = {
