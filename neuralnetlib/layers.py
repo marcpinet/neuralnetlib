@@ -3,7 +3,7 @@ import time
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.utils import im2col, col2im
+from neuralnetlib.preprocessing import im2col, col2im
 
 
 class Layer:
