@@ -43,9 +43,9 @@ I used the [MNIST dataset](https://en.wikipedia.org/wiki/MNIST_database) to test
 
 ## 📜 Output of the example file
 
-Here is an example of a model training using the library
+Here is an example of a model training on the mnist using the library
 
-![cli](resources/img/cli.png)
+![cli](resources/img/cli.gif)
 
 Here is an example of a loaded model used with Tkinter:
 
