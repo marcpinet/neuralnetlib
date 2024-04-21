@@ -19,7 +19,7 @@ def apply_threshold(y_pred, threshold: float = 0.5):
     return (y_pred > threshold).astype(int)
 
 
-def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
+def im2col_2d(input_data, filter_h, filter_w, stride=1, pad=0):
     """
     Transform 4 dimensional images to 2 dimensional array.
 
@@ -69,7 +69,67 @@ def im2col(input_data, filter_h, filter_w, stride=1, pad=0):
     return col
 
 
-def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
+def im2col_1d(input_data, filter_size, stride=1, pad=0):
+    """
+    Transform 3 dimensional images to 2 dimensional array.
+
+    Args:
+        input_data (np.ndarray): 3 dimensional input images (The number of images, The number of channels, Length)
+        filter_size (int): size of filter
+        stride (int): the interval of stride
+        pad (int): the interval of padding
+
+    Returns:
+        col (np.ndarray): 2 dimensional array
+
+    """
+    N, C, L = input_data.shape
+
+    out_l = (L + 2 * pad - filter_size) // stride + 1
+
+    padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad, pad)), mode='constant')
+
+    col = np.zeros((N, C, filter_size, out_l))
+
+    for y in range(filter_size):
+        y_max = y + stride * out_l
+        col[:, :, y, :] = padded_input[:, :, y:y_max:stride]
+
+    col = col.transpose(0, 3, 1, 2).reshape(N * out_l, -1)
+    return col
+
+
+def col2im_1d(col, input_shape, filter_size, stride=1, pad=0):
+    """
+    Inverse of im2col_1d.
+
+    Args:
+        col (np.ndarray): 2 dimensional array
+        input_shape (tuple): the shape of original input images
+        filter_size (int): size of filter
+        stride (int): the interval of stride
+        pad (int): the interval of padding
+
+    Returns:
+        image (np.ndarray): original images
+
+    """
+    N, C, L = input_shape
+
+    out_l = (L + 2 * pad - filter_size) // stride + 1
+
+    col = col.reshape(N, out_l, C, filter_size).transpose(0, 2, 3, 1)
+
+    image = np.zeros((N, C, L + 2 * pad + stride - 1))
+
+    for y in range(filter_size):
+        y_max = y + stride * out_l
+        image[:, :, y:y_max:stride] += col[:, :, y, :]
+
+    return image[:, :, pad:L + pad]
+
+
+def col2im_2d(col, input_shape, filter_h, filter_w, stride=1, pad=0):
     """
     Inverse of im2col.
 
@@ -117,6 +177,32 @@ def col2im(col, input_shape, filter_h, filter_w, stride=1, pad=0):
             image[:, :, y:y_max:stride_h, x:x_max:stride_w] += col[:, :, y, x, :, :]
 
     return image[:, :, pad_h:H + pad_h, pad_w:W + pad_w]
+
+
+def pad_sequences(sequences: np.ndarray, max_length: int, padding: str = 'pre', truncating: str = 'pre') -> np.ndarray:
+    """Pads sequences to the same length.
+
+    Args:
+        sequences (np.ndarray): List of sequences.
+        max_length (int): Maximum length of sequences.
+        padding (str): 'pre' or 'post', pad either before or after each sequence.
+        truncating (str): 'pre' or 'post', remove values from sequences larger than max_length, either at the beginning or at the end of the sequences.
+
+    Returns:
+        np.ndarray: Padded sequences.
+    """
+    padded_sequences = np.zeros((len(sequences), max_length))
+    for i, sequence in enumerate(sequences):
+        if len(sequence) > max_length:
+            if truncating == 'pre':
+                sequence = sequence[-max_length:]
+            else:
+                sequence = sequence[:max_length]
+        if padding == 'pre':
+            padded_sequences[i, -len(sequence):] = sequence
+        else:
+            padded_sequences[i, :len(sequence)] = sequence
+    return padded_sequences
 
 
 class StandardScaler:

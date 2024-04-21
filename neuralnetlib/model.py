@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D, Dropout
+from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D, Dropout, Conv1D, Embedding
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
@@ -33,11 +33,10 @@ class Model:
         print(str(self))
 
     def add(self, layer: Layer):
-        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer,
-                                                                                                           Dense):
-            prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Flatten))][-1]
+        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer, (Dense, Conv1D, Embedding)):
+            prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Conv1D, Flatten, Embedding))][-1]
             if isinstance(prev_layer, Flatten):
-                prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D))][-1]
+                prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D, Conv1D))][-1]
             if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
                 raise ValueError(
                     f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
@@ -70,8 +69,11 @@ class Model:
                 error = layer.backward_pass(error)
 
             if hasattr(layer, 'weights'):
-                self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
-                                      layer.d_bias)
+                if hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
+                    self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
+                                        layer.d_bias)
+                elif hasattr(layer, 'd_weights'):
+                    self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch
