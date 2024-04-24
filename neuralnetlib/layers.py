@@ -120,6 +120,7 @@ class Dense(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
+            assert len(input_data.shape) == 2, f"Dense input must be 2D (batch_size, features), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1])
 
         self.input = input_data
@@ -265,6 +266,7 @@ class Conv2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
+            assert len(input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1:])
 
         self.input = input_data
@@ -363,6 +365,7 @@ class MaxPooling2D(Layer):
         return f'MaxPooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -446,6 +449,7 @@ class Flatten(Layer):
         return 'Flatten'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(input_data.shape) >= 2, f"Flatten input must be at least 2D, got {input_data.shape}"
         self.input_shape = input_data.shape
         return input_data.reshape(input_data.shape[0], -1)
 
@@ -508,6 +512,7 @@ class Conv1D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
+            assert len(input_data.shape) == 3, f"Conv1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1:])
 
         self.input = input_data
@@ -600,6 +605,7 @@ class MaxPooling1D(Layer):
         return f'MaxPooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -692,6 +698,7 @@ class Embedding(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
+            assert len(input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
             self.initialize_weights()
 
         self.input = input_data
