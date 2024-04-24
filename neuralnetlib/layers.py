@@ -963,3 +963,23 @@ class AveragePooling1D(Layer):
             d_input = d_input[:, pad_steps:-pad_steps, :]
 
         return d_input
+    
+
+# --------------------------------------------------------------------------------------------------------------
+
+
+compatibility_dict = {
+    Input: [Dense, Conv2D, Conv1D, Embedding],
+    Dense: [Dense, Activation, Dropout, BatchNormalization],
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten, Dropout],
+    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization],
+    MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten],
+    AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten],
+    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, Activation, Dropout, Flatten, BatchNormalization],
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten],
+    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten],
+    Flatten: [Dense, Dropout],
+    Dropout: [Dense, Conv2D, Conv1D, Activation],
+    Embedding: [Conv1D, Flatten, Dense],
+    BatchNormalization: [Dense, Conv2D, Conv1D, Activation]
+}
