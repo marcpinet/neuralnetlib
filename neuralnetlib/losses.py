@@ -31,11 +31,10 @@ class LossFunction:
 
 class MeanSquaredError(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        return np.mean(np.power(y_true - y_pred, 2))
+        return np.mean(np.square(y_true - y_pred))
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        y_true_reshaped = y_true.reshape(-1, 1)
-        return 2 * (y_pred - y_true_reshaped) / y_true.shape[0]
+        return 2 * (y_pred - y_true) / y_true.shape[0]
 
     def __str__(self):
         return "MeanSquaredError"
@@ -48,7 +47,7 @@ class BinaryCrossentropy(LossFunction):
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)
-        return y_pred - y_true
+        return (y_pred - y_true) / (y_pred * (1 - y_pred))
 
     def __str__(self):
         return "BinaryCrossentropy"
@@ -62,10 +61,10 @@ class CategoricalCrossentropy(LossFunction):
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         try:
             y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)
-            return (y_pred - y_true) / y_true.shape[0]
+            return -y_true / y_pred
         except Exception as e:
             print(e, "Make sure to one-hot encode your labels.", sep="\n")
-
+            
     def __str__(self):
         return "CategoricalCrossentropy"
 
