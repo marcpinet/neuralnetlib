@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Input, Activation, Dense, Flatten, Conv2D, Dropout, Conv1D, Embedding
+from neuralnetlib.layers import Layer, Input, Dense, Activation, Conv2D, MaxPooling2D, Conv1D, MaxPooling1D, Flatten, Dropout, Embedding
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
@@ -33,16 +33,43 @@ class Model:
         print(str(self))
 
     def add(self, layer: Layer):
-        if self.layers and len(self.layers) != 0 and not isinstance(self.layers[-1], Input) and isinstance(layer, (Dense, Conv1D, Embedding)):
-            prev_layer = [l for l in self.layers if isinstance(l, (Input, Dense, Conv2D, Conv1D, Flatten, Embedding))][-1]
-            if isinstance(prev_layer, Flatten):
-                prev_layer = [l for l in self.layers if isinstance(l, (Dense, Conv2D, Conv1D))][-1]
-            if hasattr(prev_layer, 'output_size') and prev_layer.output_size != layer.input_size:
-                raise ValueError(
-                    f'Layer input size {layer.input_size} does not match previous layer output size {prev_layer.output_size}.')
-        elif self.layers and isinstance(layer, Dropout):
-            if isinstance(self.layers[-1], Dropout):
-                raise ValueError("Cannot add consecutive Dropout layers.")
+        if not self.layers:
+            if not isinstance(layer, Input):
+                raise ValueError("The first layer must be an Input layer.")
+        else:
+            previous_layer = self.layers[-1]
+
+            if isinstance(previous_layer, Input):
+                if not isinstance(layer, (Dense, Conv2D, Conv1D, Embedding)):
+                    raise ValueError("Input layer can only be followed by Dense, Conv2D, Conv1D, or Embedding.")
+            elif isinstance(previous_layer, Dense):
+                if not isinstance(layer, (Dense, Activation, Dropout)):
+                    raise ValueError("Dense layer can only be followed by Dense, Activation, or Dropout.")
+            elif isinstance(previous_layer, Activation):
+                if not isinstance(layer, (Dense, Conv2D, Conv1D, MaxPooling2D, MaxPooling1D, Flatten, Dropout)):
+                    raise ValueError("Activation layer can only be followed by Dense, Conv2D, Conv1D, MaxPooling2D, MaxPooling1D, Flatten, or Dropout.")
+            elif isinstance(previous_layer, Conv2D):
+                if not isinstance(layer, (Conv2D, MaxPooling2D, Activation, Dropout, Flatten)):
+                    raise ValueError("Conv2D layer can only be followed by Conv2D, MaxPooling2D, Activation, Dropout, or Flatten.")
+            elif isinstance(previous_layer, MaxPooling2D):
+                if not isinstance(layer, (Conv2D, MaxPooling2D, Flatten)):
+                    raise ValueError("MaxPooling2D layer can only be followed by Conv2D, MaxPooling2D, or Flatten.")
+            elif isinstance(previous_layer, Conv1D):
+                if not isinstance(layer, (Conv1D, MaxPooling1D, Activation, Dropout, Flatten)):
+                    raise ValueError("Conv1D layer can only be followed by Conv1D, MaxPooling1D, Activation, Dropout, or Flatten.")
+            elif isinstance(previous_layer, MaxPooling1D):
+                if not isinstance(layer, (Conv1D, MaxPooling1D, Flatten)):
+                    raise ValueError("MaxPooling1D layer can only be followed by Conv1D, MaxPooling1D, or Flatten.")
+            elif isinstance(previous_layer, Flatten):
+                if not isinstance(layer, (Dense, Dropout)):
+                    raise ValueError("Flatten layer can only be followed by Dense or Dropout.")
+            elif isinstance(previous_layer, Dropout):
+                if not isinstance(layer, (Dense, Conv2D, Conv1D, Activation)):
+                    raise ValueError("Dropout layer can only be followed by Dense, Conv2D, Conv1D, or Activation.")
+            elif isinstance(previous_layer, Embedding):
+                if not isinstance(layer, (Conv1D, Flatten, Dense)):
+                    raise ValueError("Embedding layer can only be followed by Conv1D, Flatten, or Dense.")
+        
         self.layers.append(layer)
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = False):
@@ -88,8 +115,21 @@ class Model:
         self.backward_pass(error)
         return loss
 
-    def train(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-              verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None):
+    def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
+            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None):
+        """
+        Fit the model to the training data.
+
+        Args:
+            x_train: Training data
+            y_train: Training labels
+            epochs: Number of epochs to train the model
+            batch_size: Number of samples per gradient update
+            verbose: Whether to print training progress
+            metrics: List of metrics to evaluate the model (functions from neuralnetlib.metrics module)
+            random_state: Random seed for shuffling the data
+            validation_data: Tuple of validation data and labels
+        """
         for i in range(epochs):
             start_time = time.time()
 
