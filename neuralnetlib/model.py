@@ -98,34 +98,19 @@ class Model:
             epochs: Number of epochs to train the model
             batch_size: Number of samples per gradient update
             verbose: Whether to print training progress
-            metrics: List of metrics to evaluate the model (functions from neuralnetlib.metrics module)
+            metrics: List of metric functions to evaluate the model
             random_state: Random seed for shuffling the data
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
         x_train = np.array(x_train)
         y_train = np.array(y_train)
-        
+
         if validation_data is not None:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
-        
-        if callbacks:
-            callback_metrics = set()
-            for callback in callbacks:
-                if hasattr(callback, 'monitor') and callback.monitor is not None:
-                    callback_metrics.update(callback.monitor)
 
-            if metrics is None:
-                metrics = list(callback_metrics)
-            else:
-                metrics = set(metrics)
-                missing_metrics = callback_metrics - metrics
-                if missing_metrics:
-                    raise ValueError(f"The following metrics to monitor provided in callbacks are not provided in the fit method: {', '.join(str(metric) for metric in missing_metrics)}")
-
-        
         for i in range(epochs):
             start_time = time.time()
 
@@ -176,22 +161,23 @@ class Model:
             if validation_data is not None:
                 x_test, y_test = validation_data
                 val_predictions = self.predict(x_test)
-                val_accuracy = accuracy_score(val_predictions, y_test)
+                val_metrics = []
+                if metrics is not None:
+                    for metric in metrics:
+                        val_metrics.append(metric(val_predictions, y_test))  # Change extend to append
                 if verbose:
-                    print(f' - val_accuracy: {val_accuracy:.4f}', end='')
+                    val_metrics_str = ' - '.join(f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                    print(f' - {val_metrics_str}', end='')
 
             if callbacks:
-                metrics_values = []
+                metrics_values = {}
                 if metrics is not None:
-                    metrics_values.extend(
-                        [metric(np.vstack(predictions_list), np.vstack(y_true_list)) for metric in metrics])
-                else:
-                    # If no metrics are provided, use the loss value by default
-                    metrics_values.append(error)
+                    for metric in metrics:
+                        metrics_values[metric.__name__] = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                 for callback in callbacks:
                     if callback.stop_training:
                         break
-                    if callback.on_epoch_end(self, metrics_values):
+                    if callback.on_epoch_end(self, error, metrics_values):
                         break
                     
                 if any(callback.stop_training for callback in callbacks):
