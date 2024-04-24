@@ -75,7 +75,7 @@ class Input(Layer):
 
 
 class Dense(Layer):
-    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.units = units
 
         self.weights = None
@@ -86,6 +86,9 @@ class Dense(Layer):
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def initialize_weights(self, input_size: int):
         self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
@@ -186,13 +189,24 @@ class Activation(Layer):
     def from_config(config: dict):
         activation_function = ActivationFunction.from_config(config['activation_function'])
         return Activation(activation_function)
+    
+    @staticmethod
+    def from_name(name: str) -> "Activation":
+        name = name.lower()
+        for subclass in ActivationFunction.__subclasses__():
+            if subclass.__name__.lower() == name:
+                return Activation(subclass())
+        raise ValueError(f"No activation function found for the name: {name}")
 
 
 class Dropout(Layer):
-    def __init__(self, rate: float, seed: int = None):
+    def __init__(self, rate: float, seed: int = None, **kwargs):
         self.rate = rate
         self.mask = None
         self.seed = seed
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def __str__(self):
         return f'Dropout(rate={self.rate})'
@@ -222,7 +236,7 @@ class Dropout(Layer):
 
 class Conv2D(Layer):
     def __init__(self, filters: int, kernel_size: int | tuple, stride: int | tuple = 1, padding: str = 'valid',
-                 weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+                 weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.filters = filters
         self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
         self.stride = (stride, stride) if isinstance(stride, int) else stride
@@ -236,6 +250,9 @@ class Conv2D(Layer):
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple):
         in_channels, _, _ = input_shape
@@ -474,7 +491,7 @@ class Flatten(Layer):
 
 class Conv1D(Layer):
     def __init__(self, filters: int, kernel_size: int, stride: int = 1, padding: str = 'valid',
-                 weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+                 weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.filters = filters
         self.kernel_size = kernel_size
         self.stride = stride
@@ -488,6 +505,9 @@ class Conv1D(Layer):
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple):
         in_channels = input_shape[0]
@@ -750,7 +770,7 @@ class Embedding(Layer):
 
 
 class BatchNormalization(Layer):
-    def __init__(self, momentum: float = 0.99, epsilon: float = 1e-8):
+    def __init__(self, momentum: float = 0.99, epsilon: float = 1e-8, **kwargs):
         self.gamma = None
         self.beta = None
         self.d_gamma = None
@@ -759,6 +779,9 @@ class BatchNormalization(Layer):
         self.epsilon = epsilon
         self.running_mean = None
         self.running_var = None
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple):
         self.gamma = np.ones(input_shape)

@@ -3,6 +3,7 @@ import time
 
 import numpy as np
 
+from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.metrics import accuracy_score
@@ -43,7 +44,19 @@ class Model:
 
         self.layers.append(layer)
 
-    def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = False):
+        activation_attr = getattr(layer, 'activation', getattr(layer, 'activation_function', None))
+        if activation_attr and not isinstance(layer, Activation):
+            if isinstance(activation_attr, str):
+                activation = Activation.from_name(activation_attr)
+            elif isinstance(ActivationFunction, activation_attr):
+                activation = Activation(activation_attr)
+            elif isinstance(activation_attr, Activation):
+                activation = activation_attr
+            else:
+                raise ValueError(f"Invalid activation function: {activation_attr}")
+            self.layers.append(activation)
+
+    def compile(self, loss_function: LossFunction | str, optimizer: Optimizer | str, verbose: bool = False):
         self.loss_function = loss_function
         self.optimizer = optimizer
         if verbose:
