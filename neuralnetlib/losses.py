@@ -27,6 +27,27 @@ class LossFunction:
             return HuberLoss(config['delta'])
         else:
             raise ValueError(f'Unknown loss function: {config["name"]}')
+        
+    @staticmethod
+    def from_name(name: str) -> "LossFunction":
+        name = name.lower()
+        if name == "mse":
+            return MeanSquaredError()
+        elif name == "bce":
+            return BinaryCrossentropy()
+        elif name == "cce":
+            return CategoricalCrossentropy()
+        elif name == "mae":
+            return MeanAbsoluteError()
+        elif name.startswith("huber"):
+            delta = float(name.split("_")[-1])
+            return HuberLoss(delta)
+        else:
+            for subclass in LossFunction.__subclasses__():
+                if subclass.__name__.lower() == name:
+                    return subclass()
+                
+        raise ValueError(f"No loss function found for the name: {name}")
 
 
 class MeanSquaredError(LossFunction):

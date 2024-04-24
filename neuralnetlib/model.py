@@ -40,25 +40,29 @@ class Model:
         else:
             previous_layer = self.layers[-1]
             if type(layer) not in compatibility_dict[type(previous_layer)]:
-                raise ValueError(f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
+                raise ValueError(
+                    f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
 
         self.layers.append(layer)
 
-        activation_attr = getattr(layer, 'activation', getattr(layer, 'activation_function', None))
+        activation_attr = getattr(layer, 'activation', getattr(
+            layer, 'activation_function', None))
         if activation_attr and not isinstance(layer, Activation):
             if isinstance(activation_attr, str):
                 activation = Activation.from_name(activation_attr)
-            elif isinstance(ActivationFunction, activation_attr):
+            elif isinstance(activation_attr, ActivationFunction):
                 activation = Activation(activation_attr)
             elif isinstance(activation_attr, Activation):
                 activation = activation_attr
             else:
-                raise ValueError(f"Invalid activation function: {activation_attr}")
+                raise ValueError(
+                    f"Invalid activation function: {activation_attr}")
             self.layers.append(activation)
 
     def compile(self, loss_function: LossFunction | str, optimizer: Optimizer | str, verbose: bool = False):
-        self.loss_function = loss_function
-        self.optimizer = optimizer
+        self.loss_function = loss_function if isinstance(loss_function, LossFunction) else LossFunction.from_name(
+            loss_function)
+        self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
         if verbose:
             print(str(self))
 
@@ -84,7 +88,8 @@ class Model:
                     self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
                                           layer.d_bias)
                 elif hasattr(layer, 'd_weights'):
-                    self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
+                    self.optimizer.update(
+                        len(self.layers) - 1 - i, layer.weights, layer.d_weights)
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch
@@ -116,8 +121,10 @@ class Model:
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
-        x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
-        y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+        x_train = np.array(x_train) if not isinstance(
+            x_train, np.ndarray) else x_train
+        y_train = np.array(y_train) if not isinstance(
+            y_train, np.ndarray) else y_train
 
         if validation_data is not None:
             x_test, y_test = validation_data
@@ -128,14 +135,16 @@ class Model:
             start_time = time.time()
 
             # Shuffling the data to avoid overfitting
-            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
+            x_train_shuffled, y_train_shuffled = shuffle(
+                x_train, y_train, random_state=random_state)
 
             error = 0
             predictions_list = []
             y_true_list = []
 
             if batch_size is not None:
-                num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
+                num_batches = np.ceil(
+                    x_train.shape[0] / batch_size).astype(int)
                 for j in range(0, x_train.shape[0], batch_size):
                     x_batch = x_train_shuffled[j:j + batch_size]
                     y_batch = y_train_shuffled[j:j + batch_size]
@@ -151,10 +160,11 @@ class Model:
                         metrics_str = ''
                         if metrics is not None:
                             for metric in metrics:
-                                metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                                metric_value = metric(
+                                    np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                    message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                     message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -166,10 +176,11 @@ class Model:
                     metrics_str = ''
                     if metrics is not None:
                         for metric in metrics:
-                            metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                            metric_value = metric(
+                                np.vstack(predictions_list), np.vstack(y_true_list))
                             metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                     progress_bar(1, 1,
-                                message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                 message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             if validation_data is not None:
                 x_test, y_test = validation_data
@@ -177,22 +188,25 @@ class Model:
                 val_metrics = []
                 if metrics is not None:
                     for metric in metrics:
-                        val_metrics.append(metric(val_predictions, y_test))  # Change extend to append
+                        # Change extend to append
+                        val_metrics.append(metric(val_predictions, y_test))
                 if verbose:
-                    val_metrics_str = ' - '.join(f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                    val_metrics_str = ' - '.join(
+                        f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
                     print(f' - {val_metrics_str}', end='')
 
             if callbacks:
                 metrics_values = {}
                 if metrics is not None:
                     for metric in metrics:
-                        metrics_values[metric.__name__] = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                        metrics_values[metric.__name__] = metric(
+                            np.vstack(predictions_list), np.vstack(y_true_list))
                 for callback in callbacks:
                     if callback.stop_training:
                         break
                     if callback.on_epoch_end(self, error, metrics_values):
                         break
-                    
+
                 if any(callback.stop_training for callback in callbacks):
                     break
 
@@ -228,8 +242,10 @@ class Model:
             model_state = json.load(f)
 
         model = Model()
-        model.layers = [Layer.from_config(layer_config) for layer_config in model_state['layers']]
-        model.loss_function = LossFunction.from_config(model_state['loss_function'])
+        model.layers = [Layer.from_config(layer_config)
+                        for layer_config in model_state['layers']]
+        model.loss_function = LossFunction.from_config(
+            model_state['loss_function'])
         model.optimizer = Optimizer.from_config(model_state['optimizer'])
 
         return model
