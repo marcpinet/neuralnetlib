@@ -42,6 +42,8 @@ class Layer:
             return MaxPooling1D.from_config(config)
         elif config['name'] == 'Embedding':
             return Embedding.from_config(config)
+        elif config['name'] == 'BatchNormalization':
+            return BatchNormalization.from_config(config)
         else:
             raise ValueError(f'Invalid layer name: {config["name"]}')
 
@@ -728,4 +730,72 @@ class Embedding(Layer):
         layer = Embedding(config['input_dim'], config['output_dim'], config['input_length'], config['weights_init'], config['random_state'])
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
+        return layer
+    
+    
+class BatchNormalization(Layer):
+    def __init__(self, momentum: float = 0.99, epsilon: float = 1e-8):
+        self.gamma = None
+        self.beta = None
+        self.d_gamma = None
+        self.d_beta = None
+        self.momentum = momentum
+        self.epsilon = epsilon
+        self.running_mean = None
+        self.running_var = None
+
+    def initialize_weights(self, input_shape: tuple):
+        self.gamma = np.ones(input_shape)
+        self.beta = np.zeros(input_shape)
+        self.d_gamma = np.zeros_like(self.gamma)
+        self.d_beta = np.zeros_like(self.beta)
+        self.running_mean = np.zeros(input_shape)
+        self.running_var = np.ones(input_shape)
+
+    def __str__(self):
+        return f'BatchNormalization(momentum={self.momentum}, epsilon={self.epsilon})'
+
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        if self.gamma is None:
+            self.initialize_weights(input_data.shape[1:])
+
+        if training:
+            mean = np.mean(input_data, axis=0)
+            var = np.var(input_data, axis=0)
+            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
+            self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
+        else:
+            mean = self.running_mean
+            var = self.running_var
+
+        self.input_centered = input_data - mean
+        self.input_normalized = self.input_centered / np.sqrt(var + self.epsilon)
+        return self.gamma * self.input_normalized + self.beta
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        N = output_error.shape[0]
+        self.d_gamma = np.sum(output_error * self.input_normalized, axis=0)
+        self.d_beta = np.sum(output_error, axis=0)
+
+        d_input_normalized = output_error * self.gamma
+        d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
+        d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
+        d_input = d_input_normalized / np.sqrt(self.input_centered.var(axis=0) + self.epsilon) + 2 * d_var * self.input_centered / N + d_mean / N
+        return d_input
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'gamma': self.gamma.tolist() if self.gamma is not None else None,
+            'beta': self.beta.tolist() if self.beta is not None else None,
+            'momentum': self.momentum,
+            'epsilon': self.epsilon
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        layer = BatchNormalization(config['momentum'], config['epsilon'])
+        if config['gamma'] is not None:
+            layer.gamma = np.array(config['gamma'])
+            layer.beta = np.array(config['beta'])
         return layer

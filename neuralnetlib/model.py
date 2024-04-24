@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from neuralnetlib.layers import Layer, Input, Dense, Activation, Conv2D, MaxPooling2D, Conv1D, MaxPooling1D, Flatten, Dropout, Embedding
+from neuralnetlib.layers import Layer, Input, Dense, Activation, Conv2D, MaxPooling2D, Conv1D, MaxPooling1D, Flatten, Dropout, Embedding, BatchNormalization
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
@@ -43,20 +43,20 @@ class Model:
                 if not isinstance(layer, (Dense, Conv2D, Conv1D, Embedding)):
                     raise ValueError("Input layer can only be followed by Dense, Conv2D, Conv1D, or Embedding.")
             elif isinstance(previous_layer, Dense):
-                if not isinstance(layer, (Dense, Activation, Dropout)):
-                    raise ValueError("Dense layer can only be followed by Dense, Activation, or Dropout.")
+                if not isinstance(layer, (Dense, Activation, Dropout, BatchNormalization)):
+                    raise ValueError("Dense layer can only be followed by Dense, Activation, BatchNormalization, or Dropout.")
             elif isinstance(previous_layer, Activation):
                 if not isinstance(layer, (Dense, Conv2D, Conv1D, MaxPooling2D, MaxPooling1D, Flatten, Dropout)):
                     raise ValueError("Activation layer can only be followed by Dense, Conv2D, Conv1D, MaxPooling2D, MaxPooling1D, Flatten, or Dropout.")
             elif isinstance(previous_layer, Conv2D):
-                if not isinstance(layer, (Conv2D, MaxPooling2D, Activation, Dropout, Flatten)):
-                    raise ValueError("Conv2D layer can only be followed by Conv2D, MaxPooling2D, Activation, Dropout, or Flatten.")
+                if not isinstance(layer, (Conv2D, MaxPooling2D, Activation, Dropout, Flatten, BatchNormalization)):
+                    raise ValueError("Conv2D layer can only be followed by Conv2D, MaxPooling2D, Activation, Dropout, BatchNormalization, or Flatten.")
             elif isinstance(previous_layer, MaxPooling2D):
                 if not isinstance(layer, (Conv2D, MaxPooling2D, Flatten)):
                     raise ValueError("MaxPooling2D layer can only be followed by Conv2D, MaxPooling2D, or Flatten.")
             elif isinstance(previous_layer, Conv1D):
-                if not isinstance(layer, (Conv1D, MaxPooling1D, Activation, Dropout, Flatten)):
-                    raise ValueError("Conv1D layer can only be followed by Conv1D, MaxPooling1D, Activation, Dropout, or Flatten.")
+                if not isinstance(layer, (Conv1D, MaxPooling1D, Activation, Dropout, Flatten, BatchNormalization)):
+                    raise ValueError("Conv1D layer can only be followed by Conv1D, MaxPooling1D, Activation, Dropout, BatchNormalization, or Flatten.")
             elif isinstance(previous_layer, MaxPooling1D):
                 if not isinstance(layer, (Conv1D, MaxPooling1D, Flatten)):
                     raise ValueError("MaxPooling1D layer can only be followed by Conv1D, MaxPooling1D, or Flatten.")
