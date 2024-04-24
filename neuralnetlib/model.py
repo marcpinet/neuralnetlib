@@ -103,8 +103,8 @@ class Model:
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
-        x_train = np.array(x_train)
-        y_train = np.array(y_train)
+        x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
+        y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
 
         if validation_data is not None:
             x_test, y_test = validation_data
