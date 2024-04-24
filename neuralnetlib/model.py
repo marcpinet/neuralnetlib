@@ -103,6 +103,10 @@ class Model:
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
+        x_train = np.array(x_train)
+        x_test = np.array(x_test)
+        y_train = np.array(y_train)
+        y_test = np.array(y_test)
         
         if callbacks:
             callback_metrics = set()
@@ -197,11 +201,14 @@ class Model:
             print()
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
+        x_test = np.array(x_test)
+        y_test = np.array(y_test)
         predictions = self.forward_pass(x_test)
         loss = self.loss_function(y_test, predictions)
         return loss
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        X = np.array(X)
         return self.forward_pass(X, training=False)
 
     def save(self, filename: str):
