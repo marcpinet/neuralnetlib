@@ -186,12 +186,12 @@ class Model:
                         break
                     if callback.on_epoch_end(self, metrics_values):
                         break
+                    
+                if any(callback.stop_training for callback in callbacks):
+                                break
 
             if verbose:
                 print()
-
-            if any(callback.stop_training for callback in callbacks):
-                break
 
         if verbose:
             print()
