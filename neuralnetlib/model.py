@@ -105,8 +105,11 @@ class Model:
         """
         x_train = np.array(x_train)
         x_test = np.array(x_test)
-        y_train = np.array(y_train)
-        y_test = np.array(y_test)
+        
+        if validation_data is not None:
+            x_test, y_test = validation_data
+            x_test = np.array(x_test)
+            y_test = np.array(y_test)
         
         if callbacks:
             callback_metrics = set()
