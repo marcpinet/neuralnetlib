@@ -104,7 +104,7 @@ class Model:
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
         x_train = np.array(x_train)
-        x_test = np.array(x_test)
+        y_train = np.array(y_train)
         
         if validation_data is not None:
             x_test, y_test = validation_data
