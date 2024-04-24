@@ -41,6 +41,92 @@ You are free to tweak the hyperparameters and the network architecture to see ho
 
 I used the [MNIST dataset](https://en.wikipedia.org/wiki/MNIST_database) to test the library, but you can use any dataset you want.
 
+## 🚀 Quick examples (more [here](examples/))
+
+### Binary Classification
+
+```python
+from neuralnetlib.model import Model
+from neuralnetlib.layers import Input, Dense
+from neuralnetlib.activations import Sigmoid
+from neuralnetlib.losses import BinaryCrossentropy
+from neuralnetlib.optimizers import SGD
+from neuralnetlib.metrics import accuracy_score
+
+# ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
+
+# Create a model
+model = Model()
+model.add(Input(10))  # 10 features
+model.add(Dense(8))
+model.add(Dense(1))
+model.add(Activation(Sigmoid()))  # many way to tell the model which Activation Function you'd like, see the next example
+
+# Compile the model
+model.compile(loss_function='bce', optimizer='sgd')
+
+# Train the model
+model.fit(X_train, y_train, epochs=10, batch_size=32, metrics=[accuracy_score])
+```
+
+### Multiclass Classification
+
+```python
+from neuralnetlib.activations import Softmax
+from neuralnetlib.losses import CategoricalCrossentropy
+from neuralnetlib.optimizers import Adam
+from neuralnetlib.metrics import accuracy_score
+
+# ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
+
+# Create and compile a model
+model = Model()
+model.add(Input(28, 28, 1)) # For example, MNIST images
+model.add(Conv2D(32, kernel_size=3, padding='same'))
+model.add(Activation('relu'))  # activation supports both str...
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=2))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(10, activation=Softmax()))  # ... and ActivationFunction objects
+model.compile(loss_function='categorical_crossentropy', optimizer=Adam())
+
+
+model.compile(loss_function='categorical_crossentropy', optimizer=Adam())  # same for loss_function and optimizer
+
+# Train the model
+model.fit(X_train, y_train_ohe, epochs=5, metrics=[accuracy_score])
+```
+
+### Regression
+
+```python
+from neuralnetlib.losses import MeanSquaredError
+from neuralnetlib.metrics import accuracy_score
+
+# ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
+
+# Create and compile a model
+model = Model()
+model.add(Input(13))
+model.add(Dense(64, activation='leakyrelu'))
+model.add(Dense(1), activation="linear")
+
+model.compile(loss_function="mse", optimizer='adam')  # you can either put acronyms or full name
+
+# Train the model
+model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=[accuracy_score])
+```
+
+You can also save and load models:
+
+```python
+# Save a model
+model.save('my_model.json')
+
+# Load a model
+model = Model.load('my_model.json')
+```
+
 ## 📜 Output of the example file
 
 Here is an example of a model training on the mnist using the library
