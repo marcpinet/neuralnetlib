@@ -14,7 +14,7 @@ I intend to improve the neural networks and add more features in the future.
 
 ## 📦 Features
 
-- Many layers (input, activation, dense, dropout, conv2d, maxpooling2d, flatten) 🧠
+- Many layers (input, activation, dense, dropout, conv1d/2d, maxpooling1d/2d, flatten, embedding, batchnormalization, and more) 🧠
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
 - Many optimizers (sgd, momentum, rmsprop, adam) 📊
