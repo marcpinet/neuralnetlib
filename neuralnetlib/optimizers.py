@@ -29,7 +29,7 @@ class Optimizer:
         
     @staticmethod
     def from_name(name: str) -> "Optimizer":
-        name = name.lower()
+        name = name.lower().replace("_", "")
 
         for subclass in Optimizer.__subclasses__():
             if subclass.__name__.lower() == name:

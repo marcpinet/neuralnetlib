@@ -192,7 +192,7 @@ class Activation(Layer):
     
     @staticmethod
     def from_name(name: str) -> "Activation":
-        name = name.lower()
+        name = name.lower().replace("_", "")
         for subclass in ActivationFunction.__subclasses__():
             if subclass.__name__.lower() == name:
                 return Activation(subclass())

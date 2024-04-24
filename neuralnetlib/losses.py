@@ -30,7 +30,7 @@ class LossFunction:
         
     @staticmethod
     def from_name(name: str) -> "LossFunction":
-        name = name.lower()
+        name = name.lower().replace("_", "")
         if name == "mse":
             return MeanSquaredError()
         elif name == "bce":
