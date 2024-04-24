@@ -188,7 +188,7 @@ class Model:
                         break
                     
                 if any(callback.stop_training for callback in callbacks):
-                                break
+                    break
 
             if verbose:
                 print()
