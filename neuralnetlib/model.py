@@ -103,6 +103,22 @@ class Model:
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
         """
+        
+        if callbacks:
+            callback_metrics = set()
+            for callback in callbacks:
+                if hasattr(callback, 'monitor') and callback.monitor is not None:
+                    callback_metrics.update(callback.monitor)
+
+            if metrics is None:
+                metrics = list(callback_metrics)
+            else:
+                metrics = set(metrics)
+                missing_metrics = callback_metrics - metrics
+                if missing_metrics:
+                    raise ValueError(f"The following metrics to monitor provided in callbacks are not provided in the fit method: {', '.join(str(metric) for metric in missing_metrics)}")
+
+        
         for i in range(epochs):
             start_time = time.time()
 
