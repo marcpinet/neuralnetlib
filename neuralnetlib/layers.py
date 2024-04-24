@@ -799,3 +799,167 @@ class BatchNormalization(Layer):
             layer.gamma = np.array(config['gamma'])
             layer.beta = np.array(config['beta'])
         return layer
+    
+    
+class AveragePooling2D(Layer):
+    def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
+        if isinstance(pool_size, int):
+            self.pool_size = (pool_size, pool_size)
+        else:
+            self.pool_size = pool_size
+        self.stride = stride if stride is not None else self.pool_size
+        self.padding = padding
+
+    def __str__(self):
+        return f'AveragePooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+        self.input = input_data
+        output = self._pool(self.input, self.pool_size, self.stride, self.padding)
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        input_error = self._pool_backward(output_error, self.input, self.pool_size, self.stride, self.padding)
+        return input_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'pool_size': self.pool_size,
+            'stride': self.stride,
+            'padding': self.padding
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return AveragePooling2D(config['pool_size'], config['stride'], config['padding'])
+
+    @staticmethod
+    def _pool(input_data: np.ndarray, pool_size: tuple, stride: tuple, padding: str) -> np.ndarray:
+        batch_size, channels, in_height, in_width = input_data.shape
+
+        if padding == 'same':
+            pad_height = ((in_height - 1) * stride[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * stride[1] + pool_size[1] - in_width) // 2
+        else:
+            pad_height, pad_width = 0, 0
+
+        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
+                              mode='constant')
+
+        out_height = (in_height + 2 * pad_height - pool_size[0]) // stride[0] + 1
+        out_width = (in_width + 2 * pad_width - pool_size[1]) // stride[1] + 1
+
+        output = np.zeros((batch_size, channels, out_height, out_width))
+
+        for i in range(out_height):
+            for j in range(out_width):
+                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
+                              j * stride[1]:j * stride[1] + pool_size[1]]
+                output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
+
+        return output
+
+    @staticmethod
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, stride: tuple,
+                       padding: str) -> np.ndarray:
+        batch_size, channels, in_height, in_width = input_data.shape
+        _, _, out_height, out_width = output_error.shape
+
+        if padding == 'same':
+            pad_height = ((in_height - 1) * stride[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * stride[1] + pool_size[1] - in_width) // 2
+        else:
+            pad_height, pad_width = 0, 0
+
+        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
+                              mode='constant')
+
+        d_input = np.zeros_like(padded_input)
+
+        for i in range(out_height):
+            for j in range(out_width):
+                d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis, np.newaxis] / np.prod(pool_size)
+
+        if padding == 'same':
+            d_input = d_input[:, :, pad_height:-pad_height, pad_width:-pad_width]
+
+        return d_input
+
+
+class AveragePooling1D(Layer):
+    def __init__(self, pool_size: int, stride: int = None, padding: str = 'valid'):
+        self.pool_size = pool_size
+        self.stride = stride if stride is not None else pool_size
+        self.padding = padding
+
+    def __str__(self):
+        return f'AveragePooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+        self.input = input_data
+        output = self._pool(self.input, self.pool_size, self.stride, self.padding)
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        input_error = self._pool_backward(output_error, self.input, self.pool_size, self.stride, self.padding)
+        return input_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'pool_size': self.pool_size,
+            'stride': self.stride,
+            'padding': self.padding
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return AveragePooling1D(config['pool_size'], config['stride'], config['padding'])
+
+    @staticmethod
+    def _pool(input_data: np.ndarray, pool_size: int, stride: int, padding: str) -> np.ndarray:
+        batch_size, steps, features = input_data.shape
+
+        if padding == 'same':
+            pad_steps = ((steps - 1) * stride + pool_size - steps) // 2
+        else:
+            pad_steps = 0
+
+        padded_input = np.pad(input_data, ((0, 0), (pad_steps, pad_steps), (0, 0)), mode='constant')
+
+        out_steps = (steps + 2 * pad_steps - pool_size) // stride + 1
+
+        output = np.zeros((batch_size, out_steps, features))
+
+        for i in range(out_steps):
+            input_slice = padded_input[:, i * stride:i * stride + pool_size, :]
+            output[:, i, :] = np.mean(input_slice, axis=1)
+
+        return output
+
+    @staticmethod
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, stride: int,
+                       padding: str) -> np.ndarray:
+        batch_size, steps, features = input_data.shape
+        _, out_steps, _ = output_error.shape
+
+        if padding == 'same':
+            pad_steps = ((steps - 1) * stride + pool_size - steps) // 2
+        else:
+            pad_steps = 0
+
+        padded_input = np.pad(input_data, ((0, 0), (pad_steps, pad_steps), (0, 0)), mode='constant')
+
+        d_input = np.zeros_like(padded_input)
+
+        for i in range(out_steps):
+            d_input[:, i * stride:i * stride + pool_size, :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
+
+        if padding == 'same':
+            d_input = d_input[:, pad_steps:-pad_steps, :]
+
+        return d_input
