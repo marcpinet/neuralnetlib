@@ -26,6 +26,16 @@ class Optimizer:
             return Adam.from_config(config)
         else:
             raise ValueError(f"Unknown optimizer name: {config['name']}")
+        
+    @staticmethod
+    def from_name(name: str) -> "Optimizer":
+        name = name.lower().replace("_", "")
+
+        for subclass in Optimizer.__subclasses__():
+            if subclass.__name__.lower() == name:
+                return subclass()
+                
+        raise ValueError(f"No optimizer found for the name: {name}")
 
 
 class SGD(Optimizer):
