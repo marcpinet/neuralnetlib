@@ -133,7 +133,7 @@ class Model:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                     message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                    message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -148,7 +148,7 @@ class Model:
                             metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                             metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                     progress_bar(1, 1,
-                                 message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             if validation_data is not None:
                 x_test, y_test = validation_data
@@ -166,11 +166,19 @@ class Model:
                     # If no metrics are provided, use the loss value by default
                     metrics_values.append(error)
                 for callback in callbacks:
+                    if callback.stop_training:
+                        break
                     if callback.on_epoch_end(self, metrics_values):
                         break
 
             if verbose:
                 print()
+
+            if any(callback.stop_training for callback in callbacks):
+                break
+
+        if verbose:
+            print()
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
         predictions = self.forward_pass(x_test)
