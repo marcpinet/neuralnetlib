@@ -201,6 +201,12 @@ class Model:
                     for metric in metrics:
                         metrics_values[metric.__name__] = metric(
                             np.vstack(predictions_list), np.vstack(y_true_list))
+                        
+                callback_monitor_metrics = set(cb.monitor[0].__name__ for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
+                missing_metrics = callback_monitor_metrics.difference(metrics_values.keys())
+                if missing_metrics:
+                    raise ValueError(f"The following metrics weren't (and must be) included in the fit() method: {', '.join(missing_metrics)}")
+
                 for callback in callbacks:
                     if callback.stop_training:
                         break
