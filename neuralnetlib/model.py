@@ -5,9 +5,9 @@ import numpy as np
 
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
-from neuralnetlib.metrics import accuracy_score
 
 
 class Model:
@@ -28,7 +28,7 @@ class Model:
         model_summary += f'Optimizer: {str(self.optimizer)}\n'
         model_summary += '-------------------------------------------------\n'
         return model_summary
-    
+
     def summary(self):
         print(str(self))
 
@@ -40,7 +40,7 @@ class Model:
             previous_layer = self.layers[-1]
             if type(layer) not in compatibility_dict[type(previous_layer)]:
                 raise ValueError(f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
-        
+
         self.layers.append(layer)
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = False):
@@ -69,7 +69,7 @@ class Model:
             if hasattr(layer, 'weights'):
                 if hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
                     self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
-                                        layer.d_bias)
+                                          layer.d_bias)
                 elif hasattr(layer, 'd_weights'):
                     self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
 
@@ -87,7 +87,8 @@ class Model:
         return loss
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None):
+            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
+            callbacks: list = None):
         """
         Fit the model to the training data.
 
@@ -100,7 +101,24 @@ class Model:
             metrics: List of metrics to evaluate the model (functions from neuralnetlib.metrics module)
             random_state: Random seed for shuffling the data
             validation_data: Tuple of validation data and labels
+            callbacks: List of callback objects (e.g., EarlyStopping)
         """
+        
+        if callbacks:
+            callback_metrics = set()
+            for callback in callbacks:
+                if hasattr(callback, 'monitor') and callback.monitor is not None:
+                    callback_metrics.update(callback.monitor)
+
+            if metrics is None:
+                metrics = list(callback_metrics)
+            else:
+                metrics = set(metrics)
+                missing_metrics = callback_metrics - metrics
+                if missing_metrics:
+                    raise ValueError(f"The following metrics to monitor provided in callbacks are not provided in the fit method: {', '.join(str(metric) for metric in missing_metrics)}")
+
+        
         for i in range(epochs):
             start_time = time.time()
 
@@ -131,7 +149,7 @@ class Model:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                     message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                    message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -146,7 +164,7 @@ class Model:
                             metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                             metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
                     progress_bar(1, 1,
-                                 message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             if validation_data is not None:
                 x_test, y_test = validation_data
@@ -155,8 +173,28 @@ class Model:
                 if verbose:
                     print(f' - val_accuracy: {val_accuracy:.4f}', end='')
 
+            if callbacks:
+                metrics_values = []
+                if metrics is not None:
+                    metrics_values.extend(
+                        [metric(np.vstack(predictions_list), np.vstack(y_true_list)) for metric in metrics])
+                else:
+                    # If no metrics are provided, use the loss value by default
+                    metrics_values.append(error)
+                for callback in callbacks:
+                    if callback.stop_training:
+                        break
+                    if callback.on_epoch_end(self, metrics_values):
+                        break
+
             if verbose:
                 print()
+
+            if any(callback.stop_training for callback in callbacks):
+                break
+
+        if verbose:
+            print()
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
         predictions = self.forward_pass(x_test)

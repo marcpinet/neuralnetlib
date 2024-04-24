@@ -48,9 +48,9 @@ def im2col_2d(input_data, filter_h, filter_w, stride=1, pad=0):
 
     # Make sure that the convolution can be executed
     assert (
-                       H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
+                   H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
     assert (
-                       W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
+                   W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
 
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
@@ -159,9 +159,9 @@ def col2im_2d(col, input_shape, filter_h, filter_w, stride=1, pad=0):
 
     # Make sure that the convolution can be executed
     assert (
-                       H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
+                   H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
     assert (
-                       W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
+                   W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
 
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
@@ -227,8 +227,8 @@ class StandardScaler:
         if self.mean_ is None or self.scale_ is None:
             raise ValueError("StandardScaler has not been fitted yet.")
         return X * self.scale_ + self.mean_
-    
-    
+
+
 class MinMaxScaler:
     def __init__(self, feature_range=(0, 1)):
         self.feature_range = feature_range
