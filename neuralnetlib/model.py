@@ -5,9 +5,9 @@ import numpy as np
 
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
+from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
-from neuralnetlib.metrics import accuracy_score
 
 
 class Model:
@@ -28,7 +28,7 @@ class Model:
         model_summary += f'Optimizer: {str(self.optimizer)}\n'
         model_summary += '-------------------------------------------------\n'
         return model_summary
-    
+
     def summary(self):
         print(str(self))
 
@@ -40,7 +40,7 @@ class Model:
             previous_layer = self.layers[-1]
             if type(layer) not in compatibility_dict[type(previous_layer)]:
                 raise ValueError(f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
-        
+
         self.layers.append(layer)
 
     def compile(self, loss_function: LossFunction, optimizer: Optimizer, verbose: bool = False):
@@ -69,7 +69,7 @@ class Model:
             if hasattr(layer, 'weights'):
                 if hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
                     self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
-                                        layer.d_bias)
+                                          layer.d_bias)
                 elif hasattr(layer, 'd_weights'):
                     self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
 
@@ -87,7 +87,8 @@ class Model:
         return loss
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None):
+            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
+            callbacks: list = None):
         """
         Fit the model to the training data.
 
@@ -100,6 +101,7 @@ class Model:
             metrics: List of metrics to evaluate the model (functions from neuralnetlib.metrics module)
             random_state: Random seed for shuffling the data
             validation_data: Tuple of validation data and labels
+            callbacks: List of callback objects (e.g., EarlyStopping)
         """
         for i in range(epochs):
             start_time = time.time()
@@ -154,6 +156,18 @@ class Model:
                 val_accuracy = accuracy_score(val_predictions, y_test)
                 if verbose:
                     print(f' - val_accuracy: {val_accuracy:.4f}', end='')
+
+            if callbacks:
+                metrics_values = []
+                if metrics is not None:
+                    metrics_values.extend(
+                        [metric(np.vstack(predictions_list), np.vstack(y_true_list)) for metric in metrics])
+                else:
+                    # If no metrics are provided, use the loss value by default
+                    metrics_values.append(error)
+                for callback in callbacks:
+                    if callback.on_epoch_end(self, metrics_values):
+                        break
 
             if verbose:
                 print()

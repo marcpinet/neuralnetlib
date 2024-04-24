@@ -221,7 +221,8 @@ class Dropout(Layer):
 
 
 class Conv2D(Layer):
-    def __init__(self, filters: int, kernel_size: int | tuple, stride: int | tuple = 1, padding: str = 'valid', weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+    def __init__(self, filters: int, kernel_size: int | tuple, stride: int | tuple = 1, padding: str = 'valid',
+                 weights_init: str = "default", bias_init: str = "default", random_state: int = None):
         self.filters = filters
         self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
         self.stride = (stride, stride) if isinstance(stride, int) else stride
@@ -241,9 +242,11 @@ class Conv2D(Layer):
 
         self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
         if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)), (self.filters, in_channels, *self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)),
+                                           (self.filters, in_channels, *self.kernel_size))
         elif self.weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))), (self.filters, in_channels, *self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))),
+                                           (self.filters, in_channels, *self.kernel_size))
         elif self.weights_init == "default":
             self.weights = self.rng.normal(0, 0.01, (self.filters, in_channels, *self.kernel_size))
         else:
@@ -268,7 +271,8 @@ class Conv2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+            assert len(
+                input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1:])
 
         self.input = input_data
@@ -276,7 +280,8 @@ class Conv2D(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights, self.stride, self.padding)
+        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
+                                                                           self.stride, self.padding)
         return input_error
 
     def get_config(self) -> dict:
@@ -367,7 +372,8 @@ class MaxPooling2D(Layer):
         return f'MaxPooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+        assert len(
+            input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -467,7 +473,8 @@ class Flatten(Layer):
 
 
 class Conv1D(Layer):
-    def __init__(self, filters: int, kernel_size: int, stride: int = 1, padding: str = 'valid', weights_init: str = "default", bias_init: str = "default", random_state: int = None):
+    def __init__(self, filters: int, kernel_size: int, stride: int = 1, padding: str = 'valid',
+                 weights_init: str = "default", bias_init: str = "default", random_state: int = None):
         self.filters = filters
         self.kernel_size = kernel_size
         self.stride = stride
@@ -487,9 +494,11 @@ class Conv1D(Layer):
 
         self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
         if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * in_channels)), (self.filters, in_channels, self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * in_channels)),
+                                           (self.filters, in_channels, self.kernel_size))
         elif self.weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * self.kernel_size)), (self.filters, in_channels, self.kernel_size))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * self.kernel_size)),
+                                           (self.filters, in_channels, self.kernel_size))
         elif self.weights_init == "default":
             self.weights = self.rng.normal(0, 0.01, (self.filters, in_channels, self.kernel_size))
         else:
@@ -514,7 +523,8 @@ class Conv1D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(input_data.shape) == 3, f"Conv1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+            assert len(
+                input_data.shape) == 3, f"Conv1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1:])
 
         self.input = input_data
@@ -522,7 +532,8 @@ class Conv1D(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights, self.stride, self.padding)
+        input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
+                                                                           self.stride, self.padding)
         return input_error
 
     def get_config(self) -> dict:
@@ -607,7 +618,8 @@ class MaxPooling1D(Layer):
         return f'MaxPooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+        assert len(
+            input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -676,7 +688,8 @@ class MaxPooling1D(Layer):
 
 
 class Embedding(Layer):
-    def __init__(self, input_dim: int, output_dim: int, input_length: int = None, weights_init: str = "default", random_state: int = None):
+    def __init__(self, input_dim: int, output_dim: int, input_length: int = None, weights_init: str = "default",
+                 random_state: int = None):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.input_length = input_length
@@ -687,7 +700,8 @@ class Embedding(Layer):
     def initialize_weights(self):
         self.rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
         if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (self.input_dim + self.output_dim)), (self.input_dim, self.output_dim))
+            self.weights = self.rng.normal(0, np.sqrt(2 / (self.input_dim + self.output_dim)),
+                                           (self.input_dim, self.output_dim))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / self.input_dim), (self.input_dim, self.output_dim))
         elif self.weights_init == "default":
@@ -700,7 +714,8 @@ class Embedding(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
+            assert len(
+                input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
             self.initialize_weights()
 
         self.input = input_data
@@ -727,12 +742,13 @@ class Embedding(Layer):
 
     @staticmethod
     def from_config(config: dict):
-        layer = Embedding(config['input_dim'], config['output_dim'], config['input_length'], config['weights_init'], config['random_state'])
+        layer = Embedding(config['input_dim'], config['output_dim'], config['input_length'], config['weights_init'],
+                          config['random_state'])
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
         return layer
-    
-    
+
+
 class BatchNormalization(Layer):
     def __init__(self, momentum: float = 0.99, epsilon: float = 1e-8):
         self.gamma = None
@@ -778,9 +794,12 @@ class BatchNormalization(Layer):
         self.d_beta = np.sum(output_error, axis=0)
 
         d_input_normalized = output_error * self.gamma
-        d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
-        d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
-        d_input = d_input_normalized / np.sqrt(self.input_centered.var(axis=0) + self.epsilon) + 2 * d_var * self.input_centered / N + d_mean / N
+        d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (
+                    self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
+        d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(
+            self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
+        d_input = d_input_normalized / np.sqrt(
+            self.input_centered.var(axis=0) + self.epsilon) + 2 * d_var * self.input_centered / N + d_mean / N
         return d_input
 
     def get_config(self) -> dict:
@@ -799,8 +818,8 @@ class BatchNormalization(Layer):
             layer.gamma = np.array(config['gamma'])
             layer.beta = np.array(config['beta'])
         return layer
-    
-    
+
+
 class AveragePooling2D(Layer):
     def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
         if isinstance(pool_size, int):
@@ -814,7 +833,8 @@ class AveragePooling2D(Layer):
         return f'AveragePooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+        assert len(
+            input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -881,7 +901,8 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis, np.newaxis] / np.prod(pool_size)
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] / np.prod(pool_size)
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-pad_height, pad_width:-pad_width]
@@ -899,7 +920,8 @@ class AveragePooling1D(Layer):
         return f'AveragePooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+        assert len(
+            input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size, self.stride, self.padding)
         return output
@@ -963,7 +985,7 @@ class AveragePooling1D(Layer):
             d_input = d_input[:, pad_steps:-pad_steps, :]
 
         return d_input
-    
+
 
 # --------------------------------------------------------------------------------------------------------------
 
@@ -971,7 +993,8 @@ class AveragePooling1D(Layer):
 compatibility_dict = {
     Input: [Dense, Conv2D, Conv1D, Embedding],
     Dense: [Dense, Activation, Dropout, BatchNormalization],
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten, Dropout],
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten,
+                 Dropout],
     Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization],
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten],
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten],
