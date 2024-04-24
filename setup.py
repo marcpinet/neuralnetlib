@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='neuralnetlib',
-    version='2.3.4',
+    version='2.4.0',
     author='Marc Pinet',
     description='A simple convolutional neural network library with only numpy as dependency',
     long_description=open('README.md', encoding="utf-8").read(),
