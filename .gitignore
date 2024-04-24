@@ -1,6 +1,3 @@
-# Dist generator
-dist_gen.bat
-
 # Datasets formats
 *.csv
 *.npz

@@ -72,7 +72,7 @@ def main():
     model.compile(loss_function=BinaryCrossentropy(), optimizer=Adam(learning_rate=0.001))
 
     # 7. Train the model
-    model.train(x_train, y_train, epochs=500, batch_size=32, metrics=[accuracy_score], random_state=42)
+    model.fit(x_train, y_train, epochs=500, batch_size=32, metrics=[accuracy_score], random_state=42)
 
     # 8. Evaluate the model
     loss = model.evaluate(x_test, y_test)
