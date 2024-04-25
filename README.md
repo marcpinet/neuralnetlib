@@ -60,7 +60,7 @@ model = Model()
 model.add(Input(10))  # 10 features
 model.add(Dense(8))
 model.add(Dense(1))
-model.add(Activation(Sigmoid()))  # many way to tell the model which Activation Function you'd like, see the next example
+model.add(Activation(Sigmoid()))  # many ways to tell the model which Activation Function you'd like, see the next example
 
 # Compile the model
 model.compile(loss_function='bce', optimizer='sgd')
@@ -82,8 +82,7 @@ from neuralnetlib.metrics import accuracy_score
 # Create and compile a model
 model = Model()
 model.add(Input(28, 28, 1)) # For example, MNIST images
-model.add(Conv2D(32, kernel_size=3, padding='same'))
-model.add(Activation('relu'))  # activation supports both str...
+model.add(Conv2D(32, kernel_size=3, padding='same'), activation='relu')  # activation supports both str...
 model.add(BatchNormalization())
 model.add(MaxPooling2D(pool_size=2))
 model.add(Dense(64, activation='relu'))
