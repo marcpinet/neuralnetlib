@@ -32,6 +32,8 @@ class Layer:
             return Conv2D.from_config(config)
         elif config['name'] == 'MaxPooling2D':
             return MaxPooling2D.from_config(config)
+        elif config['name'] == 'AveragePooling2D':
+            return AveragePooling2D.from_config(config)
         elif config['name'] == 'Flatten':
             return Flatten.from_config(config)
         elif config['name'] == 'Dropout':
@@ -40,10 +42,14 @@ class Layer:
             return Conv1D.from_config(config)
         elif config['name'] == 'MaxPooling1D':
             return MaxPooling1D.from_config(config)
+        elif config['name'] == 'AveragePooling1D':
+            return AveragePooling1D.from_config(config)
         elif config['name'] == 'Embedding':
             return Embedding.from_config(config)
         elif config['name'] == 'BatchNormalization':
             return BatchNormalization.from_config(config)
+        elif config['name'] == 'Permute':
+            return Permute.from_config(config)
         else:
             raise ValueError(f'Invalid layer name: {config["name"]}')
 
