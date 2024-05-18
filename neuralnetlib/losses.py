@@ -27,7 +27,7 @@ class LossFunction:
             return HuberLoss(config['delta'])
         else:
             raise ValueError(f'Unknown loss function: {config["name"]}')
-        
+
     @staticmethod
     def from_name(name: str) -> "LossFunction":
         name = name.lower().replace("_", "")
@@ -46,7 +46,7 @@ class LossFunction:
             for subclass in LossFunction.__subclasses__():
                 if subclass.__name__.lower() == name:
                     return subclass()
-                
+
         raise ValueError(f"No loss function found for the name: {name}")
 
 
@@ -85,7 +85,7 @@ class CategoricalCrossentropy(LossFunction):
             return -y_true / y_pred
         except Exception as e:
             print(e, "Make sure to one-hot encode your labels.", sep="\n")
-            
+
     def __str__(self):
         return "CategoricalCrossentropy"
 

@@ -1,17 +1,17 @@
 import json
-import time
-import matplotlib
-
-import numpy as np
 import os
+import time
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
-from neuralnetlib.preprocessing import PCA
 from neuralnetlib.optimizers import Optimizer
+from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive
-import matplotlib.pyplot as plt
 
 
 class Model:

@@ -81,7 +81,8 @@ class Input(Layer):
 
 
 class Dense(Layer):
-    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
+    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None,
+                 **kwargs):
         self.units = units
 
         self.weights = None
@@ -466,7 +467,7 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
 
         return output
@@ -493,16 +494,16 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 mask = (input_slice == np.max(
                     input_slice, axis=(2, 3), keepdims=True))
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                                                                np.newaxis] * mask
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-                              pad_height, pad_width:-pad_width]
+            pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -754,7 +755,7 @@ class MaxPooling1D(Layer):
             input_slice = padded_input[:, :, i * stride:i * stride + pool_size]
             mask = (input_slice == np.max(input_slice, axis=2, keepdims=True))
             d_input[:, :, i * stride:i * stride +
-                    pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
+                                     pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_length:-pad_length]
@@ -864,16 +865,16 @@ class BatchNormalization(Layer):
             mean = np.mean(input_data, axis=0)
             var = np.var(input_data, axis=0)
             self.running_mean = self.momentum * \
-                self.running_mean + (1 - self.momentum) * mean
+                                self.running_mean + (1 - self.momentum) * mean
             self.running_var = self.momentum * \
-                self.running_var + (1 - self.momentum) * var
+                               self.running_var + (1 - self.momentum) * var
         else:
             mean = self.running_mean
             var = self.running_var
 
         self.input_centered = input_data - mean
         self.input_normalized = self.input_centered / \
-            np.sqrt(var + self.epsilon)
+                                np.sqrt(var + self.epsilon)
         return self.gamma * self.input_normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -883,7 +884,7 @@ class BatchNormalization(Layer):
 
         d_input_normalized = output_error * self.gamma
         d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (
-            self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
+                self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
         d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(
             self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
         d_input = d_input_normalized / np.sqrt(
@@ -969,7 +970,7 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
 
         return output
@@ -996,12 +997,12 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                                                                np.newaxis] / np.prod(pool_size)
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] / np.prod(pool_size)
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-                              pad_height, pad_width:-pad_width]
+            pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -1080,7 +1081,7 @@ class AveragePooling1D(Layer):
 
         for i in range(out_steps):
             d_input[:, i * stride:i * stride + pool_size,
-                    :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
+            :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
 
         if padding == 'same':
             d_input = d_input[:, pad_steps:-pad_steps, :]
@@ -1109,12 +1110,13 @@ class Permute(Layer):
     def get_config(self) -> dict:
         config = {'name': self.__class__.__name__, 'dims': self.dims}
         config.update({key: getattr(self, key)
-                      for key in self.__dict__ if key not in ['dims']})
+                       for key in self.__dict__ if key not in ['dims']})
         return config
 
     @staticmethod
     def from_config(config: dict):
-        return Permute(config['dims'], **{key: value for key, value in config.items() if key != 'name' and key != 'dims'})
+        return Permute(config['dims'],
+                       **{key: value for key, value in config.items() if key != 'name' and key != 'dims'})
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -1123,7 +1125,8 @@ class Permute(Layer):
 compatibility_dict = {
     Input: [Dense, Conv2D, Conv1D, Embedding, Permute],
     Dense: [Dense, Activation, Dropout, BatchNormalization, Permute],
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten, Dropout, Permute],
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten,
+                 Dropout, Permute],
     Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute],
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute],
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute],
