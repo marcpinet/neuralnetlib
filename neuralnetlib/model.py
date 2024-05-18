@@ -1,14 +1,19 @@
 import json
 import time
+import matplotlib
 
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
-from neuralnetlib.metrics import accuracy_score
+from neuralnetlib.preprocessing import PCA
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.utils import shuffle, progress_bar
+import matplotlib.pyplot as plt
+
+
+matplotlib.use("TkAgg")
 
 
 class Model:
@@ -106,7 +111,7 @@ class Model:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
             verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
-            callbacks: list = None):
+            callbacks: list = None, plot_decision_boundary: bool = False):
         """
         Fit the model to the training data.
 
@@ -120,7 +125,9 @@ class Model:
             random_state: Random seed for shuffling the data
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
+            plot_decision_boundary: Whether to plot the decision boundary
         """
+        global update_plot
         x_train = np.array(x_train) if not isinstance(
             x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(
@@ -130,6 +137,45 @@ class Model:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
+
+        if plot_decision_boundary:
+            pca = PCA(n_components=2, random_state=random_state)
+            x_train_2d = pca.fit_transform(x_train)
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+
+            x_min, x_max = x_train_2d[:, 0].min() - 1, x_train_2d[:, 0].max() + 1
+            y_min, y_max = x_train_2d[:, 1].min() - 1, x_train_2d[:, 1].max() + 1
+            xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+                                 np.arange(y_min, y_max, 0.1))
+
+            y_train_encoded = np.argmax(y_train, axis=1) if y_train.ndim > 1 else y_train
+
+            def update_plot(epoch):
+                ax.clear()
+
+                scatter = ax.scatter(x_train_2d[:, 0], x_train_2d[:, 1], c=y_train_encoded, cmap='viridis', alpha=0.7)
+
+                labels = np.unique(y_train_encoded)
+                handles = [
+                    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=scatter.cmap(scatter.norm(label)),
+                               label=f'Class {label}', markersize=8) for label in labels]
+                ax.legend(handles=handles, title='Classes')
+
+                grid_points = np.c_[xx.ravel(), yy.ravel()]
+                Z = self.predict(pca.inverse_transform(grid_points))
+                if Z.shape[1] > 1:  # Multiclass classification
+                    Z = np.argmax(Z, axis=1).reshape(xx.shape)
+                    ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=np.arange(Z.max() + 1))
+                else:  # Binary classification
+                    Z = (Z > 0.5).astype(int).reshape(xx.shape)
+                    ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=1)
+
+                ax.set_xlabel("PCA Component 1")
+                ax.set_ylabel("PCA Component 2")
+                ax.set_title(f"Decision Boundary (Epoch {epoch + 1})")
+
+                fig.canvas.draw()
 
         for i in range(epochs):
             start_time = time.time()
@@ -190,10 +236,10 @@ class Model:
                     for metric in metrics:
                         # Change extend to append
                         val_metrics.append(metric(val_predictions, y_test))
-                if verbose:
-                    val_metrics_str = ' - '.join(
-                        f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
-                    print(f' - {val_metrics_str}', end='')
+                    if verbose:
+                        val_metrics_str = ' - '.join(
+                            f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                        print(f' - {val_metrics_str}', end='')
 
             if callbacks:
                 metrics_values = {}
@@ -218,6 +264,13 @@ class Model:
 
             if verbose:
                 print()
+                
+            if plot_decision_boundary:
+                update_plot(i)
+                plt.pause(0.1)  # Pause pour laisser le temps de mettre à jour le graphique
+
+        if plot_decision_boundary and 'IPython' in globals():
+            plt.show(block=False)
 
         if verbose:
             print()
