@@ -252,3 +252,37 @@ class MinMaxScaler:
         if self.min_ is None or self.scale_ is None:
             raise ValueError("MinMaxScaler has not been fitted yet.")
         return (X - self.feature_range[0]) / (self.feature_range[1] - self.feature_range[0]) * self.scale_ + self.min_
+
+
+class PCA:
+    def __init__(self, n_components: int, random_state: int = None):
+        self.n_components = n_components
+        self.random_state = random_state
+        self.components = None
+        self.mean = None
+
+    def fit(self, X: np.ndarray):
+        self.mean = np.mean(X, axis=0)
+        X_centered = X - self.mean
+
+        covariance_matrix = np.cov(X_centered, rowvar=False)
+
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+
+        sorted_indices = np.argsort(eigenvalues)[::-1]
+        eigenvalues = eigenvalues[sorted_indices]
+        eigenvectors = eigenvectors[:, sorted_indices]
+
+        self.components = eigenvectors[:, :self.n_components]
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        X_centered = X - self.mean
+
+        return np.dot(X_centered, self.components)
+
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        self.fit(X)
+        return self.transform(X)
+
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
+        return np.dot(X, self.components.T) + self.mean
