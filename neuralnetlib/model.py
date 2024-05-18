@@ -13,9 +13,6 @@ from neuralnetlib.utils import shuffle, progress_bar
 import matplotlib.pyplot as plt
 
 
-matplotlib.use("TkAgg")
-
-
 class Model:
     def __init__(self):
         self.layers = []
@@ -127,7 +124,6 @@ class Model:
             callbacks: List of callback objects (e.g., EarlyStopping)
             plot_decision_boundary: Whether to plot the decision boundary
         """
-        global update_plot
         x_train = np.array(x_train) if not isinstance(
             x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(
@@ -139,6 +135,7 @@ class Model:
             y_test = np.array(y_test)
 
         if plot_decision_boundary:
+            matplotlib.use("TkAgg")
             pca = PCA(n_components=2, random_state=random_state)
             x_train_2d = pca.fit_transform(x_train)
 
@@ -149,7 +146,10 @@ class Model:
             xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
                                  np.arange(y_min, y_max, 0.1))
 
-            y_train_encoded = np.argmax(y_train, axis=1) if y_train.ndim > 1 else y_train
+            if y_train.ndim > 1:
+                y_train_encoded = np.argmax(y_train, axis=1)
+            else:
+                y_train_encoded = y_train.ravel()
 
             def update_plot(epoch):
                 ax.clear()
@@ -247,11 +247,13 @@ class Model:
                     for metric in metrics:
                         metrics_values[metric.__name__] = metric(
                             np.vstack(predictions_list), np.vstack(y_true_list))
-                        
-                callback_monitor_metrics = set(cb.monitor[0].__name__ for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
+
+                callback_monitor_metrics = set(
+                    cb.monitor[0].__name__ for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
                 missing_metrics = callback_monitor_metrics.difference(metrics_values.keys())
                 if missing_metrics:
-                    raise ValueError(f"The following metrics weren't (and must be) included in the fit() method: {', '.join(missing_metrics)}")
+                    raise ValueError(
+                        f"The following metrics weren't (and must be) included in the fit() method: {', '.join(missing_metrics)}")
 
                 for callback in callbacks:
                     if callback.stop_training:
@@ -264,7 +266,7 @@ class Model:
 
             if verbose:
                 print()
-                
+
             if plot_decision_boundary:
                 update_plot(i)
                 plt.pause(0.1)  # Pause pour laisser le temps de mettre à jour le graphique
