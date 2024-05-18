@@ -3,13 +3,14 @@ import time
 import matplotlib
 
 import numpy as np
+import os
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.optimizers import Optimizer
-from neuralnetlib.utils import shuffle, progress_bar
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive
 import matplotlib.pyplot as plt
 
 
@@ -124,6 +125,11 @@ class Model:
             callbacks: List of callback objects (e.g., EarlyStopping)
             plot_decision_boundary: Whether to plot the decision boundary
         """
+
+        if plot_decision_boundary and os.getenv('DISPLAY', '') == '' and not is_interactive():
+            raise ValueError(
+                "Cannot display the plot. Please run the script in an environment with a display.")
+
         x_train = np.array(x_train) if not isinstance(
             x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(
@@ -133,49 +139,6 @@ class Model:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
-
-        if plot_decision_boundary:
-            matplotlib.use("TkAgg")
-            pca = PCA(n_components=2, random_state=random_state)
-            x_train_2d = pca.fit_transform(x_train)
-
-            fig, ax = plt.subplots(figsize=(8, 6))
-
-            x_min, x_max = x_train_2d[:, 0].min() - 1, x_train_2d[:, 0].max() + 1
-            y_min, y_max = x_train_2d[:, 1].min() - 1, x_train_2d[:, 1].max() + 1
-            xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
-                                 np.arange(y_min, y_max, 0.1))
-
-            if y_train.ndim > 1:
-                y_train_encoded = np.argmax(y_train, axis=1)
-            else:
-                y_train_encoded = y_train.ravel()
-
-            def update_plot(epoch):
-                ax.clear()
-
-                scatter = ax.scatter(x_train_2d[:, 0], x_train_2d[:, 1], c=y_train_encoded, cmap='viridis', alpha=0.7)
-
-                labels = np.unique(y_train_encoded)
-                handles = [
-                    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=scatter.cmap(scatter.norm(label)),
-                               label=f'Class {label}', markersize=8) for label in labels]
-                ax.legend(handles=handles, title='Classes')
-
-                grid_points = np.c_[xx.ravel(), yy.ravel()]
-                Z = self.predict(pca.inverse_transform(grid_points))
-                if Z.shape[1] > 1:  # Multiclass classification
-                    Z = np.argmax(Z, axis=1).reshape(xx.shape)
-                    ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=np.arange(Z.max() + 1))
-                else:  # Binary classification
-                    Z = (Z > 0.5).astype(int).reshape(xx.shape)
-                    ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=1)
-
-                ax.set_xlabel("PCA Component 1")
-                ax.set_ylabel("PCA Component 2")
-                ax.set_title(f"Decision Boundary (Epoch {epoch + 1})")
-
-                fig.canvas.draw()
 
         for i in range(epochs):
             start_time = time.time()
@@ -268,10 +231,10 @@ class Model:
                 print()
 
             if plot_decision_boundary:
-                update_plot(i)
+                self.__update_plot(i, x_train, y_train, random_state)
                 plt.pause(0.1)  # Pause pour laisser le temps de mettre à jour le graphique
 
-        if plot_decision_boundary and 'IPython' in globals():
+        if plot_decision_boundary:
             plt.show(block=False)
 
         if verbose:
@@ -310,3 +273,55 @@ class Model:
         model.optimizer = Optimizer.from_config(model_state['optimizer'])
 
         return model
+
+    def __update_plot(self, epoch, x_train, y_train, random_state):
+        if not plt.fignum_exists(1):
+            if matplotlib.get_backend() != "TkAgg":
+                matplotlib.use("TkAgg")
+                plt.ion()
+
+            fig, ax = plt.subplots(figsize=(8, 6), num=1)
+            pca = PCA(n_components=2, random_state=random_state)
+            x_train_2d = pca.fit_transform(x_train)
+            fig.pca = pca
+        else:
+            fig = plt.gcf()
+            ax = fig.axes[0]
+            pca = fig.pca
+            x_train_2d = pca.transform(x_train)
+
+        x_min, x_max = x_train_2d[:, 0].min() - 1, x_train_2d[:, 0].max() + 1
+        y_min, y_max = x_train_2d[:, 1].min() - 1, x_train_2d[:, 1].max() + 1
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
+                             np.arange(y_min, y_max, 0.1))
+
+        if y_train.ndim > 1:
+            y_train_encoded = np.argmax(y_train, axis=1)
+        else:
+            y_train_encoded = y_train.ravel()
+
+        ax.clear()
+
+        scatter = ax.scatter(x_train_2d[:, 0], x_train_2d[:, 1], c=y_train_encoded, cmap='viridis', alpha=0.7)
+
+        labels = np.unique(y_train_encoded)
+        handles = [
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=scatter.cmap(scatter.norm(label)),
+                       label=f'Class {label}', markersize=8) for label in labels]
+        ax.legend(handles=handles, title='Classes')
+
+        grid_points = np.c_[xx.ravel(), yy.ravel()]
+        Z = self.predict(pca.inverse_transform(grid_points))
+        if Z.shape[1] > 1:  # Multiclass classification
+            Z = np.argmax(Z, axis=1).reshape(xx.shape)
+            ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=np.arange(Z.max() + 1))
+        else:  # Binary classification
+            Z = (Z > 0.5).astype(int).reshape(xx.shape)
+            ax.contourf(xx, yy, Z, alpha=0.2, cmap=plt.cm.RdYlBu, levels=1)
+
+        ax.set_xlabel("PCA Component 1")
+        ax.set_ylabel("PCA Component 2")
+        ax.set_title(f"Decision Boundary (Epoch {epoch + 1})")
+
+        fig.canvas.draw()
+        plt.pause(0.1)

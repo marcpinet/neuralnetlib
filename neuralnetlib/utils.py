@@ -71,3 +71,10 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, rando
     y_test = y[indices[split_index:]]
     return x_train, x_test, y_train, y_test
 
+
+def is_interactive():
+    try:
+        import __main__ as main
+        return not hasattr(main, '__file__')
+    except:
+        return False
