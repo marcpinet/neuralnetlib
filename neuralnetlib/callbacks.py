@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class EarlyStopping:
     def __init__(self, patience: int = 5, min_delta: float = 0.001, restore_best_weights: bool = True,
                  start_from_epoch: int = 0, monitor: list = None, mode: str = 'auto', baseline: float = None):
@@ -40,13 +41,13 @@ class EarlyStopping:
         if self.monitor is None:
             current_metric = loss
             if (self.mode == 'min' and current_metric < self.best_metric - self.min_delta) or \
-               (self.mode == 'max' and current_metric > self.best_metric + self.min_delta):
+                    (self.mode == 'max' and current_metric > self.best_metric + self.min_delta):
                 self.best_metric = current_metric
                 improved = True
         else:
             current_metric = metrics[self.monitor[0].__name__]
             if (self.mode == 'max' and current_metric > self.best_metric + self.min_delta) or \
-               (self.mode == 'min' and current_metric < self.best_metric - self.min_delta):
+                    (self.mode == 'min' and current_metric < self.best_metric - self.min_delta):
                 self.best_metric = current_metric
                 improved = True
 
@@ -66,7 +67,8 @@ class EarlyStopping:
             self.stop_training = True
             print(f"\nEarly stopping after {self.epoch} epochs.", end='')
             if self.restore_best_weights and self.best_weights is not None:
-                for layer, best_weights in zip([layer for layer in model.layers if hasattr(layer, 'weights')], self.best_weights):
+                for layer, best_weights in zip([layer for layer in model.layers if hasattr(layer, 'weights')],
+                                               self.best_weights):
                     layer.weights = best_weights
             return True
 

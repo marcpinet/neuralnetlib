@@ -260,8 +260,12 @@ class PCA:
         self.random_state = random_state
         self.components = None
         self.mean = None
+        self.input_shape = None
 
     def fit(self, X: np.ndarray):
+        self.input_shape = X.shape[1:]
+        X = X.reshape(X.shape[0], -1)
+
         self.mean = np.mean(X, axis=0)
         X_centered = X - self.mean
 
@@ -276,6 +280,7 @@ class PCA:
         self.components = eigenvectors[:, :self.n_components]
 
     def transform(self, X: np.ndarray) -> np.ndarray:
+        X = X.reshape(X.shape[0], -1)
         X_centered = X - self.mean
 
         return np.dot(X_centered, self.components)
@@ -285,4 +290,5 @@ class PCA:
         return self.transform(X)
 
     def inverse_transform(self, X: np.ndarray) -> np.ndarray:
-        return np.dot(X, self.components.T) + self.mean
+        X_reconstructed = np.dot(X, self.components.T) + self.mean
+        return X_reconstructed.reshape((-1, *self.input_shape))
