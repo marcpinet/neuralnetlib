@@ -1,1 +1,2 @@
 numpy
+matplotlib  # for plotting the decision boundary (yeah, I won't rewrite matplotlib too)
