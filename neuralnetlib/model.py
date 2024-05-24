@@ -232,7 +232,7 @@ class Model:
 
             if plot_decision_boundary:
                 self.__update_plot(i, x_train, y_train, random_state)
-                plt.pause(0.1)  # Pause pour laisser le temps de mettre à jour le graphique
+                plt.pause(0.1)
 
         if plot_decision_boundary:
             plt.show(block=False)
