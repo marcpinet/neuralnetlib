@@ -128,6 +128,15 @@ model = Model.load('my_model.json')
 
 ## 📜 Output of the example file
 
+Here is the decision boundary on a Binary Classification (breast cancer dataset):
+
+![decision_boundary](resources/img/decision_boundary.gif)
+
+> [!NOTE]
+> PCA (Principal Component Analysis) was used to reduce the number of features to 2, so we could plot the decision boundary.
+> Representing n-dimensional data in 2D is not easy, so the decision boundary may not be *always* accurate.
+> I also tried with t-SNE, but the results were not good.
+
 Here is an example of a model training on the mnist using the library
 
 ![cli](resources/img/cli.gif)
