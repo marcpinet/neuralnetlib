@@ -1,2 +1,3 @@
 numpy
 matplotlib  # for plotting the decision boundary (yeah, I won't rewrite matplotlib too)
+pywin32; platform_system == 'Windows'  # to check if a display if available (for the plotting)
