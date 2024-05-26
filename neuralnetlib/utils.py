@@ -1,6 +1,8 @@
 import sys
 import time
-
+import os
+import platform
+import subprocess
 import numpy as np
 
 
@@ -77,4 +79,34 @@ def is_interactive():
         import __main__ as main
         return not hasattr(main, '__file__')
     except:
+        return False
+
+
+def is_display_available():
+    system = platform.system()
+    
+    if system == "Linux":
+        return is_display_available_linux()
+    elif system == "Windows":
+        return is_display_available_windows()
+    else:
+        raise NotImplementedError(f"Display check not implemented for {system}")
+
+
+def is_display_available_linux():
+    if "DISPLAY" in os.environ:
+        try:
+            output = subprocess.check_output(["xdpyinfo"], stderr=subprocess.STDOUT)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    return False
+
+
+def is_display_available_windows():
+    try:
+        import win32api
+        display_devices = win32api.EnumDisplayDevices()
+        return bool(display_devices)
+    except Exception:
         return False

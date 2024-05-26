@@ -11,7 +11,7 @@ from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available
 
 
 class Model:
@@ -126,7 +126,7 @@ class Model:
             plot_decision_boundary: Whether to plot the decision boundary
         """
 
-        if plot_decision_boundary and os.getenv('DISPLAY', '') == '' and not is_interactive():
+        if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError(
                 "Cannot display the plot. Please run the script in an environment with a display.")
 
