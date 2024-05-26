@@ -128,7 +128,7 @@ model = Model.load('my_model.json')
 
 ## 📜 Output of the example file
 
-Here is the decision boundary on a Binary Classification (breast cancer dataset):
+### Here is the decision boundary on a Binary Classification (breast cancer dataset):
 
 ![decision_boundary](resources/img/decision_boundary.gif)
 
@@ -137,15 +137,15 @@ Here is the decision boundary on a Binary Classification (breast cancer dataset)
 > Representing n-dimensional data in 2D is not easy, so the decision boundary may not be *always* accurate.
 > I also tried with t-SNE, but the results were not good.
 
-Here is an example of a model training on the mnist using the library
+### Here is an example of a model training on the mnist using the library
 
 ![cli](resources/img/cli.gif)
 
-Here is an example of a loaded model used with Tkinter:
+### Here is an example of a loaded model used with Tkinter:
 
 ![gui](resources/img/gui.gif)
 
-Here, I decided to print the first 10 predictions and their respective labels to see how the network is performing.
+### Here, I decided to print the first 10 predictions and their respective labels to see how the network is performing.
 
 ![plot](resources/img/plot.png)
 
