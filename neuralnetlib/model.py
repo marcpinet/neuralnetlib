@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import Layer, Input, Activation, Dropout, compatibility_dict
+from neuralnetlib.layers import Layer, Input, Activation, Dropout, TextVectorization, compatibility_dict
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
@@ -73,6 +73,8 @@ class Model:
         for layer in self.layers:
             if isinstance(layer, Dropout):
                 X = layer.forward_pass(X, training)
+            elif isinstance(layer, TextVectorization):
+                X = layer.forward_pass(X)
             else:
                 X = layer.forward_pass(X)
         return X
@@ -139,6 +141,12 @@ class Model:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
+            
+        # Adapt the TextVectorization layer if it exists
+        for layer in self.layers:
+            if isinstance(layer, TextVectorization):
+                layer.adapt(x_train)
+                break
 
         for i in range(epochs):
             start_time = time.time()
@@ -253,10 +261,17 @@ class Model:
 
     def save(self, filename: str):
         model_state = {
-            'layers': [layer.get_config() for layer in self.layers],
-            'loss_function': self.loss_function.get_config(),
-            'optimizer': self.optimizer.get_config(),
+            'layers': []
         }
+        for layer in self.layers:
+            layer_config = layer.get_config()
+            if isinstance(layer, TextVectorization):
+                layer_config['vocabulary'] = layer.vocabulary
+            model_state['layers'].append(layer_config)
+        
+        model_state['loss_function'] = self.loss_function.get_config()
+        model_state['optimizer'] = self.optimizer.get_config()
+        
         with open(filename, 'w') as f:
             json.dump(model_state, f, indent=4)
 
@@ -266,10 +281,15 @@ class Model:
             model_state = json.load(f)
 
         model = Model()
-        model.layers = [Layer.from_config(layer_config)
-                        for layer_config in model_state['layers']]
-        model.loss_function = LossFunction.from_config(
-            model_state['loss_function'])
+        model.layers = []
+        for layer_config in model_state['layers']:
+            layer = Layer.from_config(layer_config)
+            if isinstance(layer, TextVectorization) and 'vocabulary' in layer_config:
+                layer.vocabulary = layer_config['vocabulary']
+                layer.word_index = {word: i for i, word in enumerate(layer.vocabulary)}
+            model.layers.append(layer)
+        
+        model.loss_function = LossFunction.from_config(model_state['loss_function'])
         model.optimizer = Optimizer.from_config(model_state['optimizer'])
 
         return model
