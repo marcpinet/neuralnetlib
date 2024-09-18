@@ -1,6 +1,7 @@
 import time
 
 import numpy as np
+from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d
@@ -467,7 +468,7 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                                           j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
 
         return output
@@ -494,16 +495,16 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                                           j * stride[1]:j * stride[1] + pool_size[1]]
                 mask = (input_slice == np.max(
                     input_slice, axis=(2, 3), keepdims=True))
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                               np.newaxis] * mask
+                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                                                                np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-            pad_height, pad_width:-pad_width]
+                              pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -755,7 +756,7 @@ class MaxPooling1D(Layer):
             input_slice = padded_input[:, :, i * stride:i * stride + pool_size]
             mask = (input_slice == np.max(input_slice, axis=2, keepdims=True))
             d_input[:, :, i * stride:i * stride +
-                                     pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
+                    pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_length:-pad_length]
@@ -865,16 +866,16 @@ class BatchNormalization(Layer):
             mean = np.mean(input_data, axis=0)
             var = np.var(input_data, axis=0)
             self.running_mean = self.momentum * \
-                                self.running_mean + (1 - self.momentum) * mean
+                self.running_mean + (1 - self.momentum) * mean
             self.running_var = self.momentum * \
-                               self.running_var + (1 - self.momentum) * var
+                self.running_var + (1 - self.momentum) * var
         else:
             mean = self.running_mean
             var = self.running_var
 
         self.input_centered = input_data - mean
         self.input_normalized = self.input_centered / \
-                                np.sqrt(var + self.epsilon)
+            np.sqrt(var + self.epsilon)
         return self.gamma * self.input_normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -884,7 +885,7 @@ class BatchNormalization(Layer):
 
         d_input_normalized = output_error * self.gamma
         d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (
-                self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
+            self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
         d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(
             self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
         d_input = d_input_normalized / np.sqrt(
@@ -970,7 +971,7 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                                           j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
 
         return output
@@ -997,12 +998,12 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                               np.newaxis] / np.prod(pool_size)
+                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                                                                np.newaxis] / np.prod(pool_size)
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-            pad_height, pad_width:-pad_width]
+                              pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -1081,7 +1082,7 @@ class AveragePooling1D(Layer):
 
         for i in range(out_steps):
             d_input[:, i * stride:i * stride + pool_size,
-            :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
+                    :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
 
         if padding == 'same':
             d_input = d_input[:, pad_steps:-pad_steps, :]
@@ -1119,24 +1120,132 @@ class Permute(Layer):
                        **{key: value for key, value in config.items() if key != 'name' and key != 'dims'})
 
 
+class TextVectorization(Layer):
+    def __init__(self, max_tokens=None, output_mode='int', output_sequence_length=None):
+        super().__init__()
+        self.max_tokens = max_tokens
+        self.output_mode = output_mode
+        self.output_sequence_length = output_sequence_length
+        self.vocabulary = None
+        self.word_index = None
+
+    def __str__(self):
+        return f'TextVectorization(max_tokens={self.max_tokens}, output_mode={self.output_mode}, output_sequence_length={self.output_sequence_length})'
+
+    def adapt(self, data):
+        if len(data.shape) == 2:
+            data = data.flatten()
+
+        tokens = [word for text in data for word in text.lower().split()]
+
+        token_counts = Counter(tokens)
+
+        sorted_tokens = sorted(token_counts.items(),
+                               key=lambda x: x[1], reverse=True)
+
+        if self.max_tokens:
+            # -1 to reserve index 0 for padding
+            sorted_tokens = sorted_tokens[:self.max_tokens - 1]
+
+        self.vocabulary = [''] + [token for token, _ in sorted_tokens]
+        self.word_index = {word: i for i, word in enumerate(self.vocabulary)}
+
+    def forward_pass(self, input_data):
+        if isinstance(input_data[0], str):
+            vectorized = [[self.word_index.get(
+                word, 0) for word in text.lower().split()] for text in input_data]
+        else:
+            vectorized = [[self.word_index.get(
+                word, 0) for word in sequence] for sequence in input_data]
+
+        if self.output_sequence_length:
+            vectorized = [seq[:self.output_sequence_length] + [0] *
+                          max(0, self.output_sequence_length - len(seq)) for seq in vectorized]
+
+        if self.output_mode == 'int':
+            return np.array(vectorized)
+        elif self.output_mode == 'binary':
+            return np.array([[1 if token > 0 else 0 for token in seq] for seq in vectorized])
+        elif self.output_mode == 'count':
+            return np.array([[seq.count(token) for token in range(1, len(self.vocabulary))] for seq in vectorized])
+        elif self.output_mode == 'tfidf':
+            tf = np.array([[seq.count(token) for token in range(
+                1, len(self.vocabulary))] for seq in vectorized])
+            idf = np.log(len(vectorized) / (1 + np.array([[(token in seq) for seq in vectorized].count(
+                True) for token in range(1, len(self.vocabulary))])))
+            return tf * idf
+        else:
+            raise ValueError("Invalid output_mode. Use 'int' or 'binary'.")
+
+    def backward_pass(self, output_error):
+        return output_error
+
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'max_tokens': self.max_tokens,
+            'output_mode': self.output_mode,
+            'output_sequence_length': self.output_sequence_length,
+            'vocabulary': self.vocabulary
+        }
+
+    @staticmethod
+    def from_config(config):
+        layer = TextVectorization(
+            config['max_tokens'], config['output_mode'], config['output_sequence_length'])
+        layer.vocabulary = config['vocabulary']
+        layer.word_index = {word: i for i, word in enumerate(layer.vocabulary)}
+        return layer
+
+
+class Reshape(Layer):
+    def __init__(self, target_shape):
+        super().__init__()
+        self.target_shape = target_shape
+        self.input_shape = None
+
+    def __str__(self):
+        return f'Reshape(target_shape={self.target_shape})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        self.input_shape = input_data.shape
+        return np.reshape(input_data, (input_data.shape[0],) + self.target_shape)
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        return np.reshape(output_error, self.input_shape)
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'target_shape': self.target_shape
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return Reshape(config['target_shape'])
+
+
 # --------------------------------------------------------------------------------------------------------------
 
 
 compatibility_dict = {
-    Input: [Dense, Conv2D, Conv1D, Embedding, Permute],
-    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute],
+    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape],
+    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
     Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten,
-                 Dropout, Permute],
-    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute],
-    MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute],
-    AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute],
-    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute],
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute],
-    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute],
-    Flatten: [Dense, Dropout, Permute],
-    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute],
-    Embedding: [Conv1D, Flatten, Dense, Permute],
-    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute],
+                 Dropout, Permute, Reshape],
+    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
+    MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute, Reshape],
+    AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute, Reshape],
+    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape],
+    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape],
+    Flatten: [Dense, Dropout, Permute, Reshape],
+    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape],
+    Embedding: [Conv1D, Flatten, Dense, Permute, Reshape],
+    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape],
     Permute: [Dense, Conv2D, Conv1D, Activation,
-              Dropout, Flatten, BatchNormalization, Permute]
+              Dropout, Flatten, BatchNormalization, Permute, Reshape],
+    TextVectorization: [Embedding, Dense, Conv1D, Reshape],
+    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape,
+              TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D]
 }
