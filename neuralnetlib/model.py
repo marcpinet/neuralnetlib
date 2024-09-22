@@ -10,7 +10,7 @@ from neuralnetlib.layers import Layer, Input, Activation, Dropout, TextVectoriza
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
 from neuralnetlib.metrics import Metric
 
 
@@ -131,10 +131,10 @@ class Model:
             Dictionary containing the training history of metrics (loss and any other metrics)
         """
         
-        history = {
+        history = History({
             'loss': [],
             'val_loss': []
-        }
+        })
 
         if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError(

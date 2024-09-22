@@ -5,6 +5,11 @@ import platform
 import subprocess
 import numpy as np
 
+class History(dict):
+    """A custom dictionary that doesn't display its contents when returned in Jupyter."""
+    def __repr__(self):
+        return ""
+
 
 def dict_with_ndarray_to_dict_with_list(d: dict) -> dict:
     """Converts all numpy arrays in a dictionary to lists. This is useful for serializing the dictionary to JSON."""
