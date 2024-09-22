@@ -66,7 +66,7 @@ model.add(Activation(Sigmoid()))  # many ways to tell the model which Activation
 model.compile(loss_function='bce', optimizer='sgd')
 
 # Train the model
-model.fit(X_train, y_train, epochs=10, batch_size=32, metrics=[accuracy_score])
+model.fit(X_train, y_train, epochs=10, batch_size=32, metrics=['accuracy'])
 ```
 
 ### Multiclass Classification
@@ -93,7 +93,7 @@ model.compile(loss_function='categorical_crossentropy', optimizer=Adam())
 model.compile(loss_function='categorical_crossentropy', optimizer=Adam())  # same for loss_function and optimizer
 
 # Train the model
-model.fit(X_train, y_train_ohe, epochs=5, metrics=[accuracy_score])
+model.fit(X_train, y_train_ohe, epochs=5, metrics=['accuracy'])
 ```
 
 ### Regression
@@ -113,7 +113,7 @@ model.add(Dense(1), activation="linear")
 model.compile(loss_function="mse", optimizer='adam')  # you can either put acronyms or full name
 
 # Train the model
-model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=[accuracy_score])
+model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=['accuracy'])
 ```
 
 You can also save and load models:
