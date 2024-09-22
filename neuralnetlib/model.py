@@ -12,6 +12,7 @@ from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available
+from neuralnetlib.metrics import Metric
 
 
 class Model:
@@ -121,7 +122,7 @@ class Model:
             epochs: Number of epochs to train the model
             batch_size: Number of samples per gradient update
             verbose: Whether to print training progress
-            metrics: List of metric functions to evaluate the model
+            metrics: List of metric to evaluate the model
             random_state: Random seed for shuffling the data
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
@@ -141,6 +142,9 @@ class Model:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
+            
+        if metrics is not None:
+            metrics = [Metric(m) for m in metrics]
             
         # Adapt the TextVectorization layer if it exists
         for layer in self.layers:
@@ -179,7 +183,7 @@ class Model:
                             for metric in metrics:
                                 metric_value = metric(
                                     np.vstack(predictions_list), np.vstack(y_true_list))
-                                metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
+                                metrics_str += f'{metric.name}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
                                      message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
@@ -195,7 +199,7 @@ class Model:
                         for metric in metrics:
                             metric_value = metric(
                                 np.vstack(predictions_list), np.vstack(y_true_list))
-                            metrics_str += f'{metric.__name__}: {metric_value:.4f} - '
+                            metrics_str += f'{metric.name}: {metric_value:.4f} - '
                     progress_bar(1, 1,
                                  message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
@@ -209,14 +213,14 @@ class Model:
                         val_metrics.append(metric(val_predictions, y_test))
                     if verbose:
                         val_metrics_str = ' - '.join(
-                            f'{metric.__name__}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                            f'val_{metric.name}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
                         print(f' - {val_metrics_str}', end='')
 
             if callbacks:
                 metrics_values = {}
                 if metrics is not None:
                     for metric in metrics:
-                        metrics_values[metric.__name__] = metric(
+                        metrics_values[metric.name] = metric(
                             np.vstack(predictions_list), np.vstack(y_true_list))
 
                 callback_monitor_metrics = set(
