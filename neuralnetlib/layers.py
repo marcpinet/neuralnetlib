@@ -773,6 +773,7 @@ class Embedding(Layer):
         self.weights = None
         self.weights_init = weights_init
         self.random_state = random_state
+        self.clipped_input = None
 
     def initialize_weights(self):
         self.rng = np.random.default_rng(
@@ -795,12 +796,17 @@ class Embedding(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(
-                input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
+            assert len(input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
             self.initialize_weights()
 
         self.input = input_data
-        output = self.weights[input_data]
+        
+        if not np.issubdtype(input_data.dtype, np.integer):
+            input_data = np.round(input_data).astype(int)
+        
+        self.clipped_input = np.clip(input_data, 0, self.input_dim - 1)
+        
+        output = self.weights[self.clipped_input]
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -808,9 +814,13 @@ class Embedding(Layer):
             (self.input.shape[0], self.input.shape[1], self.input_dim))
         output_error = output_error.reshape(
             output_error.shape[0], output_error.shape[1], -1)
-        for i, index in enumerate(self.input):
-            input_error[i, np.arange(index.shape[0]), index] = np.sum(
-                output_error[i], axis=1)
+        
+        for i, index in enumerate(self.clipped_input):
+            np.add.at(input_error[i], (np.arange(index.shape[0]), index), np.sum(output_error[i], axis=1))
+        
+        if not np.issubdtype(self.input.dtype, np.integer):
+            return np.zeros_like(self.input)
+        
         return input_error
 
     def get_config(self) -> dict:

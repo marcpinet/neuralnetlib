@@ -1,5 +1,5 @@
 import numpy as np
-
+import re
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     """One hot encoded labels are binary vectors representing categorical values,
@@ -292,3 +292,188 @@ class PCA:
     def inverse_transform(self, X: np.ndarray) -> np.ndarray:
         X_reconstructed = np.dot(X, self.components.T) + self.mean
         return X_reconstructed.reshape((-1, *self.input_shape))
+
+
+class Tokenizer:
+    def __init__(self, num_words=None, filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n', lower=True, split=' ', char_level=False, oov_token=None):
+        self.num_words = num_words
+        self.filters = filters
+        self.lower = lower
+        self.split = split
+        self.char_level = char_level
+        self.oov_token = oov_token
+        self.word_counts = {}
+        self.word_index = {}
+        self.index_word = {}
+        self.word_docs = {}
+        self.document_count = 0
+
+    def fit_on_texts(self, texts):
+        for text in texts:
+            self.document_count += 1
+            if self.char_level:
+                seq = text
+            else:
+                seq = text.split(self.split) if isinstance(text, str) else text
+            for w in seq:
+                if self.lower:
+                    w = w.lower()
+                if w in self.filters:
+                    continue
+                if w in self.word_counts:
+                    self.word_counts[w] += 1
+                else:
+                    self.word_counts[w] = 1
+                if w in self.word_docs:
+                    self.word_docs[w] += 1
+                else:
+                    self.word_docs[w] = 1
+
+        wcounts = list(self.word_counts.items())
+        wcounts.sort(key=lambda x: x[1], reverse=True)
+        sorted_voc = [wc[0] for wc in wcounts]
+        
+        # Note that index 0 is reserved, never assigned to an existing word
+        self.word_index = dict(list(zip(sorted_voc, list(range(1, len(sorted_voc) + 1)))))
+
+        if self.oov_token is not None:
+            i = self.word_index.get(self.oov_token)
+            if i is None:
+                self.word_index[self.oov_token] = len(self.word_index) + 1
+
+        if self.num_words is not None:
+            self.word_index = dict(list(self.word_index.items())[:self.num_words])
+
+        self.index_word = dict((c, w) for w, c in self.word_index.items())
+
+    def texts_to_sequences(self, texts):
+        return list(self.texts_to_sequences_generator(texts))
+
+    def texts_to_sequences_generator(self, texts):
+        for text in texts:
+            if self.char_level:
+                seq = text
+            else:
+                seq = text.split(self.split) if isinstance(text, str) else text
+            vect = []
+            for w in seq:
+                if self.lower:
+                    w = w.lower()
+                i = self.word_index.get(w)
+                if i is not None:
+                    if self.num_words and i >= self.num_words:
+                        if self.oov_token is not None:
+                            vect.append(self.word_index.get(self.oov_token))
+                    else:
+                        vect.append(i)
+                elif self.oov_token is not None:
+                    vect.append(self.word_index.get(self.oov_token))
+            yield vect
+
+    def sequences_to_texts(self, sequences):
+        return list(self.sequences_to_texts_generator(sequences))
+
+    def sequences_to_texts_generator(self, sequences):
+        for seq in sequences:
+            vect = []
+            for num in seq:
+                word = self.index_word.get(num)
+                if word is not None:
+                    vect.append(word)
+                elif self.oov_token is not None:
+                    vect.append(self.oov_token)
+            if self.char_level:
+                yield ''.join(vect)
+            else:
+                yield ' '.join(vect)
+
+    def get_config(self):
+        return {
+            'num_words': self.num_words,
+            'filters': self.filters,
+            'lower': self.lower,
+            'split': self.split,
+            'char_level': self.char_level,
+            'oov_token': self.oov_token,
+            'document_count': self.document_count,
+        }
+        
+
+class CountVectorizer:
+    def __init__(self, lowercase=True, token_pattern=r'(?u)\b\w\w+\b', 
+                 max_df=1.0, min_df=1, max_features=None):
+        self.lowercase = lowercase
+        self.token_pattern = token_pattern
+        self.max_df = max_df
+        self.min_df = min_df
+        self.max_features = max_features
+        self.vocabulary_ = {}
+        self.document_count_ = 0
+
+    def _tokenize(self, text):
+        if self.lowercase:
+            text = text.lower()
+        return re.findall(self.token_pattern, text)
+
+    def fit(self, raw_documents):
+        self.document_count_ = len(raw_documents)
+        term_freq = {}
+        doc_freq = {}
+
+        for doc in raw_documents:
+            term_counts = {}
+            for term in self._tokenize(doc):
+                if term not in term_counts:
+                    term_counts[term] = 1
+                else:
+                    term_counts[term] += 1
+            
+            for term, count in term_counts.items():
+                if term not in term_freq:
+                    term_freq[term] = count
+                    doc_freq[term] = 1
+                else:
+                    term_freq[term] += count
+                    doc_freq[term] += 1
+
+        if isinstance(self.max_df, float):
+            max_doc_count = int(self.max_df * self.document_count_)
+        else:
+            max_doc_count = self.max_df
+
+        if isinstance(self.min_df, float):
+            min_doc_count = int(self.min_df * self.document_count_)
+        else:
+            min_doc_count = self.min_df
+
+        terms = [term for term, freq in doc_freq.items() 
+                 if min_doc_count <= freq <= max_doc_count]
+
+        if self.max_features is not None:
+            terms = sorted(terms, key=lambda t: term_freq[t], reverse=True)[:self.max_features]
+
+        self.vocabulary_ = {term: idx for idx, term in enumerate(sorted(terms))}
+
+        return self
+
+    def transform(self, raw_documents):
+        if not self.vocabulary_:
+            raise ValueError("Vocabulary not fitted. Call fit() first.")
+
+        X = np.zeros((len(raw_documents), len(self.vocabulary_)), dtype=int)
+
+        for doc_idx, doc in enumerate(raw_documents):
+            for term in self._tokenize(doc):
+                if term in self.vocabulary_:
+                    X[doc_idx, self.vocabulary_[term]] += 1
+
+        return X
+
+    def fit_transform(self, raw_documents):
+        return self.fit(raw_documents).transform(raw_documents)
+
+    def get_feature_names_out(self):
+        return np.array(sorted(self.vocabulary_, key=self.vocabulary_.get))
+
+    def get_vocabulary(self):
+        return dict(sorted(self.vocabulary_.items(), key=lambda x: x[1]))
