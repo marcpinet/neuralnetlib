@@ -111,7 +111,7 @@ class Model:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
             verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
-            callbacks: list = None, plot_decision_boundary: bool = False):
+            callbacks: list = None, plot_decision_boundary: bool = False) -> dict:
         """
         Fit the model to the training data.
 
@@ -126,7 +126,15 @@ class Model:
             validation_data: Tuple of validation data and labels
             callbacks: List of callback objects (e.g., EarlyStopping)
             plot_decision_boundary: Whether to plot the decision boundary
+            
+        Returns:
+            Dictionary containing the training history of metrics (loss and any other metrics)
         """
+        
+        history = {
+            'loss': [],
+            'val_loss': []
+        }
 
         if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError(
@@ -143,7 +151,10 @@ class Model:
             y_test = np.array(y_test)
             
         if metrics is not None:
-            metrics = [Metric(m) for m in metrics]
+            metrics: list[Metric] = [Metric(m) for m in metrics]
+            for metric in metrics:
+                history[metric.name] = []
+                history[f'val_{metric.name}'] = []
             
         # Adapt the TextVectorization layer if it exists
         for layer in self.layers:
@@ -198,17 +209,25 @@ class Model:
                         for metric in metrics:
                             metric_value = metric(
                                 np.vstack(predictions_list), np.vstack(y_true_list))
+                            history[metric.name].append(metric_value)
                             metrics_str += f'{metric.name}: {metric_value:.4f} - '
                     progress_bar(1, 1,
                                  message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
+            history['loss'].append(error)
+            
             if validation_data is not None:
                 x_test, y_test = validation_data
                 val_predictions = self.predict(x_test)
+                val_loss = self.loss_function(y_test, val_predictions)
+                history['val_loss'].append(val_loss)
                 val_metrics = []
+                
                 if metrics is not None:
                     for metric in metrics:
-                        # Change extend to append
+                        val_metric = metric(val_predictions, y_test)
+                        history[f'val_{metric.name}'].append(val_metric)
+                        
                         val_metrics.append(metric(val_predictions, y_test))
                     if verbose:
                         val_metrics_str = ' - '.join(
@@ -235,7 +254,7 @@ class Model:
                     if callback.on_epoch_end(self, error, metrics_values):
                         break
 
-                if any(callback.stop_training for callback in callbacks):
+                if any(callback.stop_training for callback in callbacks) or any(callback.on_epoch_end(self, error, metrics_values) for callback in callbacks):
                     break
 
             if verbose:
@@ -250,6 +269,8 @@ class Model:
 
         if verbose:
             print()
+            
+        return history
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
         x_test = np.array(x_test)
