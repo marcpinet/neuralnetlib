@@ -1,71 +1,67 @@
-import numpy as np
+from neuralnetlib.metrics import Metric
 
 
 class EarlyStopping:
     def __init__(self, patience: int = 5, min_delta: float = 0.001, restore_best_weights: bool = True,
-                 start_from_epoch: int = 0, monitor: list = None, mode: str = 'auto', baseline: float = None):
+                 start_from_epoch: int = 0, monitor: str = 'loss', mode: str = 'auto', baseline: float = None):
         self.patience = patience
         self.min_delta = min_delta
         self.restore_best_weights = restore_best_weights
         self.start_from_epoch = start_from_epoch
-        self.monitor = monitor
+        self.monitor = Metric(monitor).name if monitor != 'loss' else 'loss'
         self.mode = mode
         self.baseline = baseline
         self.best_weights = None
         self.best_metric = None
         self.patience_counter = 0
-        self.epoch = 0
         self.stop_training = False
 
-    def on_epoch_end(self, model, loss, metrics=None):
-        self.epoch += 1
-        if self.epoch < self.start_from_epoch:
+    def _get_monitor_value(self, logs):
+        logs = logs or {}
+        if isinstance(self.monitor, Metric):
+            monitor_name = self.monitor.name
+        else:
+            monitor_name = self.monitor
+
+        monitor_value = logs.get(monitor_name)
+        if monitor_value is None:
+            if isinstance(logs, dict) and 'loss' in logs:
+                monitor_value = logs['loss']
+            elif isinstance(logs, (int, float)):
+                monitor_value = logs
+            else:
+                raise ValueError(f"Monitored metric '{monitor_name}' is not available. Available metrics are: {','.join(logs.keys())}")
+        return monitor_value
+
+    def on_epoch_end(self, model, epoch, logs):
+        if epoch < self.start_from_epoch:
             return False
 
-        if self.best_metric is None:
-            if self.monitor is None:
-                self.best_metric = loss
-                self.mode = 'min'
-            else:
-                if metrics is None:
-                    raise ValueError("Metric to monitor is provided, but no metrics are available.")
-                metric_value = metrics[self.monitor[0].__name__]
-                self.best_metric = metric_value
-                if self.mode == 'auto':
-                    if np.isnan(metric_value):
-                        self.mode = 'min'
-                    else:
-                        self.mode = 'max'
+        current_metric = self._get_monitor_value(logs)
 
-        improved = False
-        if self.monitor is None:
-            current_metric = loss
-            if (self.mode == 'min' and current_metric < self.best_metric - self.min_delta) or \
-                    (self.mode == 'max' and current_metric > self.best_metric + self.min_delta):
-                self.best_metric = current_metric
-                improved = True
+        if self.best_metric is None:
+            self.best_metric = current_metric
+            if self.mode == 'auto':
+                self.mode = 'min' if isinstance(self.monitor, str) and 'loss' in self.monitor.lower() else 'max'
+
+        if self.mode == 'min':
+            improved = current_metric < self.best_metric - self.min_delta
         else:
-            current_metric = metrics[self.monitor[0].__name__]
-            if (self.mode == 'max' and current_metric > self.best_metric + self.min_delta) or \
-                    (self.mode == 'min' and current_metric < self.best_metric - self.min_delta):
-                self.best_metric = current_metric
-                improved = True
+            improved = current_metric > self.best_metric + self.min_delta
 
         if improved:
+            self.best_metric = current_metric
             self.patience_counter = 0
             if self.restore_best_weights:
                 self.best_weights = [layer.weights for layer in model.layers if hasattr(layer, 'weights')]
         else:
             self.patience_counter += 1
-            if self.baseline is not None:
-                if self.mode == 'max' and self.best_metric < self.baseline:
-                    self.patience_counter = self.patience + 1
-                elif self.mode == 'min' and self.best_metric > self.baseline:
-                    self.patience_counter = self.patience + 1
 
         if self.patience_counter >= self.patience:
             self.stop_training = True
-            print(f"\nEarly stopping after {self.epoch} epochs.", end='')
+            print(f"\nEarly stopping after {epoch + 1} epochs.", end='')
+            if self.start_from_epoch > 0:
+                print(f" (with {self.start_from_epoch} epochs skipped),", end='')
             if self.restore_best_weights and self.best_weights is not None:
                 for layer, best_weights in zip([layer for layer in model.layers if hasattr(layer, 'weights')],
                                                self.best_weights):

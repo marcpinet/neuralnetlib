@@ -162,7 +162,7 @@ class Model:
                 layer.adapt(x_train)
                 break
 
-        for i in range(epochs):
+        for epoch in range(epochs):
             start_time = time.time()
 
             # Shuffling the data to avoid overfitting
@@ -195,7 +195,7 @@ class Model:
                                     np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.name}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                     message=f'Epoch {i + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                     message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -212,7 +212,7 @@ class Model:
                             history[metric.name].append(metric_value)
                             metrics_str += f'{metric.name}: {metric_value:.4f} - '
                     progress_bar(1, 1,
-                                 message=f'Epoch {i + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                 message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             history['loss'].append(error)
             
@@ -235,14 +235,13 @@ class Model:
                         print(f' - {val_metrics_str}', end='')
 
             if callbacks:
-                metrics_values = {}
+                metrics_values = {'loss': error}
                 if metrics is not None:
                     for metric in metrics:
-                        metrics_values[metric.name] = metric(
-                            np.vstack(predictions_list), np.vstack(y_true_list))
+                        metrics_values[metric.name] = metric(np.vstack(predictions_list), np.vstack(y_true_list))
 
                 callback_monitor_metrics = set(
-                    cb.monitor[0].__name__ for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
+                    cb.monitor for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
                 missing_metrics = callback_monitor_metrics.difference(metrics_values.keys())
                 if missing_metrics:
                     raise ValueError(
@@ -251,17 +250,17 @@ class Model:
                 for callback in callbacks:
                     if callback.stop_training:
                         break
-                    if callback.on_epoch_end(self, error, metrics_values):
+                    if callback.on_epoch_end(self, epoch, metrics_values):
                         break
 
-                if any(callback.stop_training for callback in callbacks) or any(callback.on_epoch_end(self, error, metrics_values) for callback in callbacks):
+                if any(callback.stop_training for callback in callbacks) or any(callback.on_epoch_end(self, epoch, metrics_values) for callback in callbacks):
                     break
 
             if verbose:
                 print()
 
             if plot_decision_boundary:
-                self.__update_plot(i, x_train, y_train, random_state)
+                self.__update_plot(epoch, x_train, y_train, random_state)
                 plt.pause(0.1)
 
         if plot_decision_boundary:
