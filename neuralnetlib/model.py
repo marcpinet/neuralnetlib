@@ -12,6 +12,7 @@ from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
 from neuralnetlib.metrics import Metric
+from neuralnetlib.callbacks import EarlyStopping
 
 
 class Model:
@@ -240,20 +241,17 @@ class Model:
                     for metric in metrics:
                         metrics_values[metric.name] = metric(np.vstack(predictions_list), np.vstack(y_true_list))
 
-                callback_monitor_metrics = set(
-                    cb.monitor for cb in callbacks if hasattr(cb, 'monitor') and cb.monitor is not None)
-                missing_metrics = callback_monitor_metrics.difference(metrics_values.keys())
-                if missing_metrics:
-                    raise ValueError(
-                        f"The following metrics weren't (and must be) included in the fit() method: {', '.join(missing_metrics)}")
-
+                early_stopping_occurred = False
                 for callback in callbacks:
-                    if callback.stop_training:
-                        break
-                    if callback.on_epoch_end(self, epoch, metrics_values):
-                        break
+                    if isinstance(callback, EarlyStopping):
+                        if callback.on_epoch_end(self, epoch, metrics_values):
+                            early_stopping_occurred = True
+                            break
 
-                if any(callback.stop_training for callback in callbacks) or any(callback.on_epoch_end(self, epoch, metrics_values) for callback in callbacks):
+                if early_stopping_occurred:
+                    if plot_decision_boundary:
+                        self.__update_plot(epoch, x_train, y_train, random_state)
+                        plt.pause(0.1)
                     break
 
             if verbose:
@@ -264,7 +262,7 @@ class Model:
                 plt.pause(0.1)
 
         if plot_decision_boundary:
-            plt.show(block=False)
+            plt.show(block=True)
 
         if verbose:
             print()
