@@ -112,7 +112,7 @@ class Model:
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
             verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
-            callbacks: list = None, plot_decision_boundary: bool = False) -> dict:
+            callbacks: list = [], plot_decision_boundary: bool = False) -> dict:
         """
         Fit the model to the training data.
 
@@ -136,15 +136,12 @@ class Model:
             'loss': [],
             'val_loss': []
         })
-
+        
         if plot_decision_boundary and not is_interactive() and not is_display_available():
-            raise ValueError(
-                "Cannot display the plot. Please run the script in an environment with a display.")
+            raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
 
-        x_train = np.array(x_train) if not isinstance(
-            x_train, np.ndarray) else x_train
-        y_train = np.array(y_train) if not isinstance(
-            y_train, np.ndarray) else y_train
+        x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
+        y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
 
         if validation_data is not None:
             x_test, y_test = validation_data
@@ -157,31 +154,32 @@ class Model:
                 history[metric.name] = []
                 history[f'val_{metric.name}'] = []
             
-        # Adapt the TextVectorization layer if it exists
         for layer in self.layers:
             if isinstance(layer, TextVectorization):
                 layer.adapt(x_train)
                 break
 
+        if callbacks is None:
+            callbacks = []
+
+        for callback in callbacks:
+            callback.on_train_begin()
+
         for epoch in range(epochs):
+            for callback in callbacks:
+                callback.on_epoch_begin(epoch)
+
             start_time = time.time()
-
-            # Shuffling the data to avoid overfitting
-            x_train_shuffled, y_train_shuffled = shuffle(
-                x_train, y_train, random_state=random_state)
-
+            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
             error = 0
             predictions_list = []
             y_true_list = []
 
             if batch_size is not None:
-                num_batches = np.ceil(
-                    x_train.shape[0] / batch_size).astype(int)
+                num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
                 for j in range(0, x_train.shape[0], batch_size):
                     x_batch = x_train_shuffled[j:j + batch_size]
                     y_batch = y_train_shuffled[j:j + batch_size]
-
-                    # Reshape if it's a regression (single output neuron)
                     if y_batch.ndim == 1:
                         y_batch = y_batch.reshape(-1, 1)
                     error += self.train_on_batch(x_batch, y_batch)
@@ -192,11 +190,10 @@ class Model:
                         metrics_str = ''
                         if metrics is not None:
                             for metric in metrics:
-                                metric_value = metric(
-                                    np.vstack(predictions_list), np.vstack(y_true_list))
+                                metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.name}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                     message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -208,51 +205,45 @@ class Model:
                     metrics_str = ''
                     if metrics is not None:
                         for metric in metrics:
-                            metric_value = metric(
-                                np.vstack(predictions_list), np.vstack(y_true_list))
+                            metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                             history[metric.name].append(metric_value)
                             metrics_str += f'{metric.name}: {metric_value:.4f} - '
-                    progress_bar(1, 1,
-                                 message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                    progress_bar(1, 1, message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             history['loss'].append(error)
+            
+            logs = {'loss': error}
+            if metrics is not None:
+                for metric in metrics:
+                    metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                    logs[metric.name] = metric_value
             
             if validation_data is not None:
                 x_test, y_test = validation_data
                 val_predictions = self.predict(x_test)
                 val_loss = self.loss_function(y_test, val_predictions)
                 history['val_loss'].append(val_loss)
-                val_metrics = []
+                logs['val_loss'] = val_loss
                 
                 if metrics is not None:
+                    val_metrics = []
                     for metric in metrics:
                         val_metric = metric(val_predictions, y_test)
                         history[f'val_{metric.name}'].append(val_metric)
-                        
-                        val_metrics.append(metric(val_predictions, y_test))
+                        logs[f'val_{metric.name}'] = val_metric
+                        val_metrics.append(val_metric)
                     if verbose:
-                        val_metrics_str = ' - '.join(
-                            f'val_{metric.name}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                        val_metrics_str = ' - '.join(f'val_{metric.name}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
                         print(f' - {val_metrics_str}', end='')
 
-            if callbacks:
-                metrics_values = {'loss': error}
-                if metrics is not None:
-                    for metric in metrics:
-                        metrics_values[metric.name] = metric(np.vstack(predictions_list), np.vstack(y_true_list))
-
-                early_stopping_occurred = False
-                for callback in callbacks:
-                    if isinstance(callback, EarlyStopping):
-                        if callback.on_epoch_end(self, epoch, metrics_values):
-                            early_stopping_occurred = True
-                            break
-
-                if early_stopping_occurred:
-                    if plot_decision_boundary:
-                        self.__update_plot(epoch, x_train, y_train, random_state)
-                        plt.pause(0.1)
-                    break
+            stop_training = False
+            for callback in callbacks:
+                if isinstance(callback, EarlyStopping):
+                    if callback.on_epoch_end(epoch, {**logs, 'model': self}):
+                        stop_training = True
+                        break
+                else:
+                    callback.on_epoch_end(epoch, logs)
 
             if verbose:
                 print()
@@ -261,8 +252,14 @@ class Model:
                 self.__update_plot(epoch, x_train, y_train, random_state)
                 plt.pause(0.1)
 
+            if stop_training:
+                break
+
         if plot_decision_boundary:
             plt.show(block=True)
+
+        for callback in callbacks:
+            callback.on_train_end()
 
         if verbose:
             print()
