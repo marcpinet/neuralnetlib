@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention
+from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
@@ -46,6 +46,8 @@ class Model:
             if type(layer) not in compatibility_dict[type(previous_layer)]:
                 raise ValueError(
                     f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
+            if isinstance(previous_layer, Attention) and isinstance(layer, Dense):
+                layer.return_sequences = False
 
         self.layers.append(layer)
 
@@ -95,7 +97,7 @@ class Model:
                     self.optimizer.update(
                         len(self.layers) - 1 - i, layer.weights, layer.d_weights)
                     
-            if isinstance(layer, LSTM):
+            elif isinstance(layer, LSTM):
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wf, layer.cell.dWf, layer.cell.bf, layer.cell.dbf)
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wi, layer.cell.dWi, layer.cell.bi, layer.cell.dbi)
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wc, layer.cell.dWc, layer.cell.bc, layer.cell.dbc)

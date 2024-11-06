@@ -1558,119 +1558,86 @@ class Unidirectional(Layer):
         layer = LSTM.from_config(config['layer'])
         return Unidirectional(layer)
 
+import numpy as np
 
 class Attention(Layer):
-    def __init__(self, use_scale=False, score_mode="dot", dropout=0.0, seed=None, **kwargs):
+    def __init__(self, use_scale=True, score_mode="dot", return_sequences=True):
         super().__init__()
         self.use_scale = use_scale
         self.score_mode = score_mode
-        self.dropout = dropout
-        self.seed = seed
-        self.supports_masking = True
-
-        if score_mode not in ["dot", "concat"]:
-            raise ValueError("score_mode must be either 'dot' or 'concat'")
-
+        self.return_sequences = return_sequences
+        self.cache = {}
+        
     def __str__(self):
-        return f'Attention(score_mode={self.score_mode}, use_scale={self.use_scale}, dropout={self.dropout})'
-
-    def _compute_attention(self, query, key, value, mask=None, training=None, return_attention_scores=False, use_causal_mask=False):
-        if self.score_mode == "dot":
-            scores = np.matmul(query, key.transpose(0, 2, 1))
-            if self.use_scale:
-                scores /= np.sqrt(query.shape[-1])
-        else:
-            q_expanded = np.expand_dims(query, axis=2)
-            k_expanded = np.expand_dims(key, axis=1)
-            concat = np.concatenate([q_expanded, k_expanded], axis=-1)
-            scores = np.tanh(concat)
-            scores = np.sum(scores, axis=-1)
-
-        if use_causal_mask:
-            seq_len = query.shape[1]
-            causal_mask = np.triu(np.ones((seq_len, seq_len)), k=1).astype(bool)
-            scores = np.where(causal_mask, -np.inf, scores)
-
-        if mask is not None:
-            scores = np.where(mask, scores, -np.inf)
-
-        attention_weights = self._softmax(scores)
-
-        if self.dropout > 0 and training:
-            rng = np.random.default_rng(self.seed)
-            dropout_mask = rng.uniform(size=attention_weights.shape) >= self.dropout
-            attention_weights *= dropout_mask
-            attention_weights /= 1 - self.dropout
-
-        # Calcul de la sortie
-        outputs = np.matmul(attention_weights, value)
-
-        if return_attention_scores:
-            return outputs, attention_weights
-        return outputs
-
-class Attention(Layer):
-    def __init__(self, use_scale=True, score_mode="dot", **kwargs):
-        super().__init__()
-        self.use_scale = use_scale
-        self.score_mode = score_mode
-        self.supports_masking = True
+        return f'Attention(use_scale={self.use_scale}, score_mode={self.score_mode}, return_sequences={self.return_sequences})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        self.input = input_data
+        batch_size, seq_length, features = input_data.shape
+        self.cache.clear()
+        self.cache['input_shape'] = input_data.shape
         
-        self.query = input_data[:, -1:, :]  
-        self.key = self.value = input_data
+        scores = np.zeros((batch_size, seq_length, seq_length))
+        for i in range(batch_size):
+            if self.score_mode == "dot":
+                scores[i] = np.dot(input_data[i], input_data[i].T)
+                if self.use_scale:
+                    scores[i] *= 1.0 / np.sqrt(features)
         
-        if self.score_mode == "dot":
-            self.scores = np.matmul(self.query, self.key.transpose(0, 2, 1))
-            if self.use_scale:
-                self.scores /= np.sqrt(self.query.shape[-1])
+        attention_weights = np.zeros_like(scores)
+        for i in range(batch_size):
+            attention_weights[i] = self._softmax(scores[i])
         
-        self.attention_weights = self._softmax(self.scores)
+        self.cache['input'] = input_data
+        self.cache['attention_weights'] = attention_weights
         
-        context = np.matmul(self.attention_weights, self.value)
+        context = np.zeros_like(input_data)
+        for i in range(batch_size):
+            context[i] = np.dot(attention_weights[i], input_data[i])
         
-        return context.squeeze(1)
+        if not self.return_sequences:
+            return np.mean(context, axis=1)
+        return context
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        output_error = output_error[:, np.newaxis, :]
+        input_data = self.cache['input']
+        attention_weights = self.cache['attention_weights']
+        batch_size, seq_length, features = self.cache['input_shape']
         
-        d_value = np.matmul(self.attention_weights.transpose(0, 2, 1), output_error)
+        if not self.return_sequences:
+            output_error = np.expand_dims(output_error, 1) / seq_length
+            output_error = np.repeat(output_error, seq_length, axis=1)
         
-        d_attention = np.matmul(output_error, self.value.transpose(0, 2, 1))
+        d_input = np.zeros_like(input_data)
         
-        d_scores = d_attention * self.attention_weights
-        d_scores -= self.attention_weights * np.sum(d_attention * self.attention_weights, axis=-1, keepdims=True)
-        
-        if self.use_scale:
-            scale = np.sqrt(self.query.shape[-1])
-            d_scores /= scale
+        for i in range(batch_size):
+            d_context = output_error[i]
+            d_weights = np.dot(d_context, input_data[i].T)
+            d_scores = d_weights * attention_weights[i]
+            d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
             
-        d_query = np.matmul(d_scores, self.key)
-        d_key = np.matmul(d_scores.transpose(0, 2, 1), self.query)
+            if self.use_scale:
+                d_scores *= 1.0 / np.sqrt(features)
+            
+            d_input[i] = np.dot(attention_weights[i].T, d_context)
+            
+            if self.score_mode == "dot":
+                d_input[i] += np.dot(d_scores + d_scores.T, input_data[i])
         
-        d_input = np.zeros_like(self.input)
-        d_input[:, -1:, :] = d_query
-        d_input += d_key
-        d_input += d_value
-        
+        self.cache.clear()
         return d_input
 
     @staticmethod
     def _softmax(x):
         x_max = np.max(x, axis=-1, keepdims=True)
         exp_x = np.exp(x - x_max)
-        sum_exp_x = np.sum(exp_x, axis=-1, keepdims=True)
-        return exp_x / sum_exp_x
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
 
     def get_config(self):
         return {
             'name': self.__class__.__name__,
             'use_scale': self.use_scale,
             'score_mode': self.score_mode,
-            'dropout': self.dropout,
-            'seed': self.seed,
+            'return_sequences': self.return_sequences
         }
 
     @staticmethod
@@ -1678,10 +1645,8 @@ class Attention(Layer):
         return Attention(
             use_scale=config['use_scale'],
             score_mode=config['score_mode'],
-            dropout=config['dropout'],
-            seed=config['seed']
+            return_sequences=config.get('return_sequences', False)
         )
-
 
 
 # --------------------------------------------------------------------------------------------------------------
