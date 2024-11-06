@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import Layer, Input, Activation, Dropout, TextVectorization, compatibility_dict
+from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
@@ -46,6 +46,8 @@ class Model:
             if type(layer) not in compatibility_dict[type(previous_layer)]:
                 raise ValueError(
                     f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
+            if isinstance(previous_layer, Attention) and isinstance(layer, Dense):
+                layer.return_sequences = False
 
         self.layers.append(layer)
 
@@ -72,10 +74,8 @@ class Model:
 
     def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         for layer in self.layers:
-            if isinstance(layer, Dropout):
+            if isinstance(layer, (Dropout, LSTM, Bidirectional)):
                 X = layer.forward_pass(X, training)
-            elif isinstance(layer, TextVectorization):
-                X = layer.forward_pass(X)
             else:
                 X = layer.forward_pass(X)
         return X
@@ -96,6 +96,16 @@ class Model:
                 elif hasattr(layer, 'd_weights'):
                     self.optimizer.update(
                         len(self.layers) - 1 - i, layer.weights, layer.d_weights)
+                    
+            elif isinstance(layer, LSTM):
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wf, layer.cell.dWf, layer.cell.bf, layer.cell.dbf)
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wi, layer.cell.dWi, layer.cell.bi, layer.cell.dbi)
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wc, layer.cell.dWc, layer.cell.bc, layer.cell.dbc)
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wo, layer.cell.dWo, layer.cell.bo, layer.cell.dbo)
+            elif hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
+                self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias, layer.d_bias)
+            elif hasattr(layer, 'd_weights'):
+                self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch
@@ -106,6 +116,8 @@ class Model:
 
         if error.ndim == 1:
             error = error[:, None]
+        elif isinstance(self.layers[-1], (LSTM, Bidirectional)) and self.layers[-1].return_sequences:
+            error = error.reshape(error.shape[0], error.shape[1], -1)
 
         self.backward_pass(error)
         return loss
@@ -142,6 +154,16 @@ class Model:
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+
+        has_lstm = any(isinstance(layer, (LSTM, Bidirectional)) for layer in self.layers)
+        has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
+    
+        if has_lstm and not has_embedding:
+            if len(x_train.shape) != 3:
+                raise ValueError("Input data must be 3D (batch_size, time_steps, features) for LSTM layers without Embedding")
+        elif has_embedding:
+            if len(x_train.shape) != 2:
+                raise ValueError("Input data must be 2D (batch_size, sequence_length) when using Embedding layer")
 
         if validation_data is not None:
             x_test, y_test = validation_data

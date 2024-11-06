@@ -14,7 +14,7 @@ I intend to improve the neural networks and add more features in the future.
 
 ## 📦 Features
 
-- Many layers (input, activation, dense, dropout, conv1d/2d, maxpooling1d/2d, flatten, embedding, batchnormalization, and more) 🧠
+- Many layers (wrappers, dense, dropout, conv1d/2d, pooling1d/2d, flatten, embedding, batchnormalization, lstm, attention and more) 🧠
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
 - Many optimizers (sgd, momentum, rmsprop, adam) 📊
@@ -32,8 +32,9 @@ pip install neuralnetlib
 
 ## 💡 How to use
 
-See [this file](examples/classification-regression/simple_mnist_multiclass.py) for a simple example of how to use the library.
-For a more advanced example, see [this file](examples/cnn-classification/simple_cnn_classification_mnist.py).
+See [this file](examples/classification-regression/mnist_multiclass.ipynb) for a simple example of how to use the library.<br>
+For a more advanced example, see [this file](examples/cnn-classification/cnn_classification_mnist.ipynb) for using CNN.<br>
+You can also check [this file](examples/classification-regression/sentiment_analysis.ipynb) for text classification using RNN.<br>
 
 More examples in [this folder](examples).
 
