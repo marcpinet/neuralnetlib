@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, compatibility_dict
+from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
@@ -75,6 +75,8 @@ class Model:
             if isinstance(layer, (Dropout, LSTM, Bidirectional)):
                 X = layer.forward_pass(X, training)
             elif isinstance(layer, TextVectorization):
+                X = layer.forward_pass(X)
+            elif isinstance(layer, Attention):
                 X = layer.forward_pass(X)
             else:
                 X = layer.forward_pass(X)
