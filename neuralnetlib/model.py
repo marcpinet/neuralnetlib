@@ -74,10 +74,6 @@ class Model:
         for layer in self.layers:
             if isinstance(layer, (Dropout, LSTM, Bidirectional)):
                 X = layer.forward_pass(X, training)
-            elif isinstance(layer, TextVectorization):
-                X = layer.forward_pass(X)
-            elif isinstance(layer, Attention):
-                X = layer.forward_pass(X)
             else:
                 X = layer.forward_pass(X)
         return X
