@@ -108,8 +108,7 @@ class Dense(Layer):
             stddev = np.sqrt(2 / input_size)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
         elif self.weights_init == "default":
-            scale = np.sqrt(1.0 / input_size)
-            self.weights = self.rng.normal(0, scale, (input_size, self.units))
+            self.weights = self.rng.normal(0, 0.01, (input_size, self.units))
         elif self.weights_init == "lecun":
             stddev = np.sqrt(1 / input_size)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
@@ -1610,59 +1609,53 @@ class Attention(Layer):
             return outputs, attention_weights
         return outputs
 
-    def forward_pass(self, input_data, mask=None, training=True, return_attention_scores=False, use_causal_mask=False):
-        if isinstance(input_data, (list, tuple)):
-            if len(input_data) == 3:
-                query, key, value = input_data
-            elif len(input_data) == 2:
-                query, value = input_data
-                key = value
-            else:
-                raise ValueError("Attention layer expects 1, 2, or 3 inputs (query, value, key)")
-        else:
-            query = key = value = input_data
+class Attention(Layer):
+    def __init__(self, use_scale=True, score_mode="dot", **kwargs):
+        super().__init__()
+        self.use_scale = use_scale
+        self.score_mode = score_mode
+        self.supports_masking = True
 
-        self.query = query
-        self.key = key
-        self.value = value
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input = input_data
-
-        return self._compute_attention(
-            query, key, value,
-            mask=mask,
-            training=training,
-            return_attention_scores=return_attention_scores,
-            use_causal_mask=use_causal_mask
-        )
-
-    def backward_pass(self, output_error):
-        _, attention_weights = self._compute_attention(
-            self.query, self.key, self.value, return_attention_scores=True
-        )
-
-        d_value = np.matmul(attention_weights.transpose(0, 2, 1), output_error)
-
-        d_attention_weights = np.matmul(output_error, self.value.transpose(0, 2, 1))
-
-        d_scores = d_attention_weights * attention_weights
-        d_scores -= attention_weights * np.sum(d_attention_weights * attention_weights, axis=-1, keepdims=True)
-
+        
+        self.query = input_data[:, -1:, :]  
+        self.key = self.value = input_data
+        
         if self.score_mode == "dot":
+            self.scores = np.matmul(self.query, self.key.transpose(0, 2, 1))
             if self.use_scale:
-                scaling = 1.0 / np.sqrt(self.key.shape[-1])
-            else:
-                scaling = 1.0
+                self.scores /= np.sqrt(self.query.shape[-1])
+        
+        self.attention_weights = self._softmax(self.scores)
+        
+        context = np.matmul(self.attention_weights, self.value)
+        
+        return context.squeeze(1)
 
-            d_query = np.matmul(d_scores, self.key) * scaling
-            d_key = np.matmul(d_scores.transpose(0, 2, 1), self.query) * scaling
-        else:
-            raise NotImplementedError("Backward pass for 'concat' score mode is not implemented in this optimization.")
-
-        if not isinstance(self.input, (list, tuple)):
-            d_input = d_query + d_key + d_value
-            return d_input
-
-        return [d_query, d_key, d_value]
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        output_error = output_error[:, np.newaxis, :]
+        
+        d_value = np.matmul(self.attention_weights.transpose(0, 2, 1), output_error)
+        
+        d_attention = np.matmul(output_error, self.value.transpose(0, 2, 1))
+        
+        d_scores = d_attention * self.attention_weights
+        d_scores -= self.attention_weights * np.sum(d_attention * self.attention_weights, axis=-1, keepdims=True)
+        
+        if self.use_scale:
+            scale = np.sqrt(self.query.shape[-1])
+            d_scores /= scale
+            
+        d_query = np.matmul(d_scores, self.key)
+        d_key = np.matmul(d_scores.transpose(0, 2, 1), self.query)
+        
+        d_input = np.zeros_like(self.input)
+        d_input[:, -1:, :] = d_query
+        d_input += d_key
+        d_input += d_value
+        
+        return d_input
 
     @staticmethod
     def _softmax(x):
