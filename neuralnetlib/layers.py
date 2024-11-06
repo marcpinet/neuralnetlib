@@ -108,7 +108,8 @@ class Dense(Layer):
             stddev = np.sqrt(2 / input_size)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(0, 0.01, (input_size, self.units))
+            scale = np.sqrt(1.0 / input_size)
+            self.weights = self.rng.normal(0, scale, (input_size, self.units))
         elif self.weights_init == "lecun":
             stddev = np.sqrt(1 / input_size)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
@@ -771,62 +772,71 @@ class Embedding(Layer):
         self.output_dim = output_dim
         self.input_length = input_length
         self.weights = None
+        self.bias = None
         self.weights_init = weights_init
         self.random_state = random_state
         self.clipped_input = None
+        
+    def __str__(self):
+        return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim})'
 
     def initialize_weights(self):
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
+            
         if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (self.input_dim + self.output_dim)),
-                                           (self.input_dim, self.output_dim))
-        elif self.weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(
-                2 / self.input_dim), (self.input_dim, self.output_dim))
-        elif self.weights_init == "default":
-            self.weights = self.rng.normal(
-                0, 0.01, (self.input_dim, self.output_dim))
+            scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
+            self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
+        elif self.weights_init == "uniform":
+            limit = np.sqrt(3.0 / self.output_dim)
+            self.weights = self.rng.uniform(-limit, limit, (self.input_dim, self.output_dim))
         else:
-            raise ValueError(
-                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
-
-    def __str__(self):
-        return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim}, input_length={self.input_length})'
+            scale = 0.05
+            self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
+            
+        self.bias = np.zeros((1, 1, self.output_dim))
+        
+        self.d_weights = np.zeros_like(self.weights)
+        self.d_bias = np.zeros_like(self.bias)
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(input_data.shape) == 2, f"Embedding input must be 2D (batch_size, sequence_length), got {input_data.shape}"
             self.initialize_weights()
 
         self.input = input_data
-        
         if not np.issubdtype(input_data.dtype, np.integer):
             input_data = np.round(input_data).astype(int)
-        
+
+        if np.any(input_data >= self.input_dim) or np.any(input_data < 0):
+            print(f"Warning: input indices out of bounds [0, {self.input_dim-1}]")
         self.clipped_input = np.clip(input_data, 0, self.input_dim - 1)
-        
+
         output = self.weights[self.clipped_input]
+        output = output + self.bias
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error = np.zeros(
-            (self.input.shape[0], self.input.shape[1], self.input_dim))
-        output_error = output_error.reshape(
-            output_error.shape[0], output_error.shape[1], -1)
+        if output_error.ndim != 3:
+            raise ValueError(f"Expected 3D output_error, got shape {output_error.shape}")
+            
+        batch_size, seq_length, emb_dim = output_error.shape
+        grad_weights = np.zeros_like(self.weights)
         
-        for i, index in enumerate(self.clipped_input):
-            np.add.at(input_error[i], (np.arange(index.shape[0]), index), np.sum(output_error[i], axis=1))
+        for i in range(batch_size):
+            for j in range(seq_length):
+                idx = self.clipped_input[i, j]
+                grad_weights[idx] += output_error[i, j]
         
-        if not np.issubdtype(self.input.dtype, np.integer):
-            return np.zeros_like(self.input)
+        self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True).reshape(1, 1, -1)
+        self.d_weights = grad_weights
         
-        return input_error
+        return np.zeros_like(self.input, dtype=np.float32)
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'weights': self.weights.tolist() if self.weights is not None else None,
+            'bias': self.bias.tolist() if self.bias is not None else None,
             'input_dim': self.input_dim,
             'output_dim': self.output_dim,
             'input_length': self.input_length,
@@ -840,6 +850,7 @@ class Embedding(Layer):
                           config['random_state'])
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
+            layer.bias = np.array(config['bias'])
         return layer
 
 
@@ -1235,27 +1246,475 @@ class Reshape(Layer):
         return Reshape(config['target_shape'])
 
 
+class LSTMCell:
+    def __init__(self, input_dim: int, units: int, random_state=None):
+        self.input_dim = input_dim
+        self.units = units
+        self.random_state = random_state
+        self.rng = np.random.default_rng(
+            random_state if random_state is not None else int(time.time_ns()))
+        
+        total_input_dim = input_dim + units
+        
+        scale = np.sqrt(6.0 / (total_input_dim + units))
+        self.Wf = self.rng.uniform(-scale, scale, (total_input_dim, units))
+        self.Wi = self.rng.uniform(-scale, scale, (total_input_dim, units))
+        self.Wc = self.rng.uniform(-scale, scale, (total_input_dim, units))
+        self.Wo = self.rng.uniform(-scale, scale, (total_input_dim, units))
+
+        self.bf = np.full((1, units), 1.0)
+        self.bi = np.zeros((1, units))
+        self.bc = np.zeros((1, units))
+        self.bo = np.zeros((1, units))
+        
+        self.dWf = np.zeros_like(self.Wf)
+        self.dWi = np.zeros_like(self.Wi)
+        self.dWc = np.zeros_like(self.Wc)
+        self.dWo = np.zeros_like(self.Wo)
+
+        self.dbf = np.zeros_like(self.bf)
+        self.dbi = np.zeros_like(self.bi)
+        self.dbc = np.zeros_like(self.bc)
+        self.dbo = np.zeros_like(self.bo)
+        
+        self.grad_clip = 1.0
+        
+    def __str__(self):
+        return f'LSTMCell(units={self.units}, input_dim={self.input_dim}, random_state={self.random_state})'
+
+    def forward(self, x, prev_h, prev_c):
+        self.x = x
+        self.prev_h = prev_h
+        self.prev_c = prev_c
+        
+        concat = np.concatenate((x, prev_h), axis=1)
+        self.concat = concat
+        
+        f_gate = self._sigmoid(self._clip(np.dot(concat, self.Wf) + self.bf))
+        i_gate = self._sigmoid(self._clip(np.dot(concat, self.Wi) + self.bi))
+        c_tilde = np.tanh(self._clip(np.dot(concat, self.Wc) + self.bc))
+        o_gate = self._sigmoid(self._clip(np.dot(concat, self.Wo) + self.bo))
+        
+        c = self._clip(f_gate * prev_c + i_gate * c_tilde)
+        h = self._clip(o_gate * np.tanh(c))
+        
+        self.gates = (f_gate, i_gate, o_gate, c_tilde)
+        self.c = c
+        self.h = h
+        
+        return h, c
+
+    def backward(self, dh, dc):
+        f_gate, i_gate, o_gate, c_tilde = self.gates
+        
+        dh = self._clip(dh)
+        dc = self._clip(dc)
+        
+        do = dh * np.tanh(self.c) * o_gate * (1 - o_gate)
+        dc = dc + dh * o_gate * (1 - np.tanh(self.c)**2)
+        
+        df = dc * self.prev_c * f_gate * (1 - f_gate)
+        di = dc * c_tilde * i_gate * (1 - i_gate)
+        dc_tilde = dc * i_gate * (1 - c_tilde**2)
+        
+        self.dWf = self._clip(np.dot(self.concat.T, df))
+        self.dWi = self._clip(np.dot(self.concat.T, di))
+        self.dWc = self._clip(np.dot(self.concat.T, dc_tilde))
+        self.dWo = self._clip(np.dot(self.concat.T, do))
+        
+        self.dbf = np.sum(df, axis=0, keepdims=True)
+        self.dbi = np.sum(di, axis=0, keepdims=True)
+        self.dbc = np.sum(dc_tilde, axis=0, keepdims=True)
+        self.dbo = np.sum(do, axis=0, keepdims=True)
+        
+        dconcat = (np.dot(df, self.Wf.T) + 
+                  np.dot(di, self.Wi.T) + 
+                  np.dot(dc_tilde, self.Wc.T) + 
+                  np.dot(do, self.Wo.T))
+        
+        dx = dconcat[:, :self.input_dim]
+        dprev_h = dconcat[:, self.input_dim:]
+        dprev_c = dc * f_gate
+        
+        return (self._clip(dx), 
+                self._clip(dprev_h), 
+                self._clip(dprev_c))
+
+    def _clip(self, x):
+        return np.clip(x, -self.grad_clip, self.grad_clip)
+    
+    @staticmethod
+    def _sigmoid(x):
+        x = np.clip(x, -15, 15)
+        return 1.0 / (1.0 + np.exp(-x))
+
+    @staticmethod
+    def _sigmoid_derivative(x):
+        return x * (1 - x)
+
+    @staticmethod
+    def _tanh_derivative(x):
+        return 1 - np.square(np.tanh(x))
+    
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'units': self.units,
+            'random_state': self.random_state
+        }
+        
+    @staticmethod
+    def from_config(config):
+        return LSTMCell(config['units'], config['random_state'], config['random_state'])
+
+
+class LSTM(Layer):
+    def __init__(self, units, return_sequences=False, return_state=False, random_state=None):
+        super().__init__()
+        self.units = units
+        self.return_sequences = return_sequences
+        self.return_state = return_state
+        self.random_state = random_state
+        self.initialized = False
+        
+    def __str__(self):
+        return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state})'
+
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        if len(input_data.shape) != 3:
+            raise ValueError(f"Expected 3D input (batch, timesteps, features), got {input_data.shape}")
+            
+        batch_size, timesteps, input_dim = input_data.shape
+        
+        if not self.initialized:
+            self.cell = LSTMCell(input_dim, self.units, self.random_state)
+            self.initialized = True
+
+        if self.return_sequences:
+            h_seq = np.zeros((batch_size, timesteps, self.units))
+        
+        h_t = np.zeros((batch_size, self.units))
+        c_t = np.zeros((batch_size, self.units))
+        
+        self.states = []
+        self.inputs = input_data
+        
+        for t in range(timesteps):
+            h_t, c_t = self.cell.forward(input_data[:, t, :], h_t, c_t)
+            if self.return_sequences:
+                h_seq[:, t, :] = h_t
+            self.states.append((h_t.copy(), c_t.copy()))
+
+        if self.return_sequences:
+            output = h_seq
+        else:
+            output = h_t
+
+        if self.return_state:
+            return output, h_t, c_t
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        batch_size, timesteps, _ = self.inputs.shape
+        
+        if not self.return_sequences and len(output_error.shape) == 2:
+            temp_error = np.zeros((batch_size, timesteps, self.units))
+            temp_error[:, -1, :] = output_error
+            output_error = temp_error
+
+        dx = np.zeros_like(self.inputs)
+        dh_next = np.zeros((batch_size, self.units))
+        dc_next = np.zeros((batch_size, self.units))
+
+        for t in reversed(range(timesteps)):
+            dh = output_error[:, t, :] + dh_next
+            
+            dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
+            dx[:, t, :] = dx_t
+
+        return dx
+
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'units': self.units,
+            'return_sequences': self.return_sequences,
+            'return_state': self.return_state,
+            'random_state': self.random_state
+        }
+
+    @staticmethod
+    def from_config(config):
+        return LSTM(
+            config['units'],
+            config['return_sequences'],
+            config['return_state'],
+            config['random_state']
+        )
+
+
+class Bidirectional(Layer):
+    def __init__(self, layer):
+        super().__init__()
+        if not isinstance(layer, LSTM):
+            raise ValueError("Bidirectional layer only supports LSTM layers")
+
+        self.forward_layer = layer
+        self.backward_layer = LSTM(
+            layer.units,
+            layer.return_sequences,
+            layer.return_state,
+            layer.random_state
+        )
+        
+    def __str__(self):
+        return f'Bidirectional(layer={str(self.forward_layer)})'
+
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        self.forward_output = self.forward_layer.forward_pass(input_data, training)
+        backward_input = input_data[:, ::-1, :]  # Inversion temporelle
+        self.backward_output = self.backward_layer.forward_pass(backward_input, training)
+
+        if isinstance(self.forward_output, tuple):
+            forward_seq, forward_h, forward_c = self.forward_output
+            backward_seq, backward_h, backward_c = self.backward_output
+
+            if self.forward_layer.return_sequences:
+                backward_seq = backward_seq[:, ::-1, :]
+                return np.concatenate([forward_seq, backward_seq], axis=-1), \
+                    np.concatenate([forward_h, backward_h], axis=-1), \
+                    np.concatenate([forward_c, backward_c], axis=-1)
+            else:
+                return np.concatenate([forward_h, backward_h], axis=-1)
+        else:
+            if self.forward_layer.return_sequences:
+                self.backward_output = self.backward_output[:, ::-1, :]
+            return np.concatenate([self.forward_output, self.backward_output], axis=-1)
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        forward_dim = output_error.shape[-1] // 2
+        
+        if len(output_error.shape) == 3:
+            forward_error = output_error[:, :, :forward_dim]
+            backward_error = output_error[:, :, forward_dim:]
+            backward_error = backward_error[:, ::-1, :]
+        else:
+            forward_error = output_error[:, :forward_dim]
+            backward_error = output_error[:, forward_dim:]
+
+        forward_dx = self.forward_layer.backward_pass(forward_error)
+        backward_dx = self.backward_layer.backward_pass(backward_error)
+
+        if len(output_error.shape) == 3:
+            backward_dx = backward_dx[:, ::-1, :]
+            
+        return forward_dx + backward_dx
+
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'layer': self.forward_layer.get_config()
+        }
+
+    @staticmethod
+    def from_config(config):
+        layer = LSTM.from_config(config['layer'])
+        return Bidirectional(layer)
+
+
+class Unidirectional(Layer):
+    """Wrapper class that makes it explicit that a layer processes sequences in one direction"""
+
+    def __init__(self, layer):
+        super().__init__()
+        if not isinstance(layer, LSTM):
+            raise ValueError("Unidirectional layer only supports LSTM layers")
+        self.layer = layer
+        
+    def __str__(self):
+        return f'Unidirectional(layer={str(self.layer)})'
+
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        return self.layer.forward_pass(input_data, training)
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        return self.layer.backward_pass(output_error)
+
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'layer': self.layer.get_config()
+        }
+
+    @staticmethod
+    def from_config(config):
+        layer = LSTM.from_config(config['layer'])
+        return Unidirectional(layer)
+
+
+class Attention(Layer):
+    def __init__(self, use_scale=True, score_type='dot', random_state=None):
+        super().__init__()
+        self.use_scale = use_scale
+        self.score_type = score_type
+        self.random_state = random_state
+        self.weights = None
+        self.bias = None
+        
+        if score_type not in ['dot', 'additive']:
+            raise ValueError("score_type must be either 'dot' or 'additive'")
+            
+    def __str__(self):
+        return f'Attention(score_type={self.score_type}, use_scale={self.use_scale})'
+        
+    def initialize_weights(self, query_dim):
+        if self.score_type == 'additive':
+            self.rng = np.random.default_rng(
+                self.random_state if self.random_state is not None else int(time.time_ns()))
+            
+            self.Wq = self.rng.normal(0, 0.1, (query_dim, query_dim))
+            self.Wk = self.rng.normal(0, 0.1, (query_dim, query_dim))
+            self.v = self.rng.normal(0, 0.1, (query_dim, 1))
+            
+            self.dWq = np.zeros_like(self.Wq)
+            self.dWk = np.zeros_like(self.Wk)
+            self.dv = np.zeros_like(self.v)
+
+    def forward_pass(self, inputs, mask=None):
+        query, key, value = inputs
+        
+        self.query = query
+        self.key = key
+        self.value = value
+        
+        if self.weights is None and self.score_type == 'additive':
+            self.initialize_weights(query.shape[-1])
+            
+        if self.score_type == 'dot':
+            scores = np.matmul(query, np.transpose(key, (0, 2, 1)))
+            if self.use_scale:
+                scores = scores / np.sqrt(key.shape[-1])
+        else:
+            q_transformed = np.dot(query, self.Wq)
+            k_transformed = np.dot(key, self.Wk)
+            
+            q_expanded = q_transformed[:, :, np.newaxis, :]
+            k_expanded = k_transformed[:, np.newaxis, :, :]
+            
+            # Compute scores
+            scores = np.tanh(q_expanded + k_expanded)
+            scores = np.dot(scores, self.v)
+            scores = scores.squeeze(-1)
+        
+        if mask is not None:
+            scores = np.where(mask, scores, -np.inf)
+        
+        self.attention_weights = self._softmax(scores)
+        
+        outputs = np.matmul(self.attention_weights, value)
+        
+        return outputs
+    
+    def backward_pass(self, output_error):
+        batch_size = output_error.shape[0]
+        
+        d_value = np.matmul(np.transpose(self.attention_weights, (0, 2, 1)), output_error)
+        
+        d_weights = np.matmul(output_error, np.transpose(self.value, (0, 2, 1)))
+        
+        d_scores = self._softmax_derivative(self.attention_weights) * d_weights
+        
+        if self.score_type == 'dot':
+            scaling = 1/np.sqrt(self.key.shape[-1]) if self.use_scale else 1
+            d_query = scaling * np.matmul(d_scores, self.key)
+            d_key = scaling * np.matmul(np.transpose(d_scores, (0, 2, 1)), self.query)
+        else:
+            d_scores_expanded = d_scores[..., np.newaxis]
+            d_tanh = d_scores_expanded * self.v.T
+            d_tanh = d_tanh * (1 - np.tanh(self.scores) ** 2)
+            
+            self.dWq = np.zeros_like(self.Wq)
+            self.dWk = np.zeros_like(self.Wk)
+            self.dv = np.zeros_like(self.v)
+            
+            for b in range(batch_size):
+                self.dWq += np.dot(self.query[b].T, np.sum(d_tanh[b], axis=1))
+                self.dWk += np.dot(self.key[b].T, np.sum(d_tanh[b], axis=0))
+                self.dv += np.sum(np.dot(np.transpose(d_scores[b]), 
+                                       np.tanh(np.dot(self.query[b], self.Wq) + np.dot(self.key[b], self.Wk))))
+            
+            d_query = np.dot(d_tanh, self.Wq.T)
+            d_key = np.dot(d_tanh, self.Wk.T)
+        
+        return (d_query, d_key, d_value)
+
+    def _softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+    
+    def _softmax_derivative(self, softmax_output):
+        softmax_output = softmax_output[..., np.newaxis]
+        return softmax_output * (np.eye(softmax_output.shape[-2]) - np.transpose(softmax_output, (0, 1, 3, 2)))
+    
+    def get_config(self):
+        return {
+            'name': self.__class__.__name__,
+            'use_scale': self.use_scale,
+            'score_type': self.score_type,
+            'random_state': self.random_state,
+            'weights': {
+                'Wq': self.Wq.tolist() if hasattr(self, 'Wq') else None,
+                'Wk': self.Wk.tolist() if hasattr(self, 'Wk') else None,
+                'v': self.v.tolist() if hasattr(self, 'v') else None
+            } if self.score_type == 'additive' else None
+        }
+    
+    @staticmethod
+    def from_config(config):
+        layer = Attention(
+            use_scale=config['use_scale'],
+            score_type=config['score_type'],
+            random_state=config['random_state']
+        )
+        
+        if config['weights'] is not None:
+            if config['weights']['Wq'] is not None:
+                layer.Wq = np.array(config['weights']['Wq'])
+                layer.Wk = np.array(config['weights']['Wk'])
+                layer.v = np.array(config['weights']['v'])
+                layer.dWq = np.zeros_like(layer.Wq)
+                layer.dWk = np.zeros_like(layer.Wk)
+                layer.dv = np.zeros_like(layer.v)
+                
+        return layer
+
+
 # --------------------------------------------------------------------------------------------------------------
 
 
 compatibility_dict = {
-    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape],
-    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
+    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, Bidirectional, Unidirectional],
+    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
     Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D, Flatten,
-                 Dropout, Permute, Reshape],
+                 Dropout, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
     Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute, Reshape],
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, Flatten, Permute, Reshape],
-    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape],
-    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape],
-    Flatten: [Dense, Dropout, Permute, Reshape],
-    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape],
-    Embedding: [Conv1D, Flatten, Dense, Permute, Reshape],
-    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape],
+    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, Flatten, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    Flatten: [Dense, Dropout, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    Embedding: [Conv1D, Flatten, Dense, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
     Permute: [Dense, Conv2D, Conv1D, Activation,
-              Dropout, Flatten, BatchNormalization, Permute, Reshape],
-    TextVectorization: [Embedding, Dense, Conv1D, Reshape],
+              Dropout, Flatten, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, Bidirectional, Unidirectional],
     Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape,
-              TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D]
+              TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, MaxPooling1D, AveragePooling1D,
+              LSTM, Bidirectional, Unidirectional],
+    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
+    Unidirectional: [Dense, Activation, Dropout, BatchNormalization,
+                     Permute, Reshape, LSTM, Bidirectional, Unidirectional]
 }
