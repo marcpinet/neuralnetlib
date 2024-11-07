@@ -1320,26 +1320,27 @@ class LSTMCell:
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
 
-        stddev = np.sqrt(2.0 / (input_dim + units))
+        scale_gates = np.sqrt(2.0 / (input_dim + units))  # Xavier
+        scale_candidates = np.sqrt(2.0 / input_dim)  # He
 
         # Forget gate
-        self.Wf = self.rng.normal(0, stddev, (input_dim, units))
-        self.Uf = self.rng.normal(0, stddev, (units, units))
-        self.bf = np.zeros((1, units))
+        self.Wf = self.rng.normal(0, scale_gates, (input_dim, units))
+        self.Uf = self.rng.normal(0, scale_gates, (units, units))
+        self.bf = np.ones((1, units))
 
         # Input gate
-        self.Wi = self.rng.normal(0, stddev, (input_dim, units))
-        self.Ui = self.rng.normal(0, stddev, (units, units))
+        self.Wi = self.rng.normal(0, scale_gates, (input_dim, units))
+        self.Ui = self.rng.normal(0, scale_gates, (units, units))
         self.bi = np.zeros((1, units))
 
         # Cell gate
-        self.Wc = self.rng.normal(0, stddev, (input_dim, units))
-        self.Uc = self.rng.normal(0, stddev, (units, units))
+        self.Wc = self.rng.normal(0, scale_candidates, (input_dim, units))
+        self.Uc = self.rng.normal(0, scale_candidates, (units, units))
         self.bc = np.zeros((1, units))
 
         # Output gate
-        self.Wo = self.rng.normal(0, stddev, (input_dim, units))
-        self.Uo = self.rng.normal(0, stddev, (units, units))
+        self.Wo = self.rng.normal(0, scale_gates, (input_dim, units))
+        self.Uo = self.rng.normal(0, scale_gates, (units, units))
         self.bo = np.zeros((1, units))
 
         # Gradients
@@ -1410,7 +1411,6 @@ class LSTMCell:
         return self.h_t, self.c_t
 
     def backward(self, dh_next, dc_next):
-        # Retrieve values from cache
         x_t = self.cache['x_t']
         h_prev = self.cache['h_prev']
         c_prev = self.cache['c_prev']
@@ -1469,7 +1469,7 @@ class LSTMCell:
         return dx, dh_prev, dc_prev
 
     def sigmoid(self, x):
-        return 1 / (1 + np.exp(-np.clip(x, -10, 10)))
+        return 0.5 * (1 + np.tanh(x * 0.5))
 
     def get_config(self):
         return {
@@ -1488,10 +1488,10 @@ class LSTM(Layer):
         self.random_state = random_state
         self.initialized = False
         self.cell = None
-        self.all_h = None
-        self.all_c = None
         self.last_h = None
         self.last_c = None
+        self.cache = None
+        self.input_shape = None
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -1500,6 +1500,8 @@ class LSTM(Layer):
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state})'
 
     def forward_pass(self, x, training=True):
+        self.input_shape = x.shape
+        
         batch_size, timesteps, input_dim = x.shape
         if not self.initialized:
             self.cell = LSTMCell(input_dim, self.units, self.random_state)
@@ -1508,28 +1510,27 @@ class LSTM(Layer):
         h = np.zeros((batch_size, self.units))
         c = np.zeros((batch_size, self.units))
 
-        self.all_h = []
-        self.all_c = []
+        all_h = []
+        all_c = []
         self.cache = []
-        self.input_shape = x.shape
 
         for t in range(timesteps):
             x_t = x[:, t, :]
             h, c = self.cell.forward(x_t, h, c)
-            self.all_h.append(h)
-            self.all_c.append(c)
-            self.cache.append(self.cell.cache)
+            if self.return_sequences:
+                all_h.append(h)
+            all_c.append(c)
+            if training:
+                self.cache.append(self.cell.cache)
 
-        self.all_h = np.stack(self.all_h, axis=1)
-        self.all_c = np.stack(self.all_c, axis=1)
-
-        self.last_h = self.all_h[:, -1, :]
-        self.last_c = self.all_c[:, -1, :]
+        self.last_h = h
+        self.last_c = c
 
         if self.return_sequences:
+            all_h = np.stack(all_h, axis=1)
             if self.return_state:
-                return self.all_h, self.last_h, self.last_c
-            return self.all_h
+                return all_h, self.last_h, self.last_c
+            return all_h
         else:
             if self.return_state:
                 return self.last_h, self.last_h, self.last_c
@@ -1549,13 +1550,12 @@ class LSTM(Layer):
 
         for t in reversed(range(timesteps)):
             dh = dout[:, t, :] + dh_next
-
             self.cell.cache = self.cache[t]
-
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
-
             dx[:, t, :] = dx_t
 
+        self.cache = None
+        
         return dx
 
     def get_config(self):
@@ -1598,7 +1598,7 @@ class Bidirectional(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         self.forward_output = self.forward_layer.forward_pass(
             input_data, training)
-        backward_input = input_data[:, ::-1, :]  # Inversion temporelle
+        backward_input = input_data[:, ::-1, :]
         self.backward_output = self.backward_layer.forward_pass(
             backward_input, training)
 
@@ -1692,57 +1692,59 @@ class Attention(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_length, features = input_data.shape
-        self.cache.clear()
+        
         self.cache['input_shape'] = input_data.shape
-
+        self.cache['input'] = input_data
         scores = np.zeros((batch_size, seq_length, seq_length))
+        
         for i in range(batch_size):
             if self.score_mode == "dot":
                 scores[i] = np.dot(input_data[i], input_data[i].T)
                 if self.use_scale:
                     scores[i] *= 1.0 / np.sqrt(features)
-
+        
         attention_weights = np.zeros_like(scores)
         for i in range(batch_size):
             attention_weights[i] = self._softmax(scores[i])
-
-        self.cache['input'] = input_data
+        
         self.cache['attention_weights'] = attention_weights
-
+        
         context = np.zeros_like(input_data)
         for i in range(batch_size):
             context[i] = np.dot(attention_weights[i], input_data[i])
-
+        
         if not self.return_sequences:
             return np.mean(context, axis=1)
         return context
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_data = self.cache['input']
-        attention_weights = self.cache['attention_weights']
         batch_size, seq_length, features = self.cache['input_shape']
-
+        attention_weights = self.cache['attention_weights']
+        input_data = self.cache['input']
+        
         if not self.return_sequences:
             output_error = np.expand_dims(output_error, 1) / seq_length
             output_error = np.repeat(output_error, seq_length, axis=1)
 
-        d_input = np.zeros_like(input_data)
-
+        d_input = np.zeros((batch_size, seq_length, features))
+        
         for i in range(batch_size):
             d_context = output_error[i]
+            
             d_weights = np.dot(d_context, input_data[i].T)
             d_scores = d_weights * attention_weights[i]
             d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
-
+            
             if self.use_scale:
                 d_scores *= 1.0 / np.sqrt(features)
-
+            
             d_input[i] = np.dot(attention_weights[i].T, d_context)
-
+            
             if self.score_mode == "dot":
                 d_input[i] += np.dot(d_scores + d_scores.T, input_data[i])
-
+        
         self.cache.clear()
+        
         return d_input
 
     @staticmethod

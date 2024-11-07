@@ -154,6 +154,11 @@ class Model:
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+        
+        # Set the random_state for every layer that has a random_state attribute
+        for layer in self.layers:
+            if hasattr(layer, 'random_state'):
+                layer.random_state = random_state
 
         has_lstm = any(isinstance(layer, (LSTM, Bidirectional)) for layer in self.layers)
         has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
@@ -242,8 +247,7 @@ class Model:
             
             if validation_data is not None:
                 x_test, y_test = validation_data
-                val_predictions = self.predict(x_test)
-                val_loss = self.loss_function(y_test, val_predictions)
+                val_loss, val_predictions = self.evaluate(x_test, y_test, batch_size)
                 history['val_loss'].append(val_loss)
                 logs['val_loss'] = val_loss
                 
@@ -255,8 +259,13 @@ class Model:
                         logs[f'val_{metric.name}'] = val_metric
                         val_metrics.append(val_metric)
                     if verbose:
-                        val_metrics_str = ' - '.join(f'val_{metric.name}: {val_metric:.4f}' for metric, val_metric in zip(metrics, val_metrics))
+                        val_metrics_str = ' - '.join(
+                            f'val_{metric.name}: {val_metric:.4f}' 
+                            for metric, val_metric in zip(metrics, val_metrics)
+                        )
                         print(f' - {val_metrics_str}', end='')
+                
+                val_predictions = None
 
             stop_training = False
             for callback in callbacks:
@@ -288,12 +297,33 @@ class Model:
             
         return history
 
-    def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
-        x_test = np.array(x_test)
-        y_test = np.array(y_test)
-        predictions = self.forward_pass(x_test)
-        loss = self.loss_function(y_test, predictions)
-        return loss
+    def evaluate(self, x_test: np.ndarray, y_test: np.ndarray, batch_size: int = 32) -> tuple:
+        total_loss = 0
+        total_metrics = {}
+        num_batches = int(np.ceil(len(x_test) / batch_size))
+        
+        predictions_list = []
+        
+        for i in range(0, len(x_test), batch_size):
+            batch_x = x_test[i:i + batch_size]
+            batch_y = y_test[i:i + batch_size]
+            
+            batch_predictions = self.forward_pass(batch_x, training=False)
+            batch_loss = self.loss_function(batch_y, batch_predictions)
+            
+            total_loss += batch_loss
+            predictions_list.append(batch_predictions)
+            
+            for layer in self.layers:
+                if hasattr(layer, 'reset_cache'):
+                    layer.reset_cache()
+        
+        avg_loss = total_loss / num_batches
+        
+        all_predictions = np.vstack(predictions_list)
+        predictions_list = None
+        
+        return avg_loss, all_predictions
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         X = np.array(X)
