@@ -77,7 +77,7 @@ def main():
     model.fit(x_train, y_train, epochs=500, batch_size=32, metrics=[accuracy_score], random_state=42, callbacks=[early_stopping])
 
     # 8. Evaluate the model
-    loss = model.evaluate(x_test, y_test)
+    loss, preds = model.evaluate(x_test, y_test)
     print(f"Loss: {loss}")
 
     # 9. Make predictions on test set and print the accuracy

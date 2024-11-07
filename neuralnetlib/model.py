@@ -1,5 +1,6 @@
 import json
 import time
+import inspect
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -322,6 +323,17 @@ class Model:
         
         all_predictions = np.vstack(predictions_list)
         predictions_list = None
+        
+        try:
+            frame = inspect.currentframe()
+            calling_frame = frame.f_back
+            code = calling_frame.f_code
+            if 'single' in code.co_varnames:
+                return avg_loss
+        except:
+            pass
+        finally:
+            del frame  # to avoid leaking references
         
         return avg_loss, all_predictions
 

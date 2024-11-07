@@ -31,7 +31,7 @@ class TestModel(unittest.TestCase):
         self.model.fit(self.x_train, self.y_train, epochs=1, batch_size=10, verbose=False)
 
     def test_model_evaluate(self):
-        loss = self.model.evaluate(self.x_test, self.y_test)
+        loss, preds = self.model.evaluate(self.x_test, self.y_test)
         self.assertIsInstance(loss, float)
 
     def test_model_predict(self):
