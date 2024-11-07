@@ -84,13 +84,12 @@ class Input(Layer):
 class Dense(Layer):
     def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None,
                  **kwargs):
+        super().__init__()
         self.units = units
-
         self.weights = None
         self.bias = None
         self.d_weights = None
         self.d_bias = None
-
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
@@ -98,9 +97,13 @@ class Dense(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    def __str__(self):
+        return f'Dense(units={self.units})'
+
     def initialize_weights(self, input_size: int):
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
+
         if self.weights_init == "xavier":
             stddev = np.sqrt(2 / (input_size + self.units))
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
@@ -131,23 +134,32 @@ class Dense(Layer):
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
-    def __str__(self):
-        return f'Dense(units={self.units})'
-
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        self.input_shape = input_data.shape
+
+        if len(input_data.shape) == 3:
+            batch_size, timesteps, features = input_data.shape
+            input_data = input_data.mean(axis=1)
+
         if self.weights is None:
-            assert len(
-                input_data.shape) == 2, f"Dense input must be 2D (batch_size, features), got {input_data.shape}"
             self.initialize_weights(input_data.shape[1])
 
         self.input = input_data
-        self.output = np.dot(self.input, self.weights) + self.bias
-        return self.output
+        output = np.dot(self.input, self.weights) + self.bias
+        return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if len(output_error.shape) == 3:
+            output_error = output_error.mean(axis=1)
+
         input_error = np.dot(output_error, self.weights.T)
         self.d_weights = np.dot(self.input.T, output_error)
         self.d_bias = np.sum(output_error, axis=0, keepdims=True)
+
+        if len(self.input_shape) == 3:
+            input_error = np.expand_dims(input_error, 1)
+            input_error = np.repeat(input_error, self.input_shape[1], axis=1)
+
         return input_error
 
     def get_config(self) -> dict:
@@ -468,7 +480,7 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
 
         return output
@@ -495,16 +507,16 @@ class MaxPooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 mask = (input_slice == np.max(
                     input_slice, axis=(2, 3), keepdims=True))
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                                                                np.newaxis] * mask
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-                              pad_height, pad_width:-pad_width]
+            pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -756,7 +768,7 @@ class MaxPooling1D(Layer):
             input_slice = padded_input[:, :, i * stride:i * stride + pool_size]
             mask = (input_slice == np.max(input_slice, axis=2, keepdims=True))
             d_input[:, :, i * stride:i * stride +
-                    pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
+                                     pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
 
         if padding == 'same':
             d_input = d_input[:, :, pad_length:-pad_length]
@@ -811,7 +823,7 @@ class Embedding(Layer):
 
         if np.any(input_data >= self.input_dim) or np.any(input_data < 0):
             print(
-                f"Warning: input indices out of bounds [0, {self.input_dim-1}]")
+                f"Warning: input indices out of bounds [0, {self.input_dim - 1}]")
         self.clipped_input = np.clip(input_data, 0, self.input_dim - 1)
 
         output = self.weights[self.clipped_input]
@@ -892,16 +904,16 @@ class BatchNormalization(Layer):
             mean = np.mean(input_data, axis=0)
             var = np.var(input_data, axis=0)
             self.running_mean = self.momentum * \
-                self.running_mean + (1 - self.momentum) * mean
+                                self.running_mean + (1 - self.momentum) * mean
             self.running_var = self.momentum * \
-                self.running_var + (1 - self.momentum) * var
+                               self.running_var + (1 - self.momentum) * var
         else:
             mean = self.running_mean
             var = self.running_var
 
         self.input_centered = input_data - mean
         self.input_normalized = self.input_centered / \
-            np.sqrt(var + self.epsilon)
+                                np.sqrt(var + self.epsilon)
         return self.gamma * self.input_normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -911,7 +923,7 @@ class BatchNormalization(Layer):
 
         d_input_normalized = output_error * self.gamma
         d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (
-            self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
+                self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
         d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(
             self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
         d_input = d_input_normalized / np.sqrt(
@@ -997,7 +1009,7 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                                           j * stride[1]:j * stride[1] + pool_size[1]]
+                              j * stride[1]:j * stride[1] + pool_size[1]]
                 output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
 
         return output
@@ -1024,12 +1036,12 @@ class AveragePooling2D(Layer):
         for i in range(out_height):
             for j in range(out_width):
                 d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                        j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                                                                np.newaxis] / np.prod(pool_size)
+                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                                                               np.newaxis] / np.prod(pool_size)
 
         if padding == 'same':
             d_input = d_input[:, :, pad_height:-
-                              pad_height, pad_width:-pad_width]
+            pad_height, pad_width:-pad_width]
 
         return d_input
 
@@ -1108,7 +1120,7 @@ class AveragePooling1D(Layer):
 
         for i in range(out_steps):
             d_input[:, i * stride:i * stride + pool_size,
-                    :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
+            :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
 
         if padding == 'same':
             d_input = d_input[:, pad_steps:-pad_steps, :]
@@ -1154,7 +1166,8 @@ class GlobalAveragePooling2D(Layer):
         return np.mean(input_data, axis=(2, 3))
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        return np.repeat(output_error[:, :, np.newaxis, np.newaxis], self.input_shape[2], axis=2) / self.input_shape[2] / self.input_shape[3]
+        return np.repeat(output_error[:, :, np.newaxis, np.newaxis], self.input_shape[2], axis=2) / self.input_shape[
+            2] / self.input_shape[3]
 
     def get_config(self) -> dict:
         return {'name': self.__class__.__name__}
@@ -1306,66 +1319,164 @@ class LSTMCell:
         self.random_state = random_state
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
-        total_dim = input_dim + units
-        self.W = self.rng.uniform(
-            -np.sqrt(1 / total_dim), np.sqrt(1 / total_dim), (total_dim, 4 * units))
-        self.b = np.zeros((1, 4 * units))
 
-    def forward(self, x, h_prev, c_prev):
-        combined = np.hstack((x, h_prev))
-        gates = combined @ self.W + self.b
+        stddev = np.sqrt(2.0 / (input_dim + units))
 
-        i = self.sigmoid(gates[:, :self.units])
-        f = self.sigmoid(gates[:, self.units:2*self.units])
-        o = self.sigmoid(gates[:, 2*self.units:3*self.units])
-        g = np.tanh(gates[:, 3*self.units:])
+        # Forget gate
+        self.Wf = self.rng.normal(0, stddev, (input_dim, units))
+        self.Uf = self.rng.normal(0, stddev, (units, units))
+        self.bf = np.zeros((1, units))
 
-        c = f * c_prev + i * g
-        h = o * np.tanh(c)
+        # Input gate
+        self.Wi = self.rng.normal(0, stddev, (input_dim, units))
+        self.Ui = self.rng.normal(0, stddev, (units, units))
+        self.bi = np.zeros((1, units))
 
-        self.cache = (combined, i, f, o, g, c_prev, c)
-        return h, c
+        # Cell gate
+        self.Wc = self.rng.normal(0, stddev, (input_dim, units))
+        self.Uc = self.rng.normal(0, stddev, (units, units))
+        self.bc = np.zeros((1, units))
+
+        # Output gate
+        self.Wo = self.rng.normal(0, stddev, (input_dim, units))
+        self.Uo = self.rng.normal(0, stddev, (units, units))
+        self.bo = np.zeros((1, units))
+
+        # Gradients
+        self.dWf = np.zeros_like(self.Wf)
+        self.dUf = np.zeros_like(self.Uf)
+        self.dbf = np.zeros_like(self.bf)
+
+        self.dWi = np.zeros_like(self.Wi)
+        self.dUi = np.zeros_like(self.Ui)
+        self.dbi = np.zeros_like(self.bi)
+
+        self.dWc = np.zeros_like(self.Wc)
+        self.dUc = np.zeros_like(self.Uc)
+        self.dbc = np.zeros_like(self.bc)
+
+        self.dWo = np.zeros_like(self.Wo)
+        self.dUo = np.zeros_like(self.Uo)
+        self.dbo = np.zeros_like(self.bo)
+
+        self.cache = None
+
+    def forward(self, x_t, h_prev, c_prev):
+        # Store inputs for backprop
+        self.x_t = x_t
+        self.h_prev = h_prev
+        self.c_prev = c_prev
+
+        # Forget gate
+        self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev, self.Uf) + self.bf
+        self.f_t = self.sigmoid(self.f_gate_input)
+
+        # Input gate
+        self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev, self.Ui) + self.bi
+        self.i_t = self.sigmoid(self.i_gate_input)
+
+        # Cell candidate
+        self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev, self.Uc) + self.bc
+        self.c_tilde = np.tanh(self.c_gate_input)
+
+        # Cell state
+        self.c_t = self.f_t * c_prev + self.i_t * self.c_tilde
+
+        # Output gate
+        self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev, self.Uo) + self.bo
+        self.o_t = self.sigmoid(self.o_gate_input)
+
+        # Hidden state
+        self.c_t_tanh = np.tanh(self.c_t)
+        self.h_t = self.o_t * self.c_t_tanh
+
+        self.cache = {
+            'x_t': self.x_t,
+            'h_prev': self.h_prev,
+            'c_prev': self.c_prev,
+            'f_gate_input': self.f_gate_input,
+            'i_gate_input': self.i_gate_input,
+            'c_gate_input': self.c_gate_input,
+            'o_gate_input': self.o_gate_input,
+            'f_t': self.f_t,
+            'i_t': self.i_t,
+            'c_tilde': self.c_tilde,
+            'c_t': self.c_t,
+            'c_t_tanh': self.c_t_tanh,
+            'o_t': self.o_t,
+            'h_t': self.h_t
+        }
+
+        return self.h_t, self.c_t
 
     def backward(self, dh_next, dc_next):
-        combined, i, f, o, g, c_prev, c = self.cache
+        # Retrieve values from cache
+        x_t = self.cache['x_t']
+        h_prev = self.cache['h_prev']
+        c_prev = self.cache['c_prev']
+        f_t = self.cache['f_t']
+        i_t = self.cache['i_t']
+        c_tilde = self.cache['c_tilde']
+        o_t = self.cache['o_t']
+        c_t = self.cache['c_t']
+        c_t_tanh = self.cache['c_t_tanh']
 
-        do = dh_next * np.tanh(c)
-        dc = dh_next * o * (1 - np.tanh(c)**2) + dc_next
-        di = dc * g
-        dg = dc * i
+        # Gradients of the hidden and cell states
+        do = dh_next * c_t_tanh
+        dc = dc_next + dh_next * o_t * (1 - c_t_tanh ** 2)
+
+        # Output gate gradients
+        do_input = do * o_t * (1 - o_t)
+        self.dWo += np.dot(x_t.T, do_input)
+        self.dUo += np.dot(h_prev.T, do_input)
+        self.dbo += np.sum(do_input, axis=0, keepdims=True)
+
+        # Cell state gradients
+        dc_prev = dc * f_t
         df = dc * c_prev
-        dc_prev = dc * f
+        di = dc * c_tilde
+        dc_tilde = dc * i_t
 
-        di_input = di * i * (1 - i)
-        df_input = df * f * (1 - f)
-        do_input = do * o * (1 - o)
-        dg_input = dg * (1 - g**2)
+        # Forget gate gradients
+        df_input = df * f_t * (1 - f_t)
+        self.dWf += np.dot(x_t.T, df_input)
+        self.dUf += np.dot(h_prev.T, df_input)
+        self.dbf += np.sum(df_input, axis=0, keepdims=True)
 
-        d_gates = np.hstack((di_input, df_input, do_input, dg_input))
+        # Input gate gradients
+        di_input = di * i_t * (1 - i_t)
+        self.dWi += np.dot(x_t.T, di_input)
+        self.dUi += np.dot(h_prev.T, di_input)
+        self.dbi += np.sum(di_input, axis=0, keepdims=True)
 
-        self.dW = combined.T @ d_gates
-        self.db = np.sum(d_gates, axis=0, keepdims=True)
-        d_combined = d_gates @ self.W.T
+        # Cell candidate gradients
+        dc_tilde_input = dc_tilde * (1 - c_tilde ** 2)
+        self.dWc += np.dot(x_t.T, dc_tilde_input)
+        self.dUc += np.dot(h_prev.T, dc_tilde_input)
+        self.dbc += np.sum(dc_tilde_input, axis=0, keepdims=True)
 
-        dx = d_combined[:, :self.input_dim]
-        dh_prev = d_combined[:, self.input_dim:]
+        # Input gradients
+        dx = (np.dot(df_input, self.Wf.T) +
+              np.dot(di_input, self.Wi.T) +
+              np.dot(dc_tilde_input, self.Wc.T) +
+              np.dot(do_input, self.Wo.T))
+
+        dh_prev = (np.dot(df_input, self.Uf.T) +
+                   np.dot(di_input, self.Ui.T) +
+                   np.dot(dc_tilde_input, self.Uc.T) +
+                   np.dot(do_input, self.Uo.T))
 
         return dx, dh_prev, dc_prev
 
     def sigmoid(self, x):
-        return 1 / (1 + np.exp(-x))
-
+        return 1 / (1 + np.exp(-np.clip(x, -10, 10)))
 
     def get_config(self):
         return {
-            'name': self.__class__.__name__,
+            'input_dim': self.input_dim,
             'units': self.units,
-            'random_state': self.random_state
+            'random_state': self.random_state,
         }
-
-    @staticmethod
-    def from_config(config):
-        return LSTMCell(config['units'], config['random_state'])
 
 
 class LSTM(Layer):
@@ -1377,16 +1488,16 @@ class LSTM(Layer):
         self.random_state = random_state
         self.initialized = False
         self.cell = None
-        self.states = None
-        self.h_t = None
-        self.c_t = None
-        self.inputs = None
-        
+        self.all_h = None
+        self.all_c = None
+        self.last_h = None
+        self.last_c = None
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def __str__(self):
-        return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state})'
+        return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state})'
 
     def forward_pass(self, x, training=True):
         batch_size, timesteps, input_dim = x.shape
@@ -1397,34 +1508,52 @@ class LSTM(Layer):
         h = np.zeros((batch_size, self.units))
         c = np.zeros((batch_size, self.units))
 
+        self.all_h = []
+        self.all_c = []
         self.cache = []
-        outputs = []
+        self.input_shape = x.shape
 
         for t in range(timesteps):
             x_t = x[:, t, :]
             h, c = self.cell.forward(x_t, h, c)
-            outputs.append(h)
+            self.all_h.append(h)
+            self.all_c.append(c)
             self.cache.append(self.cell.cache)
 
-        outputs = np.stack(outputs, axis=1)
-        self.h = h
-        self.c = c
+        self.all_h = np.stack(self.all_h, axis=1)
+        self.all_c = np.stack(self.all_c, axis=1)
+
+        self.last_h = self.all_h[:, -1, :]
+        self.last_c = self.all_c[:, -1, :]
 
         if self.return_sequences:
-            return outputs
+            if self.return_state:
+                return self.all_h, self.last_h, self.last_c
+            return self.all_h
         else:
-            return outputs[:, -1, :]
+            if self.return_state:
+                return self.last_h, self.last_h, self.last_c
+            return self.last_h
 
     def backward_pass(self, dout):
-        batch_size, timesteps, _ = dout.shape
+        batch_size, timesteps, input_dim = self.input_shape
+
+        if len(dout.shape) == 2:
+            full_dout = np.zeros((batch_size, timesteps, self.units))
+            full_dout[:, -1, :] = dout
+            dout = full_dout
+
         dx = np.zeros((batch_size, timesteps, self.cell.input_dim))
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
 
         for t in reversed(range(timesteps)):
             dh = dout[:, t, :] + dh_next
+
             self.cell.cache = self.cache[t]
+
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
+
             dx[:, t, :] = dx_t
 
         return dx
@@ -1436,11 +1565,7 @@ class LSTM(Layer):
             'return_sequences': self.return_sequences,
             'return_state': self.return_state,
             'random_state': self.random_state,
-            'cell': self.cell.get_config() if self.cell is not None else None,
-            'states': [(h.tolist(), c.tolist()) for h, c in self.states] if self.states is not None else None,
-            'h_t': self.h_t.tolist() if self.h_t is not None else None,
-            'c_t': self.c_t.tolist() if self.c_t is not None else None,
-            'inputs': self.inputs.tolist() if self.inputs is not None else None
+            'cell': self.cell.get_config() if self.cell is not None else None
         }
 
     @staticmethod
@@ -1449,12 +1574,7 @@ class LSTM(Layer):
             config['units'],
             config['return_sequences'],
             config['return_state'],
-            config['random_state'],
-            cell=LSTMCell.from_config(config['cell']) if config['cell'] is not None else None,
-            states=[(np.array(h), np.array(c)) for h, c in config['states']] if config['states'] is not None else None,
-            h_t=np.array(config['h_t']) if config['h_t'] is not None else None,
-            c_t=np.array(config['c_t']) if config['c_t'] is not None else None,
-            inputs=np.array(config['inputs']) if config['inputs'] is not None else None,
+            config['random_state']
         )
 
 
@@ -1558,7 +1678,6 @@ class Unidirectional(Layer):
         layer = LSTM.from_config(config['layer'])
         return Unidirectional(layer)
 
-import numpy as np
 
 class Attention(Layer):
     def __init__(self, use_scale=True, score_mode="dot", return_sequences=True):
@@ -1567,7 +1686,7 @@ class Attention(Layer):
         self.score_mode = score_mode
         self.return_sequences = return_sequences
         self.cache = {}
-        
+
     def __str__(self):
         return f'Attention(use_scale={self.use_scale}, score_mode={self.score_mode}, return_sequences={self.return_sequences})'
 
@@ -1575,25 +1694,25 @@ class Attention(Layer):
         batch_size, seq_length, features = input_data.shape
         self.cache.clear()
         self.cache['input_shape'] = input_data.shape
-        
+
         scores = np.zeros((batch_size, seq_length, seq_length))
         for i in range(batch_size):
             if self.score_mode == "dot":
                 scores[i] = np.dot(input_data[i], input_data[i].T)
                 if self.use_scale:
                     scores[i] *= 1.0 / np.sqrt(features)
-        
+
         attention_weights = np.zeros_like(scores)
         for i in range(batch_size):
             attention_weights[i] = self._softmax(scores[i])
-        
+
         self.cache['input'] = input_data
         self.cache['attention_weights'] = attention_weights
-        
+
         context = np.zeros_like(input_data)
         for i in range(batch_size):
             context[i] = np.dot(attention_weights[i], input_data[i])
-        
+
         if not self.return_sequences:
             return np.mean(context, axis=1)
         return context
@@ -1602,27 +1721,27 @@ class Attention(Layer):
         input_data = self.cache['input']
         attention_weights = self.cache['attention_weights']
         batch_size, seq_length, features = self.cache['input_shape']
-        
+
         if not self.return_sequences:
             output_error = np.expand_dims(output_error, 1) / seq_length
             output_error = np.repeat(output_error, seq_length, axis=1)
-        
+
         d_input = np.zeros_like(input_data)
-        
+
         for i in range(batch_size):
             d_context = output_error[i]
             d_weights = np.dot(d_context, input_data[i].T)
             d_scores = d_weights * attention_weights[i]
             d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
-            
+
             if self.use_scale:
                 d_scores *= 1.0 / np.sqrt(features)
-            
+
             d_input[i] = np.dot(attention_weights[i].T, d_context)
-            
+
             if self.score_mode == "dot":
                 d_input[i] += np.dot(d_scores + d_scores.T, input_data[i])
-        
+
         self.cache.clear()
         return d_input
 
