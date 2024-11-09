@@ -8,6 +8,9 @@ from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1
 from neuralnetlib.regularizers import AdaptiveDropout
 
 
+EPSILON_SIGMOID = 1e-12
+
+
 class Layer:
     def __init__(self):
         self.input = None
@@ -300,7 +303,7 @@ class Dropout(Layer):
         if self.adaptive:
             return self.dropout_impl(input_data, training)
             
-        rng = np.random.default_rng(self.random_state)
+        rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
         self.mask = rng.binomial(1, 1 - self.rate, 
                                 size=input_data.shape) / (1 - self.rate)
         return input_data * self.mask
@@ -1601,9 +1604,9 @@ class LSTMCell:
         return np.clip(gradient, -self.clip_value, self.clip_value)
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
-        EPSILON = 1e-12
+        EPSILON_SIGMOID = 1e-12
         result = 0.5 * (1 + np.tanh(x * 0.5))
-        return np.clip(result, EPSILON, 1 - EPSILON)
+        return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
 
 class LSTM(Layer):
@@ -1982,9 +1985,9 @@ class GRUCell:
         return np.clip(gradient, -self.clip_value, self.clip_value)
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
-        EPSILON = 1e-12
+        EPSILON_SIGMOID = 1e-12
         result = 0.5 * (1 + np.tanh(x * 0.5))
-        return np.clip(result, EPSILON, 1 - EPSILON)
+        return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
 class GRU(Layer):
     def __init__(self, units: int, return_sequences: bool = False, random_state: int | None = None, clip_value: float = 5.0, **kwargs):
@@ -2058,8 +2061,8 @@ class GRU(Layer):
             'name': self.__class__.__name__,
             'units': self.units,
             'return_sequences': self.return_sequences,
-            'clip_value': self.clip_value,
             'random_state': self.random_state,
+            'clip_value': self.clip_value,
             'cell': self.cell.get_config() if self.cell is not None else None
         }
 
@@ -2068,14 +2071,18 @@ class GRU(Layer):
         return GRU(
             config['units'],
             config['return_sequences'],
+            config['random_state'],
             config.get('clip_value', 5.0),
-            config['random_state']
+            config['cell']
         )
 
 
 class Attention(Layer):
     def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = False):
         super().__init__()
+        valid_score_modes = ["dot"]  # for now cuz I'm too lazy to implement the others
+        if score_mode not in valid_score_modes:
+            raise ValueError(f"score_mode must be one of {valid_score_modes}, got {score_mode}")
         self.use_scale = use_scale
         self.score_mode = score_mode
         self.return_sequences = return_sequences
@@ -2126,6 +2133,7 @@ class Attention(Layer):
             d_context = output_error[i]
             
             d_weights = np.dot(d_context, input_data[i].T)
+            
             d_scores = d_weights * attention_weights[i]
             d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
             
@@ -2135,10 +2143,10 @@ class Attention(Layer):
             d_input[i] = np.dot(attention_weights[i].T, d_context)
             
             if self.score_mode == "dot":
-                d_input[i] += np.dot(d_scores + d_scores.T, input_data[i])
+                d_scores_sym = (d_scores + d_scores.T) / 2
+                d_input[i] += np.dot(d_scores_sym, input_data[i])
         
         self.cache.clear()
-        
         return d_input
 
     @staticmethod
