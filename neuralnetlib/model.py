@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention, Dense
+from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, Bidirectional, Embedding, Attention, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
@@ -75,7 +75,7 @@ class Model:
 
     def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         for layer in self.layers:
-            if isinstance(layer, (Dropout, LSTM, Bidirectional)):
+            if isinstance(layer, (Dropout, LSTM, Bidirectional, GRU)):
                 X = layer.forward_pass(X, training)
             else:
                 X = layer.forward_pass(X)
@@ -102,6 +102,10 @@ class Model:
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wi, layer.cell.dWi, layer.cell.bi, layer.cell.dbi)
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wc, layer.cell.dWc, layer.cell.bc, layer.cell.dbc)
                 self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wo, layer.cell.dWo, layer.cell.bo, layer.cell.dbo)
+            elif isinstance(layer, GRU):
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wz, layer.cell.dWz, layer.cell.bz, layer.cell.dbz)
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wr, layer.cell.dWr, layer.cell.br, layer.cell.dbr)
+                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wh, layer.cell.dWh, layer.cell.bh, layer.cell.dbh)
             elif hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
                 self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias, layer.d_bias)
             elif hasattr(layer, 'd_weights'):
@@ -116,7 +120,7 @@ class Model:
 
         if error.ndim == 1:
             error = error[:, None]
-        elif isinstance(self.layers[-1], (LSTM, Bidirectional)) and self.layers[-1].return_sequences:
+        elif isinstance(self.layers[-1], (LSTM, Bidirectional, GRU)) and self.layers[-1].return_sequences:
             error = error.reshape(error.shape[0], error.shape[1], -1)
 
         self.backward_pass(error)
@@ -166,12 +170,12 @@ class Model:
             if hasattr(layer, 'random_state'):
                 layer.random_state = random_state
 
-        has_lstm = any(isinstance(layer, (LSTM, Bidirectional)) for layer in self.layers)
+        has_lstm_or_gru = any(isinstance(layer, (LSTM, Bidirectional, GRU)) for layer in self.layers)
         has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
     
-        if has_lstm and not has_embedding:
+        if has_lstm_or_gru and not has_embedding:
             if len(x_train.shape) != 3:
-                raise ValueError("Input data must be 3D (batch_size, time_steps, features) for LSTM layers without Embedding")
+                raise ValueError("Input data must be 3D (batch_size, time_steps, features) for LSTM/GRU layers without Embedding")
         elif has_embedding:
             if len(x_train.shape) != 2:
                 raise ValueError("Input data must be 2D (batch_size, sequence_length) when using Embedding layer")
