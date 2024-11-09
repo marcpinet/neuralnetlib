@@ -1810,6 +1810,269 @@ class Unidirectional(Layer):
         return Unidirectional(layer)
 
 
+class GRUCell:
+    def __init__(self, units: int, random_state: int | None = None, clip_value: float = 5.0):
+        self.units = units
+        self.random_state = random_state
+        self.clip_value = clip_value
+        self.rng = np.random.default_rng(
+            random_state if random_state is not None else int(time.time_ns()))
+        
+        # Reset gate weights
+        self.Wr = None
+        self.Ur = None
+        self.br = None
+        
+        # Update gate weights 
+        self.Wz = None
+        self.Uz = None
+        self.bz = None
+        
+        # Candidate state weights
+        self.Wh = None
+        self.Uh = None
+        self.bh = None
+        
+        self._init_gradients()
+        self.cache = None
+
+    def initialize_weights(self, input_dim: int):
+        # Reset gate
+        self.Wr = self.orthogonal_init((input_dim, self.units))
+        self.Ur = self.orthogonal_init((self.units, self.units))
+        self.br = np.zeros((1, self.units))
+
+        # Update gate
+        self.Wz = self.orthogonal_init((input_dim, self.units))
+        self.Uz = self.orthogonal_init((self.units, self.units))
+        self.bz = np.zeros((1, self.units))
+
+        # Candidate state
+        self.Wh = self.orthogonal_init((input_dim, self.units))
+        self.Uh = self.orthogonal_init((self.units, self.units))
+        self.bh = np.zeros((1, self.units))
+
+        # Initialize gradients
+        self._init_gradients()
+        
+    def _init_gradients(self):
+        if self.Wr is not None:
+            self.dWr = np.zeros_like(self.Wr)
+            self.dUr = np.zeros_like(self.Ur)
+            self.dbr = np.zeros_like(self.br)
+
+            self.dWz = np.zeros_like(self.Wz)
+            self.dUz = np.zeros_like(self.Uz)
+            self.dbz = np.zeros_like(self.bz)
+
+            self.dWh = np.zeros_like(self.Wh)
+            self.dUh = np.zeros_like(self.Uh)
+            self.dbh = np.zeros_like(self.bh)
+            
+    def orthogonal_init(self, shape):
+        if len(shape) < 2:
+            return self.rng.normal(0, 1, shape)
+        flat_shape = (shape[0], np.prod(shape[1:]))
+        a = self.rng.normal(0, 1, flat_shape)
+        u, _, vt = np.linalg.svd(a, full_matrices=False)
+        q = u if u.shape == flat_shape else vt
+        q = q.reshape(shape)
+        return q
+
+    def forward(self, x_t: np.ndarray, h_prev: np.ndarray) -> np.ndarray:
+        if self.Wr is None:
+            self.initialize_weights(x_t.shape[1])
+
+        # Store inputs for backprop
+        self.x_t = x_t
+        self.h_prev = h_prev
+
+        # Reset gate
+        self.r_gate_input = np.dot(x_t, self.Wr) + np.dot(h_prev, self.Ur) + self.br
+        self.r_t = self.sigmoid(self.r_gate_input)
+
+        # Update gate
+        self.z_gate_input = np.dot(x_t, self.Wz) + np.dot(h_prev, self.Uz) + self.bz
+        self.z_t = self.sigmoid(self.z_gate_input)
+
+        # Candidate state
+        self.h_candidate_input = np.dot(x_t, self.Wh) + np.dot(self.r_t * h_prev, self.Uh) + self.bh
+        self.h_candidate = np.tanh(self.h_candidate_input)
+
+        # New hidden state
+        self.h_t = (1 - self.z_t) * h_prev + self.z_t * self.h_candidate
+
+        self.cache = {
+            'x_t': self.x_t,
+            'h_prev': self.h_prev,
+            'r_gate_input': self.r_gate_input,
+            'z_gate_input': self.z_gate_input,
+            'h_candidate_input': self.h_candidate_input,
+            'r_t': self.r_t,
+            'z_t': self.z_t,
+            'h_candidate': self.h_candidate,
+            'h_t': self.h_t
+        }
+
+        return self.h_t
+
+    def backward(self, dh_next: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        x_t = self.cache['x_t']
+        h_prev = self.cache['h_prev']
+        r_t = self.cache['r_t']
+        z_t = self.cache['z_t']
+        h_candidate = self.cache['h_candidate']
+
+        # Clip incoming gradients
+        dh_next = self.clip_gradients(dh_next)
+
+        # Gradients for gates
+        dh_candidate = dh_next * z_t
+        dz = dh_next * (h_candidate - h_prev)
+        dh_prev = dh_next * (1 - z_t)
+
+        # Candidate state gradients
+        dh_candidate_input = dh_candidate * (1 - h_candidate ** 2)
+        dh_candidate_input = self.clip_gradients(dh_candidate_input)
+        
+        self.dWh += np.dot(x_t.T, dh_candidate_input)
+        self.dUh += np.dot((r_t * h_prev).T, dh_candidate_input)
+        self.dbh += np.sum(dh_candidate_input, axis=0, keepdims=True)
+
+        dr_h_prev = np.dot(dh_candidate_input, self.Uh.T)
+        dr = dr_h_prev * h_prev
+        dh_prev += dr_h_prev * r_t
+
+        # Update gate gradients
+        dz_input = dz * z_t * (1 - z_t)
+        dz_input = self.clip_gradients(dz_input)
+        
+        self.dWz += np.dot(x_t.T, dz_input)
+        self.dUz += np.dot(h_prev.T, dz_input)
+        self.dbz += np.sum(dz_input, axis=0, keepdims=True)
+
+        # Reset gate gradients
+        dr_input = dr * r_t * (1 - r_t)
+        dr_input = self.clip_gradients(dr_input)
+        
+        self.dWr += np.dot(x_t.T, dr_input)
+        self.dUr += np.dot(h_prev.T, dr_input)
+        self.dbr += np.sum(dr_input, axis=0, keepdims=True)
+
+        dx = (np.dot(dz_input, self.Wz.T) +
+              np.dot(dr_input, self.Wr.T) +
+              np.dot(dh_candidate_input, self.Wh.T))
+              
+        dh_prev += (np.dot(dz_input, self.Uz.T) +
+                   np.dot(dr_input, self.Ur.T))
+
+        dx = self.clip_gradients(dx)
+        dh_prev = self.clip_gradients(dh_prev)
+
+        return dx, dh_prev
+
+    def get_config(self) -> dict:
+        return {
+            'units': self.units,
+            'random_state': self.random_state,
+            'clip_value': self.clip_value
+        }
+
+    def clip_gradients(self, gradient: np.ndarray) -> np.ndarray:
+        return np.clip(gradient, -self.clip_value, self.clip_value)
+
+    def sigmoid(self, x: np.ndarray) -> np.ndarray:
+        EPSILON = 1e-12
+        result = 0.5 * (1 + np.tanh(x * 0.5))
+        return np.clip(result, EPSILON, 1 - EPSILON)
+
+class GRU(Layer):
+    def __init__(self, units: int, return_sequences: bool = False, random_state: int | None = None, clip_value: float = 5.0, **kwargs):
+        super().__init__()
+        self.units = units
+        self.return_sequences = return_sequences
+        self.random_state = random_state
+        self.initialized = False
+        self.cell = None
+        self.last_h = None
+        self.cache = None
+        self.input_shape = None
+        self.clip_value = clip_value
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __str__(self) -> str:
+        return f'GRU(units={self.units}, return_sequences={self.return_sequences}, random_state={self.random_state}, clip_value={self.clip_value})'
+
+    def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+        self.input_shape = x.shape
+        batch_size, timesteps, input_dim = x.shape
+
+        if not self.initialized:
+            self.cell = GRUCell(self.units, self.random_state, self.clip_value)
+            self.cell.initialize_weights(input_dim)
+            self.initialized = True
+
+        h = np.zeros((batch_size, self.units))
+        all_h = []
+        self.cache = []
+
+        for t in range(timesteps):
+            x_t = x[:, t, :]
+            h = self.cell.forward(x_t, h)
+            if self.return_sequences:
+                all_h.append(h)
+            if training:
+                self.cache.append(self.cell.cache)
+
+        self.last_h = h
+
+        if self.return_sequences:
+            return np.stack(all_h, axis=1)
+        return self.last_h
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        batch_size, timesteps, input_dim = self.input_shape
+
+        if len(output_error.shape) == 2:
+            full_dout = np.zeros((batch_size, timesteps, self.units))
+            full_dout[:, -1, :] = output_error
+            output_error = full_dout
+
+        dx = np.zeros((batch_size, timesteps, input_dim))
+        dh_next = np.zeros((batch_size, self.units))
+
+        for t in reversed(range(timesteps)):
+            dh = output_error[:, t, :] + dh_next
+            dh = np.clip(dh, -self.clip_value, self.clip_value)
+            
+            self.cell.cache = self.cache[t]
+            dx_t, dh_next = self.cell.backward(dh)
+            dx[:, t, :] = dx_t
+
+        return dx
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'units': self.units,
+            'return_sequences': self.return_sequences,
+            'clip_value': self.clip_value,
+            'random_state': self.random_state,
+            'cell': self.cell.get_config() if self.cell is not None else None
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return GRU(
+            config['units'],
+            config['return_sequences'],
+            config.get('clip_value', 5.0),
+            config['random_state']
+        )
+
+
 class Attention(Layer):
     def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = False):
         super().__init__()
@@ -1905,26 +2168,49 @@ class Attention(Layer):
 
 
 compatibility_dict = {
-    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
+    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
     Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
+    
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
+    
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
+    
     GlobalAveragePooling2D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
-    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
+    
+    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
     GlobalAveragePooling1D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
-    Flatten: [Dense, Dropout, Permute, Reshape, LSTM, Bidirectional, Unidirectional],
-    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, Bidirectional, Unidirectional],
-    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, LSTM, Bidirectional, Unidirectional, Attention],
-    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention],
-    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
-    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
-    Attention: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, Bidirectional, Unidirectional, GlobalAveragePooling1D],
+    
+    Flatten: [Dense, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, Dropout, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, LSTM, GRU,Bidirectional, Unidirectional, Attention],
+    
+    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, LSTM, GRU,Bidirectional, Unidirectional, Attention],
+    
+    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    GRU: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape,LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    
+    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
+    
+    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
+    
+    Attention: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, GlobalAveragePooling1D]
 }
