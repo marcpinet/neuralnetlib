@@ -82,7 +82,7 @@ class Input(Layer):
 
 
 class Dense(Layer):
-    def __init__(self, units: int, weights_init: str = "default", bias_init: str = "default", random_state: int = None,
+    def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros", random_state: int = None,
                  **kwargs):
         super().__init__()
         self.units = units
@@ -103,33 +103,56 @@ class Dense(Layer):
     def initialize_weights(self, input_size: int):
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
-
-        if self.weights_init == "xavier":
-            stddev = np.sqrt(2 / (input_size + self.units))
+        
+        fan_in = input_size
+        fan_out = self.units
+        
+        if self.weights_init in ["glorot_uniform", "xavier_uniform"]:
+            limit = np.sqrt(6 / (fan_in + fan_out))
+            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+        
+        elif self.weights_init in ["glorot_normal", "xavier_normal"]:
+            stddev = np.sqrt(2 / (fan_in + fan_out))
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
-        elif self.weights_init == "he":
-            stddev = np.sqrt(2 / input_size)
+        
+        elif self.weights_init == "he_uniform":
+            limit = np.sqrt(6 / fan_in)
+            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+        
+        elif self.weights_init == "he_normal":
+            stddev = np.sqrt(2 / fan_in)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
-        elif self.weights_init == "default":
-            self.weights = self.rng.normal(0, 0.01, (input_size, self.units))
-        elif self.weights_init == "lecun":
-            stddev = np.sqrt(1 / input_size)
+        
+        elif self.weights_init == "lecun_uniform":
+            limit = np.sqrt(3 / fan_in)
+            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+        
+        elif self.weights_init == "lecun_normal":
+            stddev = np.sqrt(1 / fan_in)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
+        
+        elif self.weights_init == "orthogonal":
+            nums = self.rng.normal(0, 1, (input_size, self.units))
+            q, r = np.linalg.qr(nums)
+            q = q * np.sign(np.diag(r))
+            self.weights = q
+        
         else:
             raise ValueError(
-                "Invalid weights_init value. Possible values are 'xavier', 'he', 'lecun' and 'default'.")
+                "Invalid weights_init value. Possible values are 'glorot_uniform', 'glorot_normal', "
+                "'he_uniform', 'he_normal', 'lecun_uniform', 'lecun_normal', 'orthogonal'")
 
-        if self.bias_init == "default":
+        if self.bias_init == "zeros":
             self.bias = np.zeros((1, self.units))
+        elif self.bias_init == "ones":
+            self.bias = np.ones((1, self.units))
         elif self.bias_init == "normal":
-            self.bias = self.rng.normal(0, 0.01, (1, self.units))
+            self.bias = self.rng.normal(0, 0.05, (1, self.units))
         elif self.bias_init == "uniform":
-            self.bias = self.rng.uniform(-0.1, 0.1, (1, self.units))
-        elif self.bias_init == "small":
-            self.bias = np.full((1, self.units), 0.01)
+            self.bias = self.rng.uniform(-0.05, 0.05, (1, self.units))
         else:
             raise ValueError(
-                "Invalid bias_init value. Possible values are 'normal', 'uniform', 'small' and 'default'.")
+                "Invalid bias_init value. Possible values are 'zeros', 'ones', 'normal', 'uniform'")
 
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
