@@ -1,5 +1,6 @@
 import numpy as np
 import re
+from collections.abc import Generator
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     """One hot encoded labels are binary vectors representing categorical values,
@@ -14,12 +15,12 @@ def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     return one_hot
 
 
-def apply_threshold(y_pred, threshold: float = 0.5):
+def apply_threshold(y_pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     """Applies a threshold to the predictions. Typically used for binary classification."""
     return (y_pred > threshold).astype(int)
 
 
-def im2col_2d(input_data, filter_h, filter_w, stride=1, pad=0):
+def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
     """
     Transform 4 dimensional images to 2 dimensional array.
 
@@ -69,7 +70,7 @@ def im2col_2d(input_data, filter_h, filter_w, stride=1, pad=0):
     return col
 
 
-def im2col_1d(input_data, filter_size, stride=1, pad=0):
+def im2col_1d(input_data: np.ndarray, filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
     """
     Transform 3 dimensional images to 2 dimensional array.
 
@@ -99,7 +100,7 @@ def im2col_1d(input_data, filter_size, stride=1, pad=0):
     return col
 
 
-def col2im_1d(col, input_shape, filter_size, stride=1, pad=0):
+def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
     """
     Inverse of im2col_1d.
 
@@ -129,7 +130,7 @@ def col2im_1d(col, input_shape, filter_size, stride=1, pad=0):
     return image[:, :, pad:L + pad]
 
 
-def col2im_2d(col, input_shape, filter_h, filter_w, stride=1, pad=0):
+def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
     """
     Inverse of im2col.
 
@@ -214,41 +215,41 @@ class StandardScaler:
         self.mean_ = np.mean(X, axis=0)
         self.scale_ = np.std(X, axis=0)
 
-    def transform(self, X):
+    def transform(self, X: np.ndarray) -> None:
         if self.mean_ is None or self.scale_ is None:
             raise ValueError("StandardScaler has not been fitted yet.")
         return (X - self.mean_) / self.scale_
 
-    def fit_transform(self, X):
+    def fit_transform(self, X: np.ndarray):
         self.fit(X)
         return self.transform(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X: np.ndarray):
         if self.mean_ is None or self.scale_ is None:
             raise ValueError("StandardScaler has not been fitted yet.")
         return X * self.scale_ + self.mean_
 
 
 class MinMaxScaler:
-    def __init__(self, feature_range=(0, 1)):
+    def __init__(self, feature_range: tuple[float, float] = (0, 1)) -> None:
         self.feature_range = feature_range
         self.min_ = None
         self.scale_ = None
 
-    def fit(self, X):
+    def fit(self, X: np.ndarray) -> None:
         self.min_ = np.min(X, axis=0)
         self.scale_ = np.max(X, axis=0) - self.min_
 
-    def transform(self, X):
+    def transform(self, X: np.ndarray) -> np.ndarray:
         if self.min_ is None or self.scale_ is None:
             raise ValueError("MinMaxScaler has not been fitted yet.")
         return (X - self.min_) / self.scale_ * (self.feature_range[1] - self.feature_range[0]) + self.feature_range[0]
 
-    def fit_transform(self, X):
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
         self.fit(X)
         return self.transform(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X: np.ndarray) -> np.ndarray:
         if self.min_ is None or self.scale_ is None:
             raise ValueError("MinMaxScaler has not been fitted yet.")
         return (X - self.feature_range[0]) / (self.feature_range[1] - self.feature_range[0]) * self.scale_ + self.min_
@@ -295,7 +296,7 @@ class PCA:
 
 
 class Tokenizer:
-    def __init__(self, num_words=None, filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n', lower=True, split=' ', char_level=False, oov_token=None):
+    def __init__(self,  num_words: int | None = None, filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n', lower: bool = True, split: str = ' ', char_level: bool = False, oov_token: str | None = None) -> None:
         self.num_words = num_words
         self.filters = filters
         self.lower = lower
@@ -308,7 +309,7 @@ class Tokenizer:
         self.word_docs = {}
         self.document_count = 0
 
-    def fit_on_texts(self, texts):
+    def fit_on_texts(self, texts: list[str]) -> None:
         for text in texts:
             self.document_count += 1
             if self.char_level:
@@ -346,10 +347,10 @@ class Tokenizer:
 
         self.index_word = dict((c, w) for w, c in self.word_index.items())
 
-    def texts_to_sequences(self, texts):
+    def texts_to_sequences(self, texts: list[str]) -> list[list[int]]:
         return list(self.texts_to_sequences_generator(texts))
 
-    def texts_to_sequences_generator(self, texts):
+    def texts_to_sequences_generator(self, texts: list[str]) -> Generator[list[int], None, None]:
         for text in texts:
             if self.char_level:
                 seq = text
@@ -370,10 +371,10 @@ class Tokenizer:
                     vect.append(self.word_index.get(self.oov_token))
             yield vect
 
-    def sequences_to_texts(self, sequences):
+    def sequences_to_texts(self, sequences: list[list[int]]) -> list[str]:
         return list(self.sequences_to_texts_generator(sequences))
 
-    def sequences_to_texts_generator(self, sequences):
+    def sequences_to_texts_generator(self, sequences: list[list[int]]) -> Generator[str, None, None]:
         for seq in sequences:
             vect = []
             for num in seq:
@@ -387,7 +388,7 @@ class Tokenizer:
             else:
                 yield ' '.join(vect)
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'num_words': self.num_words,
             'filters': self.filters,
@@ -397,11 +398,10 @@ class Tokenizer:
             'oov_token': self.oov_token,
             'document_count': self.document_count,
         }
-        
+
 
 class CountVectorizer:
-    def __init__(self, lowercase=True, token_pattern=r'(?u)\b\w\w+\b', 
-                 max_df=1.0, min_df=1, max_features=None):
+    def __init__(self, lowercase: bool = True, token_pattern: str = r'(?u)\b\w\w+\b', max_df: float | int = 1.0, min_df: float | int = 1, max_features: int | None = None) -> None:
         self.lowercase = lowercase
         self.token_pattern = token_pattern
         self.max_df = max_df
@@ -410,12 +410,12 @@ class CountVectorizer:
         self.vocabulary_ = {}
         self.document_count_ = 0
 
-    def _tokenize(self, text):
+    def _tokenize(self, text: str) -> list[str]:
         if self.lowercase:
             text = text.lower()
         return re.findall(self.token_pattern, text)
 
-    def fit(self, raw_documents):
+    def fit(self, raw_documents: list[str]) -> "CountVectorizer":
         self.document_count_ = len(raw_documents)
         term_freq = {}
         doc_freq = {}
@@ -456,7 +456,7 @@ class CountVectorizer:
 
         return self
 
-    def transform(self, raw_documents):
+    def transform(self, raw_documents: list[str]) -> np.ndarray:
         if not self.vocabulary_:
             raise ValueError("Vocabulary not fitted. Call fit() first.")
 
@@ -469,11 +469,11 @@ class CountVectorizer:
 
         return X
 
-    def fit_transform(self, raw_documents):
+    def fit_transform(self, raw_documents: list[str]) -> np.ndarray:
         return self.fit(raw_documents).transform(raw_documents)
 
-    def get_feature_names_out(self):
+    def get_feature_names_out(self) -> np.ndarray:
         return np.array(sorted(self.vocabulary_, key=self.vocabulary_.get))
 
-    def get_vocabulary(self):
+    def get_vocabulary(self) -> dict:
         return dict(sorted(self.vocabulary_.items(), key=lambda x: x[1]))

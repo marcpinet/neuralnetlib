@@ -121,7 +121,7 @@ class RMSprop(Optimizer):
 
 
 class Adam(Optimizer):
-    def __init__(self, learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8):
+    def __init__(self, learning_rate: float = 0.001, beta_1: float = 0.9, beta_2: float = 0.999, epsilon: float = 1e-8) -> None:
         super().__init__(learning_rate)
         self.beta_1 = beta_1
         self.beta_2 = beta_2
@@ -130,7 +130,7 @@ class Adam(Optimizer):
 
         self.m_w, self.v_w, self.m_b, self.v_b = {}, {}, {}, {}
 
-    def update(self, layer_index, weights, weights_grad, bias, bias_grad):
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray, bias_grad: np.ndarray) -> None:
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.v_w[layer_index] = np.zeros_like(weights)

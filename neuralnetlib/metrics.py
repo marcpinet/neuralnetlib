@@ -3,7 +3,7 @@ import numpy as np
 from neuralnetlib.preprocessing import apply_threshold
 
 class Metric:
-    def __init__(self, name):
+    def __init__(self, name: str):
         if isinstance(name, str):
             self.function = self._get_function_by_name(name)
             self.name = self._get_function_by_name(name).__name__.split("_score")[0]

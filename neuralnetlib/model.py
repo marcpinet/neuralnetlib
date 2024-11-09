@@ -24,7 +24,7 @@ class Model:
         self.y_true = None
         self.predictions = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         model_summary = 'Model\n'
         model_summary += '-------------------------------------------------\n'
         for i, layer in enumerate(self.layers):
@@ -123,9 +123,15 @@ class Model:
         self.backward_pass(error)
         return loss
 
-    def fit(self, x_train: np.ndarray, y_train: np.ndarray, epochs: int, batch_size: int = None,
-            verbose: bool = True, metrics: list = None, random_state: int = None, validation_data: tuple = None,
-            callbacks: list = [], plot_decision_boundary: bool = False) -> dict:
+    def fit(self, x_train: np.ndarray, y_train: np.ndarray, 
+            epochs: int, 
+            batch_size: int | None = None,
+            verbose: bool = True, 
+            metrics: list | None = None, 
+            random_state: int | None = None,
+            validation_data: tuple | None = None,
+            callbacks: list = [], 
+            plot_decision_boundary: bool = False) -> dict:
         """
         Fit the model to the training data.
 
@@ -300,7 +306,6 @@ class Model:
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray, batch_size: int = 32) -> tuple:
         total_loss = 0
-        total_metrics = {}
         num_batches = int(np.ceil(len(x_test) / batch_size))
         
         predictions_list = []
@@ -376,7 +381,7 @@ class Model:
 
         return model
 
-    def __update_plot(self, epoch, x_train, y_train, random_state):
+    def __update_plot(self, epoch: int, x_train: np.ndarray, y_train: np.ndarray, random_state: int | None) -> None:
         if not plt.fignum_exists(1):
             if matplotlib.get_backend() != "TkAgg":
                 matplotlib.use("TkAgg")

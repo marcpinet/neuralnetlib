@@ -61,7 +61,7 @@ class Input(Layer):
             input_shape = (input_shape,)
         self.input_shape = input_shape
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Input(input_shape={self.input_shape})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -97,7 +97,7 @@ class Dense(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Dense(units={self.units})'
 
     def initialize_weights(self, input_size: int):
@@ -188,7 +188,7 @@ class Activation(Layer):
         super().__init__()
         self.activation_function = activation_function
 
-    def __str__(self):
+    def __str__(self) -> str:
         name = type(self.activation_function).__name__
         return f'Activation({name})'
 
@@ -234,7 +234,7 @@ class Dropout(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Dropout(rate={self.rate})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
@@ -315,7 +315,7 @@ class Conv2D(Layer):
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Conv2D(num_filters={self.filters}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -428,7 +428,7 @@ class MaxPooling2D(Layer):
         self.stride = stride if stride is not None else self.pool_size
         self.padding = padding
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'MaxPooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -522,7 +522,7 @@ class MaxPooling2D(Layer):
 
 
 class Flatten(Layer):
-    def __str__(self):
+    def __str__(self) -> str:
         return 'Flatten'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -595,7 +595,7 @@ class Conv1D(Layer):
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Conv1D(num_filters={self.filters}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -696,7 +696,7 @@ class MaxPooling1D(Layer):
         self.stride = stride if stride is not None else pool_size
         self.padding = padding
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'MaxPooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -788,7 +788,7 @@ class Embedding(Layer):
         self.random_state = random_state
         self.clipped_input = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim})'
 
     def initialize_weights(self):
@@ -893,7 +893,7 @@ class BatchNormalization(Layer):
         self.running_mean = np.zeros(input_shape)
         self.running_var = np.ones(input_shape)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'BatchNormalization(momentum={self.momentum}, epsilon={self.epsilon})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
@@ -957,7 +957,7 @@ class AveragePooling2D(Layer):
         self.stride = stride if stride is not None else self.pool_size
         self.padding = padding
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'AveragePooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1052,7 +1052,7 @@ class AveragePooling1D(Layer):
         self.stride = stride if stride is not None else pool_size
         self.padding = padding
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'AveragePooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1132,7 +1132,7 @@ class GlobalAveragePooling1D(Layer):
     def __init__(self):
         self.input_shape = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return 'GlobalAveragePooling1D'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1156,7 +1156,7 @@ class GlobalAveragePooling2D(Layer):
     def __init__(self):
         self.input_shape = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return 'GlobalAveragePooling2D'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1178,10 +1178,10 @@ class GlobalAveragePooling2D(Layer):
 
 
 class Permute(Layer):
-    def __init__(self, dims):
+    def __init__(self, dims: tuple):
         self.dims = dims
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Permute(dims={self.dims})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1208,7 +1208,7 @@ class Permute(Layer):
 
 
 class TextVectorization(Layer):
-    def __init__(self, max_tokens=None, output_mode='int', output_sequence_length=None):
+    def __init__(self, max_tokens: int | None = None, output_mode: str = 'int', output_sequence_length: int | None = None):
         super().__init__()
         self.max_tokens = max_tokens
         self.output_mode = output_mode
@@ -1216,10 +1216,10 @@ class TextVectorization(Layer):
         self.vocabulary = None
         self.word_index = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'TextVectorization(max_tokens={self.max_tokens}, output_mode={self.output_mode}, output_sequence_length={self.output_sequence_length})'
 
-    def adapt(self, data):
+    def adapt(self, data: np.ndarray):
         if len(data.shape) == 2:
             data = data.flatten()
 
@@ -1237,7 +1237,7 @@ class TextVectorization(Layer):
         self.vocabulary = [''] + [token for token, _ in sorted_tokens]
         self.word_index = {word: i for i, word in enumerate(self.vocabulary)}
 
-    def forward_pass(self, input_data):
+    def forward_pass(self, input_data: np.ndarray | list[str]) -> np.ndarray:
         if isinstance(input_data[0], str):
             vectorized = [[self.word_index.get(
                 word, 0) for word in text.lower().split()] for text in input_data]
@@ -1264,10 +1264,10 @@ class TextVectorization(Layer):
         else:
             raise ValueError("Invalid output_mode. Use 'int' or 'binary'.")
 
-    def backward_pass(self, output_error):
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         return output_error
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'max_tokens': self.max_tokens,
@@ -1277,7 +1277,7 @@ class TextVectorization(Layer):
         }
 
     @staticmethod
-    def from_config(config):
+    def from_config(config: dict):
         layer = TextVectorization(
             config['max_tokens'], config['output_mode'], config['output_sequence_length'])
         layer.vocabulary = config['vocabulary']
@@ -1291,7 +1291,7 @@ class Reshape(Layer):
         self.target_shape = target_shape
         self.input_shape = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Reshape(target_shape={self.target_shape})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1313,7 +1313,7 @@ class Reshape(Layer):
 
 
 class LSTMCell:
-    def __init__(self, input_dim: int, units: int, random_state=None):
+    def __init__(self, input_dim: int, units: int, random_state: int | None = None):
         self.input_dim = input_dim
         self.units = units
         self.random_state = random_state
@@ -1362,7 +1362,7 @@ class LSTMCell:
 
         self.cache = None
 
-    def forward(self, x_t, h_prev, c_prev):
+    def forward(self, x_t: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         # Store inputs for backprop
         self.x_t = x_t
         self.h_prev = h_prev
@@ -1410,7 +1410,7 @@ class LSTMCell:
 
         return self.h_t, self.c_t
 
-    def backward(self, dh_next, dc_next):
+    def backward(self, dh_next: np.ndarray, dc_next: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         x_t = self.cache['x_t']
         h_prev = self.cache['h_prev']
         c_prev = self.cache['c_prev']
@@ -1468,10 +1468,10 @@ class LSTMCell:
 
         return dx, dh_prev, dc_prev
 
-    def sigmoid(self, x):
+    def sigmoid(self, x: np.ndarray) -> np.ndarray:
         return 0.5 * (1 + np.tanh(x * 0.5))
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'input_dim': self.input_dim,
             'units': self.units,
@@ -1480,7 +1480,7 @@ class LSTMCell:
 
 
 class LSTM(Layer):
-    def __init__(self, units, return_sequences=False, return_state=False, random_state=None, **kwargs):
+    def __init__(self, units: int, return_sequences: bool = False, return_state: bool = False, random_state: int | None = None, **kwargs):
         super().__init__()
         self.units = units
         self.return_sequences = return_sequences
@@ -1496,10 +1496,10 @@ class LSTM(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state})'
 
-    def forward_pass(self, x, training=True):
+    def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         self.input_shape = x.shape
         
         batch_size, timesteps, input_dim = x.shape
@@ -1536,7 +1536,7 @@ class LSTM(Layer):
                 return self.last_h, self.last_h, self.last_c
             return self.last_h
 
-    def backward_pass(self, dout):
+    def backward_pass(self, dout: np.ndarray) -> np.ndarray:
         batch_size, timesteps, input_dim = self.input_shape
 
         if len(dout.shape) == 2:
@@ -1558,7 +1558,7 @@ class LSTM(Layer):
         
         return dx
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'units': self.units,
@@ -1569,7 +1569,7 @@ class LSTM(Layer):
         }
 
     @staticmethod
-    def from_config(config):
+    def from_config(config: dict):
         return LSTM(
             config['units'],
             config['return_sequences'],
@@ -1579,7 +1579,7 @@ class LSTM(Layer):
 
 
 class Bidirectional(Layer):
-    def __init__(self, layer):
+    def __init__(self, layer: LSTM):
         super().__init__()
         if not isinstance(layer, LSTM):
             raise ValueError("Bidirectional layer only supports LSTM layers")
@@ -1592,7 +1592,7 @@ class Bidirectional(Layer):
             layer.random_state
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Bidirectional(layer={str(self.forward_layer)})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
@@ -1637,14 +1637,14 @@ class Bidirectional(Layer):
 
         return forward_dx + backward_dx
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'layer': self.forward_layer.get_config()
         }
 
     @staticmethod
-    def from_config(config):
+    def from_config(config: dict):
         layer = LSTM.from_config(config['layer'])
         return Bidirectional(layer)
 
@@ -1652,13 +1652,13 @@ class Bidirectional(Layer):
 class Unidirectional(Layer):
     """Wrapper class that makes it explicit that a layer processes sequences in one direction"""
 
-    def __init__(self, layer):
+    def __init__(self, layer: LSTM):
         super().__init__()
         if not isinstance(layer, LSTM):
             raise ValueError("Unidirectional layer only supports LSTM layers")
         self.layer = layer
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Unidirectional(layer={str(self.layer)})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
@@ -1667,27 +1667,27 @@ class Unidirectional(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         return self.layer.backward_pass(output_error)
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'layer': self.layer.get_config()
         }
 
     @staticmethod
-    def from_config(config):
+    def from_config(config: dict):
         layer = LSTM.from_config(config['layer'])
         return Unidirectional(layer)
 
 
 class Attention(Layer):
-    def __init__(self, use_scale=True, score_mode="dot", return_sequences=True):
+    def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = True):
         super().__init__()
         self.use_scale = use_scale
         self.score_mode = score_mode
         self.return_sequences = return_sequences
         self.cache = {}
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Attention(use_scale={self.use_scale}, score_mode={self.score_mode}, return_sequences={self.return_sequences})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
@@ -1748,12 +1748,12 @@ class Attention(Layer):
         return d_input
 
     @staticmethod
-    def _softmax(x):
+    def _softmax(x: np.ndarray) -> np.ndarray:
         x_max = np.max(x, axis=-1, keepdims=True)
         exp_x = np.exp(x - x_max)
         return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
 
-    def get_config(self):
+    def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'use_scale': self.use_scale,
@@ -1762,7 +1762,7 @@ class Attention(Layer):
         }
 
     @staticmethod
-    def from_config(config):
+    def from_config(config: dict):
         return Attention(
             use_scale=config['use_scale'],
             score_mode=config['score_mode'],
