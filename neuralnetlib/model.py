@@ -8,7 +8,7 @@ import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, Bidirectional, Embedding, Attention, Dense
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
@@ -83,9 +83,8 @@ class Model:
 
     def backward_pass(self, error: np.ndarray):
         for i, layer in enumerate(reversed(self.layers)):
-            if i == 0 and isinstance(layer, Activation) and type(
-                    layer.activation_function).__name__ == "Softmax" and isinstance(self.loss_function,
-                                                                                    CategoricalCrossentropy):
+            if i == 0 and isinstance(layer, Activation) and type(layer.activation_function).__name__ == "Softmax" and (
+                        isinstance(self.loss_function, CategoricalCrossentropy or isinstance(self.loss_function, SparseCategoricalCrossentropy))):
                 error = self.predictions - self.y_true
             else:
                 error = layer.backward_pass(error)
