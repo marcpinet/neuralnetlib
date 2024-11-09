@@ -5,6 +5,7 @@ from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d
+from neuralnetlib.regularizers import AdaptiveDropout
 
 
 class Layer:
@@ -258,39 +259,76 @@ class Activation(Layer):
 
 
 class Dropout(Layer):
-    def __init__(self, rate: float, seed: int = None, **kwargs):
-        self.rate = rate
-        self.mask = None
-        self.seed = seed
+    def __init__(self, 
+                 rate: float = 0.5,
+                 adaptive: bool = False,
+                 min_rate: float = 0.1,
+                 max_rate: float = 0.9,
+                 temperature: float = 1.0,
+                 random_state: int = None,
+                 **kwargs):
 
+        super().__init__()
+        self.rate = rate
+        self.adaptive = adaptive
+        self.random_state = random_state
+        self.mask = None
+        
+        if adaptive:
+            self.dropout_impl = AdaptiveDropout(
+                initial_rate=rate,
+                min_rate=min_rate,
+                max_rate=max_rate,
+                temperature=temperature,
+                random_state=random_state
+            )
+        else:
+            self.dropout_impl = None
+            
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def __str__(self) -> str:
+        if self.adaptive:
+            return f'Dropout(adaptive=True, initial_rate={self.rate})'
         return f'Dropout(rate={self.rate})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
-        if training:
-            rng = np.random.default_rng(self.seed)
-            self.mask = rng.binomial(
-                1, 1 - self.rate, size=input_data.shape) / (1 - self.rate)
-            return input_data * self.mask
-        else:
+        if not training:
             return input_data
+            
+        if self.adaptive:
+            return self.dropout_impl(input_data, training)
+            
+        rng = np.random.default_rng(self.random_state)
+        self.mask = rng.binomial(1, 1 - self.rate, 
+                                size=input_data.shape) / (1 - self.rate)
+        return input_data * self.mask
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if self.adaptive:
+            return self.dropout_impl.gradient(output_error)
         return output_error * self.mask
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'rate': self.rate,
-            'seed': self.seed
+            'adaptive': self.adaptive,
+            'random_state': self.random_state
         }
+        
+        if self.adaptive:
+            config.update(self.dropout_impl.get_config())
+            
+        return config
 
     @staticmethod
     def from_config(config: dict):
-        return Dropout(config['rate'], config['seed'])
+        adaptive = config.pop('adaptive', False)
+        if adaptive:
+            return Dropout(adaptive=True, **config)
+        return Dropout(**config)
 
 
 class Conv2D(Layer):
