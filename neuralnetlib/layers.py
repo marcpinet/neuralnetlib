@@ -136,30 +136,39 @@ class Dense(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input_shape = input_data.shape
+        self.input = input_data
 
         if len(input_data.shape) == 3:
             batch_size, timesteps, features = input_data.shape
-            input_data = input_data.mean(axis=1)
-
+            input_reshaped = input_data.reshape(-1, features)
+            
+            if self.weights is None:
+                self.initialize_weights(features)
+            
+            output = np.dot(input_reshaped, self.weights) + self.bias
+            
+            return output.reshape(batch_size, timesteps, self.units)
+        
         if self.weights is None:
             self.initialize_weights(input_data.shape[1])
-
-        self.input = input_data
-        output = np.dot(self.input, self.weights) + self.bias
-        return output
+        
+        return np.dot(input_data, self.weights) + self.bias
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if len(output_error.shape) == 3:
-            output_error = output_error.mean(axis=1)
-
+            batch_size, timesteps, _ = output_error.shape
+            output_error_reshaped = output_error.reshape(-1, output_error.shape[-1])
+            input_reshaped = self.input.reshape(-1, self.input.shape[-1])
+            
+            input_error = np.dot(output_error_reshaped, self.weights.T)
+            self.d_weights = np.dot(input_reshaped.T, output_error_reshaped)
+            self.d_bias = np.sum(output_error_reshaped, axis=0, keepdims=True)
+            
+            return input_error.reshape(batch_size, timesteps, -1)
+        
         input_error = np.dot(output_error, self.weights.T)
         self.d_weights = np.dot(self.input.T, output_error)
         self.d_bias = np.sum(output_error, axis=0, keepdims=True)
-
-        if len(self.input_shape) == 3:
-            input_error = np.expand_dims(input_error, 1)
-            input_error = np.repeat(input_error, self.input_shape[1], axis=1)
-
         return input_error
 
     def get_config(self) -> dict:
@@ -1680,7 +1689,7 @@ class Unidirectional(Layer):
 
 
 class Attention(Layer):
-    def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = True):
+    def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = False):
         super().__init__()
         self.use_scale = use_scale
         self.score_mode = score_mode
@@ -1714,7 +1723,7 @@ class Attention(Layer):
             context[i] = np.dot(attention_weights[i], input_data[i])
         
         if not self.return_sequences:
-            return np.mean(context, axis=1)
+            context = np.mean(context, axis=1)
         return context
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
