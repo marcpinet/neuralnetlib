@@ -2,6 +2,9 @@ import numpy as np
 
 from neuralnetlib.preprocessing import apply_threshold
 
+import numpy as np
+from neuralnetlib.preprocessing import apply_threshold
+
 class Metric:
     def __init__(self, name: str):
         if isinstance(name, str):
@@ -24,85 +27,116 @@ class Metric:
             raise ValueError(f"Metric {name} is not supported.")
     
     def __call__(self, y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-        return self.function(y_pred, y_true, threshold)
+        y_pred = np.asarray(y_pred)
+        y_true = np.asarray(y_true)
         
-    def from_name(self, name: str):
-        return Metric(name)
-    
-    def __name__(self):
-        return self.function.__name__
+        if y_pred.ndim == 1:
+            y_pred = y_pred.reshape(-1, 1)
+        
+        if y_true.ndim == 1:
+            y_true = y_true.reshape(-1, 1)
+            
+        return self.function(y_pred, y_true, threshold)
 
 def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-    if y_pred.ndim == 1 or y_pred.shape[1] == 1:  # Binary classification
-        y_pred_classes = apply_threshold(y_pred, threshold).ravel()
-    else:  # Multiclass classification-regression
-        y_pred_classes = np.argmax(y_pred, axis=1)
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+        
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int)
+        return np.mean(y_pred_classes == y_true)
+    
+    return np.mean(np.argmax(y_pred, axis=1) == np.argmax(y_true, axis=1))
 
-    if y_true.ndim == 1 or y_true.shape[1] == 1:  # If y_true is not one-hot encoded
-        y_true_classes = y_true.ravel()
-    else:
-        y_true_classes = np.argmax(y_true, axis=1)
+def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+        
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int)
+        true_positives = np.sum((y_pred_classes == 1) & (y_true == 1))
+        predicted_positives = np.sum(y_pred_classes == 1)
+        return true_positives / predicted_positives if predicted_positives > 0 else 0.0
+    
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    y_true_classes = np.argmax(y_true, axis=1)
+    classes = np.unique(y_true_classes)
+    
+    precisions = []
+    for cls in classes:
+        true_positives = np.sum((y_pred_classes == cls) & (y_true_classes == cls))
+        predicted_positives = np.sum(y_pred_classes == cls)
+        if predicted_positives > 0:
+            precisions.append(true_positives / predicted_positives)
+            
+    return np.mean(precisions) if precisions else 0.0
 
-    return np.mean(y_pred_classes == y_true_classes)
-
+def recall_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+        
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int)
+        true_positives = np.sum((y_pred_classes == 1) & (y_true == 1))
+        actual_positives = np.sum(y_true == 1)
+        return true_positives / actual_positives if actual_positives > 0 else 0.0
+    
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    y_true_classes = np.argmax(y_true, axis=1)
+    classes = np.unique(y_true_classes)
+    
+    recalls = []
+    for cls in classes:
+        true_positives = np.sum((y_pred_classes == cls) & (y_true_classes == cls))
+        actual_positives = np.sum(y_true_classes == cls)
+        if actual_positives > 0:
+            recalls.append(true_positives / actual_positives)
+            
+    return np.mean(recalls) if recalls else 0.0
 
 def f1_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     precision = precision_score(y_pred, y_true, threshold)
     recall = recall_score(y_pred, y_true, threshold)
-    return 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-
-def recall_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-    y_pred_labels = apply_threshold(y_pred, threshold) if y_pred.shape[1] == 1 else np.argmax(y_pred, axis=1)
-    y_true_labels = y_true if y_true.ndim == 1 or y_true.shape[1] == 1 else np.argmax(y_true, axis=1)
-    classes = np.unique(y_true_labels)
-    recall_scores = []
-
-    for cls in classes:
-        tp = np.sum((y_pred_labels == cls) & (y_true_labels == cls))
-        fn = np.sum((y_pred_labels != cls) & (y_true_labels == cls))
-
-        recall = tp / (tp + fn) if tp + fn != 0 else 0
-        recall_scores.append(recall)
-
-    return np.mean(recall_scores)
-
-
-def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-    y_pred_labels = apply_threshold(y_pred, threshold) if y_pred.shape[1] == 1 else np.argmax(y_pred, axis=1)
-    y_true_labels = y_true if y_true.ndim == 1 or y_true.shape[1] == 1 else np.argmax(y_true, axis=1)
-    classes = np.unique(y_true_labels)
-    precision_scores = []
-
-    for cls in classes:
-        tp = np.sum((y_pred_labels == cls) & (y_true_labels == cls))
-        fp = np.sum((y_pred_labels == cls) & (y_true_labels != cls))
-
-        precision = tp / (tp + fp) if tp + fp != 0 else 0
-        precision_scores.append(precision)
-
-    return np.mean(precision_scores)
-
+    
+    return 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
 def confusion_matrix(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-    if y_pred.ndim == 1 or y_pred.shape[1] == 1:  # Binary classification
-        y_pred_classes = apply_threshold(y_pred, threshold).ravel()
-    else:  # Multiclass classification-regression
-        y_pred_classes = np.argmax(y_pred, axis=1)
-
-    if y_true.ndim == 1 or y_true.shape[1] == 1:  # If y_true is not one-hot encoded
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+        
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
         y_true_classes = y_true.ravel()
     else:
+        y_pred_classes = np.argmax(y_pred, axis=1)
         y_true_classes = np.argmax(y_true, axis=1)
-
-    classes = np.unique(np.concatenate((y_true_classes, y_pred_classes)))
-    num_classes = len(classes)
-
-    cm = np.zeros((num_classes, num_classes), dtype=int)
-
+    
+    classes = np.unique(np.concatenate([y_true_classes, y_pred_classes]))
+    n_classes = len(classes)
+    
+    cm = np.zeros((n_classes, n_classes), dtype=int)
+    
     for i in range(len(y_true_classes)):
-        true_class = y_true_classes[i]
-        pred_class = y_pred_classes[i]
-        cm[true_class, pred_class] += 1
-
+        cm[y_true_classes[i], y_pred_classes[i]] += 1
+        
     return cm
