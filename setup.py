@@ -2,12 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name='neuralnetlib',
-    version='3.0.8',
+    version='3.1.0',
     author='Marc Pinet',
-    description='A simple convolutional neural network library with only numpy as dependency',
+    description='A flexible deep learning framework built from scratch using only NumPy',
     long_description=open('README.md', encoding="utf-8").read(),
     long_description_content_type='text/markdown',
-    url='https://github.com/marcpinet/handmade-neuralnetwork',
+    url='https://github.com/marcpinet/neuralnetlib',
     packages=find_packages(),
     install_requires=[
         'numpy',
