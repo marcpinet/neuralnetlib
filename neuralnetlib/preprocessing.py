@@ -1,6 +1,11 @@
-import numpy as np
+
 import re
+import random
+import numpy as np
+from enum import Enum, auto
+from collections import defaultdict
 from collections.abc import Generator
+
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
     """One hot encoded labels are binary vectors representing categorical values,
@@ -477,3 +482,148 @@ class CountVectorizer:
 
     def get_vocabulary(self) -> dict:
         return dict(sorted(self.vocabulary_.items(), key=lambda x: x[1]))
+    
+
+
+class TokenType(Enum):
+    CHAR = auto()
+    WORD = auto()
+
+class NGram:
+    def __init__(self, 
+                 n: int = 3, 
+                 token_type: TokenType = TokenType.CHAR,
+                 start_token: str = '$', 
+                 end_token: str = '^',
+                 separator: str = ' '):
+        
+        self.n = n
+        self.token_type = token_type
+        self.start_token = start_token
+        self.end_token = end_token
+        self.separator = separator
+        self.ngrams = defaultdict(list)
+        self.transitions = defaultdict(list)
+        
+    def _tokenize(self, text: str) -> list[str]:
+        if self.token_type == TokenType.CHAR:
+            return list(text)
+        return text.split(self.separator)
+        
+    def _join_tokens(self, tokens: list[str]) -> str:
+        if self.token_type == TokenType.CHAR:
+            return ''.join(tokens)
+        return self.separator.join(tokens)
+    
+    def _process_sequence(self, text: str) -> list[str]:
+        tokens = self._tokenize(text)
+        return ([self.start_token] * (self.n - 1)) + tokens + [self.end_token]
+        
+    def fit(self, sequences: list[str]) -> "NGram":
+        self.ngrams.clear()
+        self.transitions.clear()
+        
+        for sequence in sequences:
+            processed_seq = self._process_sequence(sequence)
+            
+            for i in range(len(processed_seq) - self.n + 1):
+                context = tuple(processed_seq[i:i + self.n - 1])
+                target = processed_seq[i + self.n - 1]
+                self.ngrams[context].append(target)
+            
+            tokens = self._tokenize(sequence)
+            for i in range(len(tokens) - 1):
+                current_token = tokens[i]
+                next_token = tokens[i + 1]
+                
+                if (current_token != self.start_token and 
+                    current_token != self.end_token and 
+                    next_token != self.start_token and 
+                    next_token != self.end_token):
+                    self.transitions[current_token].append(next_token)
+                
+        return self
+        
+    def _get_random_start(self) -> list[str]:
+        if self.token_type == TokenType.CHAR:
+            return [self.start_token] * (self.n - 1)
+        
+        start_contexts = [
+            context for context in self.ngrams.keys()
+            if (context[0] == self.start_token and 
+                self.end_token not in context)
+        ]
+        
+        if not start_contexts:
+            return [self.start_token] * (self.n - 1)
+            
+        chosen_context = random.choice(start_contexts)
+        return list(chosen_context)
+        
+    def generate_sequence(self, min_length: int = 5, max_length: int = None, variability: float = 0.3) -> str:
+        if not self.ngrams:
+            raise ValueError("Model not trained. Call fit() first.")
+            
+        max_attempts = 100
+        attempt = 0
+        
+        while attempt < max_attempts:
+            attempt += 1
+            current = self._get_random_start()
+            
+            while True:
+                context = tuple(current[-(self.n-1):])
+                
+                if context not in self.ngrams:
+                    if (self.token_type == TokenType.WORD and 
+                        current[-1] in self.transitions):
+                        next_token = random.choice(self.transitions[current[-1]])
+                        current.append(next_token)
+                        continue
+                    break
+                    
+                next_token = random.choice(self.ngrams[context])
+                current.append(next_token)
+                
+                if next_token == self.end_token:
+                    sequence = current[(self.n-1):-1]
+                    if len(sequence) >= min_length:
+                        if max_length is None or len(sequence) <= max_length:
+                            result = self._join_tokens(sequence)
+                            if self.token_type == TokenType.WORD:
+                                result = result.capitalize()
+                            return result
+                    break
+                
+                if max_length and len(current) - (self.n-1) > max_length:
+                    break
+                    
+                if (self.token_type == TokenType.WORD and 
+                    random.random() < variability and 
+                    current[-1] in self.transitions):
+                    next_token = random.choice(self.transitions[current[-1]])
+                    current.append(next_token)
+        
+        raise ValueError(f"Could not generate a sequence after {max_attempts} attempts.")
+    
+    def generate_sequences(self, 
+                         n_sequences: int = 20, 
+                         min_length: int = 5, 
+                         max_length: int = None) -> list[str]:
+        sequences = []
+        attempts = 0
+        max_attempts = n_sequences * 2
+        
+        while len(sequences) < n_sequences and attempts < max_attempts:
+            attempts += 1
+            try:
+                sequence = self.generate_sequence(min_length, max_length)
+                if sequence not in sequences:
+                    sequences.append(sequence)
+            except ValueError:
+                continue
+                
+        return sequences
+    
+    def get_contexts(self) -> dict:
+        return dict(self.ngrams)
