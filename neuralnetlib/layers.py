@@ -1385,11 +1385,10 @@ class Reshape(Layer):
         return Reshape(config['target_shape'])
 
 
-class LSTMCell:
-    def __init__(self, units: int, random_state: int | None = None, clip_value: float = 5.0):
+class LSTMCell(Layer):
+    def __init__(self, units: int, random_state: int | None = None):
         self.units = units
         self.random_state = random_state
-        self.clip_value = clip_value
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
         
@@ -1435,7 +1434,7 @@ class LSTMCell:
 
         # Initialize gradients
         self._init_gradients()
-        
+
     def _init_gradients(self):
         if self.Wf is not None:
             self.dWf = np.zeros_like(self.Wf)
@@ -1453,46 +1452,29 @@ class LSTMCell:
             self.dWo = np.zeros_like(self.Wo)
             self.dUo = np.zeros_like(self.Uo)
             self.dbo = np.zeros_like(self.bo)
-            
-    def orthogonal_init(self, shape):
-        if len(shape) < 2:
-            return self.rng.normal(0, 1, shape)
-        flat_shape = (shape[0], np.prod(shape[1:]))
-        a = self.rng.normal(0, 1, flat_shape)
-        u, _, vt = np.linalg.svd(a, full_matrices=False)
-        q = u if u.shape == flat_shape else vt
-        q = q.reshape(shape)
-        return q
 
     def forward(self, x_t: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.Wf is None:
             self.initialize_weights(x_t.shape[1])
 
-        # Store inputs for backprop
         self.x_t = x_t
         self.h_prev = h_prev
         self.c_prev = c_prev
 
-        # Forget gate
         self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev, self.Uf) + self.bf
         self.f_t = self.sigmoid(self.f_gate_input)
 
-        # Input gate
         self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev, self.Ui) + self.bi
         self.i_t = self.sigmoid(self.i_gate_input)
 
-        # Cell candidate
         self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev, self.Uc) + self.bc
         self.c_tilde = np.tanh(self.c_gate_input)
 
-        # Cell state
         self.c_t = self.f_t * c_prev + self.i_t * self.c_tilde
 
-        # Output gate
         self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev, self.Uo) + self.bo
         self.o_t = self.sigmoid(self.o_gate_input)
 
-        # Hidden state
         self.c_t_tanh = np.tanh(self.c_t)
         self.h_t = self.o_t * self.c_t_tanh
 
@@ -1513,7 +1495,7 @@ class LSTMCell:
             'h_t': self.h_t
         }
 
-        return self.h_t, self.c_t   
+        return self.h_t, self.c_t
 
     def backward(self, dh_next: np.ndarray, dc_next: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         x_t = self.cache['x_t']
@@ -1526,52 +1508,30 @@ class LSTMCell:
         c_t = self.cache['c_t']
         c_t_tanh = self.cache['c_t_tanh']
 
-        # Clip incoming gradients
-        dh_next = self.clip_gradients(dh_next)
-        dc_next = self.clip_gradients(dc_next)
-
-        # Gradients of the hidden and cell states
         do = dh_next * c_t_tanh
         dc = dc_next + dh_next * o_t * (1 - c_t_tanh ** 2)
-        
-        # Clip cell state gradients
-        dc = self.clip_gradients(dc)
 
-        # Output gate gradients
         do_input = do * o_t * (1 - o_t)
-        do_input = self.clip_gradients(do_input)
         self.dWo += np.dot(x_t.T, do_input)
         self.dUo += np.dot(h_prev.T, do_input)
         self.dbo += np.sum(do_input, axis=0, keepdims=True)
 
-        # Cell state gradients
         dc_prev = dc * f_t
         df = dc * c_prev
         di = dc * c_tilde
         dc_tilde = dc * i_t
 
-        # Clip all gate gradients
-        df = self.clip_gradients(df)
-        di = self.clip_gradients(di)
-        dc_tilde = self.clip_gradients(dc_tilde)
-
-        # Forget gate gradients
         df_input = df * f_t * (1 - f_t)
-        df_input = self.clip_gradients(df_input)
         self.dWf += np.dot(x_t.T, df_input)
         self.dUf += np.dot(h_prev.T, df_input)
         self.dbf += np.sum(df_input, axis=0, keepdims=True)
 
-        # Input gate gradients
         di_input = di * i_t * (1 - i_t)
-        di_input = self.clip_gradients(di_input)
         self.dWi += np.dot(x_t.T, di_input)
         self.dUi += np.dot(h_prev.T, di_input)
         self.dbi += np.sum(di_input, axis=0, keepdims=True)
 
-        # Cell candidate gradients
         dc_tilde_input = dc_tilde * (1 - c_tilde ** 2)
-        dc_tilde_input = self.clip_gradients(dc_tilde_input)
         self.dWc += np.dot(x_t.T, dc_tilde_input)
         self.dUc += np.dot(h_prev.T, dc_tilde_input)
         self.dbc += np.sum(dc_tilde_input, axis=0, keepdims=True)
@@ -1586,25 +1546,19 @@ class LSTMCell:
                    np.dot(dc_tilde_input, self.Uc.T) +
                    np.dot(do_input, self.Uo.T))
 
-        dx = self.clip_gradients(dx)
-        dh_prev = self.clip_gradients(dh_prev)
-        dc_prev = self.clip_gradients(dc_prev)
-
         return dx, dh_prev, dc_prev
 
-    def get_config(self) -> dict:
-        return {
-            'input_dim': self.input_dim,
-            'units': self.units,
-            'random_state': self.random_state,
-            'clip_value': self.clip_value
-        }
-
-    def clip_gradients(self, gradient: np.ndarray) -> np.ndarray:
-        return np.clip(gradient, -self.clip_value, self.clip_value)
+    def orthogonal_init(self, shape):
+        if len(shape) < 2:
+            return self.rng.normal(0, 1, shape)
+        flat_shape = (shape[0], np.prod(shape[1:]))
+        a = self.rng.normal(0, 1, flat_shape)
+        u, _, vt = np.linalg.svd(a, full_matrices=False)
+        q = u if u.shape == flat_shape else vt
+        q = q.reshape(shape)
+        return q
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
-        EPSILON_SIGMOID = 1e-12
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
@@ -1616,13 +1570,13 @@ class LSTM(Layer):
         self.return_sequences = return_sequences
         self.return_state = return_state
         self.random_state = random_state
+        self.clip_value = clip_value
         self.initialized = False
         self.cell = None
         self.last_h = None
         self.last_c = None
         self.cache = None
         self.input_shape = None
-        self.clip_value = clip_value
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -1631,16 +1585,21 @@ class LSTM(Layer):
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state}, clip_value={self.clip_value})'
 
     def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if x.ndim != 3:
+            raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
+        
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
-
+        
+        if not hasattr(self, '_zeros_template') or self._zeros_template.shape[0] != batch_size:
+            self._zeros_template = np.zeros((batch_size, self.units))
+        h = self._zeros_template.copy()
+        c = self._zeros_template.copy()
+        
         if not self.initialized:
-            self.cell = LSTMCell(self.units, self.random_state, self.clip_value)
+            self.cell = LSTMCell(self.units, self.random_state)
             self.cell.initialize_weights(input_dim)
             self.initialized = True
-
-        h = np.zeros((batch_size, self.units))
-        c = np.zeros((batch_size, self.units))
 
         all_h = []
         all_c = []
@@ -1680,13 +1639,31 @@ class LSTM(Layer):
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
 
+        self.cell._init_gradients()
+        
+        squared_norm_sum = 0.0
+
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
-            dh = np.clip(dh, -self.clip_value, self.clip_value)
             
             self.cell.cache = self.cache[t]
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
             dx[:, t, :] = dx_t
+            
+            squared_norm_sum += (np.sum(dx_t**2) + 
+                            np.sum(self.cell.dWf**2) + np.sum(self.cell.dUf**2) + np.sum(self.cell.dbf**2) +
+                            np.sum(self.cell.dWi**2) + np.sum(self.cell.dUi**2) + np.sum(self.cell.dbi**2) +
+                            np.sum(self.cell.dWc**2) + np.sum(self.cell.dUc**2) + np.sum(self.cell.dbc**2) +
+                            np.sum(self.cell.dWo**2) + np.sum(self.cell.dUo**2) + np.sum(self.cell.dbo**2))
+            
+        global_norm = np.sqrt(squared_norm_sum)
+
+        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8)) / timesteps
+        if scaling_factor < 1.0:  # Only scale if necessary
+            dx *= scaling_factor
+            for grad in self.cell.__dict__:
+                if grad.startswith('d'):
+                    setattr(self.cell, grad, getattr(self.cell, grad) * scaling_factor)
 
         return dx
 
@@ -1985,7 +1962,6 @@ class GRUCell:
         return np.clip(gradient, -self.clip_value, self.clip_value)
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
-        EPSILON_SIGMOID = 1e-12
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
@@ -2009,15 +1985,21 @@ class GRU(Layer):
         return f'GRU(units={self.units}, return_sequences={self.return_sequences}, random_state={self.random_state}, clip_value={self.clip_value})'
 
     def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+        if x.ndim != 3:
+            raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
-
+        
+        if not hasattr(self, '_zeros_template') or self._zeros_template.shape[0] != batch_size:
+                self._zeros_template = np.zeros((batch_size, self.units))
+        
+        h = self._zeros_template.copy()
+        
         if not self.initialized:
             self.cell = GRUCell(self.units, self.random_state, self.clip_value)
             self.cell.initialize_weights(input_dim)
             self.initialized = True
 
-        h = np.zeros((batch_size, self.units))
         all_h = []
         self.cache = []
 
@@ -2046,13 +2028,29 @@ class GRU(Layer):
         dx = np.zeros((batch_size, timesteps, input_dim))
         dh_next = np.zeros((batch_size, self.units))
 
+        self.cell._init_gradients()
+        
+        squared_norm_sum = 0.0
+
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
-            dh = np.clip(dh, -self.clip_value, self.clip_value)
             
             self.cell.cache = self.cache[t]
             dx_t, dh_next = self.cell.backward(dh)
             dx[:, t, :] = dx_t
+            
+            squared_norm_sum += (np.sum(dx_t**2) + 
+                            np.sum(self.cell.dWr**2) + np.sum(self.cell.dUr**2) + np.sum(self.cell.dbr**2) +
+                            np.sum(self.cell.dWz**2) + np.sum(self.cell.dUz**2) + np.sum(self.cell.dbz**2) +
+                            np.sum(self.cell.dWh**2) + np.sum(self.cell.dUh**2) + np.sum(self.cell.dbh**2))
+
+        global_norm = np.sqrt(squared_norm_sum)
+        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8)) / timesteps
+        if scaling_factor < 1.0:
+            dx *= scaling_factor
+            for grad in self.cell.__dict__:
+                if grad.startswith('d'):
+                    setattr(self.cell, grad, getattr(self.cell, grad) * scaling_factor)
 
         return dx
 
