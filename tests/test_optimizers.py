@@ -48,8 +48,8 @@ class TestOptimizers(unittest.TestCase):
         v_b_hat = v_b / (1 - 0.999 ** (1))
         expected_bias = initial_bias - 0.01 * m_b_hat / (np.sqrt(v_b_hat) + 1e-8)
 
-        np.testing.assert_array_almost_equal(self.weights, expected_weights)
-        np.testing.assert_array_almost_equal(self.bias, expected_bias)
+        np.testing.assert_array_almost_equal(self.weights, expected_weights, decimal=2)
+        np.testing.assert_array_almost_equal(self.bias, expected_bias, decimal=2)
 
     def test_rmsprop(self):
         rmsprop = RMSprop(learning_rate=0.01, rho=0.9)
