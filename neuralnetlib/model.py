@@ -8,7 +8,7 @@ import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, Bidirectional, Embedding, Attention, Dense
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
@@ -83,33 +83,44 @@ class Model:
 
     def backward_pass(self, error: np.ndarray):
         for i, layer in enumerate(reversed(self.layers)):
-            if i == 0 and isinstance(layer, Activation) and type(layer.activation_function).__name__ == "Softmax" and (
-                        isinstance(self.loss_function, CategoricalCrossentropy or isinstance(self.loss_function, SparseCategoricalCrossentropy))):
-                error = self.predictions - self.y_true
+            if i == 0 and isinstance(layer, Activation):
+                if (type(layer.activation_function).__name__ == "Softmax" and 
+                    (isinstance(self.loss_function, CategoricalCrossentropy))):
+                    error = self.predictions - self.y_true
+
+                elif (type(layer.activation_function).__name__ == "Sigmoid" and 
+                    isinstance(self.loss_function, BinaryCrossentropy)):
+                    error = (self.predictions - self.y_true) / (self.predictions * (1 - self.predictions) + 1e-15)
+
+                elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
+                    y_true_one_hot = np.zeros_like(self.predictions)
+                    y_true_one_hot[np.arange(len(self.y_true)), self.y_true] = 1
+                    error = self.predictions - y_true_one_hot
             else:
                 error = layer.backward_pass(error)
 
-            if hasattr(layer, 'weights'):
-                if hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
-                    self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias,
-                                          layer.d_bias)
-                elif hasattr(layer, 'd_weights'):
-                    self.optimizer.update(
-                        len(self.layers) - 1 - i, layer.weights, layer.d_weights)
-                    
-            elif isinstance(layer, LSTM):
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wf, layer.cell.dWf, layer.cell.bf, layer.cell.dbf)
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wi, layer.cell.dWi, layer.cell.bi, layer.cell.dbi)
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wc, layer.cell.dWc, layer.cell.bc, layer.cell.dbc)
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wo, layer.cell.dWo, layer.cell.bo, layer.cell.dbo)
+            if isinstance(layer, LSTM):
+                layer_idx = len(self.layers) - 1 - i
+                cell = layer.cell
+                self.optimizer.update(layer_idx, cell.Wf, cell.dWf, cell.bf, cell.dbf)
+                self.optimizer.update(layer_idx, cell.Wi, cell.dWi, cell.bi, cell.dbi)
+                self.optimizer.update(layer_idx, cell.Wc, cell.dWc, cell.bc, cell.dbc)
+                self.optimizer.update(layer_idx, cell.Wo, cell.dWo, cell.bo, cell.dbo)
+            
             elif isinstance(layer, GRU):
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wz, layer.cell.dWz, layer.cell.bz, layer.cell.dbz)
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wr, layer.cell.dWr, layer.cell.br, layer.cell.dbr)
-                self.optimizer.update(len(self.layers) - 1 - i, layer.cell.Wh, layer.cell.dWh, layer.cell.bh, layer.cell.dbh)
-            elif hasattr(layer, 'd_weights') and hasattr(layer, 'd_bias'):
-                self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights, layer.bias, layer.d_bias)
-            elif hasattr(layer, 'd_weights'):
-                self.optimizer.update(len(self.layers) - 1 - i, layer.weights, layer.d_weights)
+                layer_idx = len(self.layers) - 1 - i
+                cell = layer.cell
+                self.optimizer.update(layer_idx, cell.Wz, cell.dWz, cell.bz, cell.dbz)
+                self.optimizer.update(layer_idx, cell.Wr, cell.dWr, cell.br, cell.dbr)
+                self.optimizer.update(layer_idx, cell.Wh, cell.dWh, cell.bh, cell.dbh)
+            
+            elif hasattr(layer, 'weights'):
+                layer_idx = len(self.layers) - 1 - i
+                if hasattr(layer, 'd_bias'):
+                    self.optimizer.update(layer_idx, layer.weights, layer.d_weights, 
+                                        layer.bias, layer.d_bias)
+                else:
+                    self.optimizer.update(layer_idx, layer.weights, layer.d_weights)
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch

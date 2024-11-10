@@ -130,7 +130,8 @@ class Adam(Optimizer):
         self.epsilon = epsilon
         self.clip_norm = clip_norm
         self.clip_value = clip_value
-        self.t = 0
+        self.t = 1
+        self.needs_time_increment = True
         
         self.m_w, self.v_w = {}, {}
         self.m_b, self.v_b = {}, {}
@@ -159,14 +160,11 @@ class Adam(Optimizer):
         m = self.beta_1 * m + (1 - self.beta_1) * grad
         v = self.beta_2 * v + (1 - self.beta_2) * np.square(grad)
         
-        beta1_t = np.minimum(self.beta_1 ** self.t, 1 - self._min_denom)
-        beta2_t = np.minimum(self.beta_2 ** self.t, 1 - self._min_denom)
+        m_hat = m / (1 - self.beta_1 ** self.t)
+        v_hat = v / (1 - self.beta_2 ** self.t)
         
-        m_hat = m / (1 - beta1_t)
-        v_hat = v / (1 - beta2_t)
-        
-        denom = np.sqrt(v_hat) + self.epsilon
-        update = self.learning_rate * m_hat / np.maximum(denom, self._min_denom)
+        denom = np.sqrt(v_hat + self.epsilon)
+        update = self.learning_rate * m_hat / denom
         
         update = np.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
         param -= update
@@ -174,21 +172,30 @@ class Adam(Optimizer):
         return param, m, v
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray, bias_grad: np.ndarray) -> None:
+        if weights_grad is None and bias_grad is None:
+            return
+            
         if layer_index not in self.m_w:
-            self.m_w[layer_index] = np.zeros_like(weights)
-            self.v_w[layer_index] = np.zeros_like(weights)
-            self.m_b[layer_index] = np.zeros_like(bias)
-            self.v_b[layer_index] = np.zeros_like(bias)
+            if weights is not None:
+                self.m_w[layer_index] = np.zeros_like(weights)
+                self.v_w[layer_index] = np.zeros_like(weights)
+            if bias is not None:
+                self.m_b[layer_index] = np.zeros_like(bias)
+                self.v_b[layer_index] = np.zeros_like(bias)
 
-        self.t += 1
+        if self.needs_time_increment:
+            self.t += 1
+            self.needs_time_increment = False
+
+        if weights is not None:
+            weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
+                weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
+            )
         
-        weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
-            weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
-        )
-        
-        bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
-            bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
-        )
+        if bias is not None:
+            bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
+                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
+            )
 
     def get_config(self) -> dict:
         return {

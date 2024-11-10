@@ -1657,9 +1657,8 @@ class LSTM(Layer):
                             np.sum(self.cell.dWo**2) + np.sum(self.cell.dUo**2) + np.sum(self.cell.dbo**2))
             
         global_norm = np.sqrt(squared_norm_sum)
-
-        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8)) / timesteps
-        if scaling_factor < 1.0:  # Only scale if necessary
+        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
+        if scaling_factor < 1.0:
             dx *= scaling_factor
             for grad in self.cell.__dict__:
                 if grad.startswith('d'):
@@ -1709,43 +1708,54 @@ class Bidirectional(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         self.forward_output = self.forward_layer.forward_pass(
             input_data, training)
+        
         backward_input = input_data[:, ::-1, :]
         self.backward_output = self.backward_layer.forward_pass(
             backward_input, training)
 
         if isinstance(self.forward_output, tuple):
-            forward_seq, forward_h, forward_c = self.forward_output
-            backward_seq, backward_h, backward_c = self.backward_output
-
             if self.forward_layer.return_sequences:
+                forward_seq, forward_h, forward_c = self.forward_output
+                backward_seq, backward_h, backward_c = self.backward_output
+                
                 backward_seq = backward_seq[:, ::-1, :]
-                return np.concatenate([forward_seq, backward_seq], axis=-1), \
-                    np.concatenate([forward_h, backward_h], axis=-1), \
-                    np.concatenate([forward_c, backward_c], axis=-1)
+                
+                combined_seq = np.concatenate([forward_seq, backward_seq], axis=-1)
+                combined_h = np.concatenate([forward_h, backward_h], axis=-1)
+                combined_c = np.concatenate([forward_c, backward_c], axis=-1)
+                
+                return combined_seq, combined_h, combined_c
             else:
-                return np.concatenate([forward_h, backward_h], axis=-1)
+                forward_h, _, forward_c = self.forward_output
+                backward_h, _, backward_c = self.backward_output
+                combined_h = np.concatenate([forward_h, backward_h], axis=-1)
+                combined_c = np.concatenate([forward_c, backward_c], axis=-1)
+                return combined_h, combined_h, combined_c
         else:
             if self.forward_layer.return_sequences:
-                self.backward_output = self.backward_output[:, ::-1, :]
-            return np.concatenate([self.forward_output, self.backward_output], axis=-1)
+                backward_seq = self.backward_output[:, ::-1, :]
+                return np.concatenate([self.forward_output, backward_seq], axis=-1)
+            else:
+                return np.concatenate([self.forward_output, self.backward_output], axis=-1)
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         forward_dim = output_error.shape[-1] // 2
-
+        
         if len(output_error.shape) == 3:
             forward_error = output_error[:, :, :forward_dim]
             backward_error = output_error[:, :, forward_dim:]
+            
             backward_error = backward_error[:, ::-1, :]
         else:
             forward_error = output_error[:, :forward_dim]
             backward_error = output_error[:, forward_dim:]
-
+        
         forward_dx = self.forward_layer.backward_pass(forward_error)
         backward_dx = self.backward_layer.backward_pass(backward_error)
-
+        
         if len(output_error.shape) == 3:
             backward_dx = backward_dx[:, ::-1, :]
-
+        
         return forward_dx + backward_dx
 
     def get_config(self) -> dict:
@@ -2045,7 +2055,7 @@ class GRU(Layer):
                             np.sum(self.cell.dWh**2) + np.sum(self.cell.dUh**2) + np.sum(self.cell.dbh**2))
 
         global_norm = np.sqrt(squared_norm_sum)
-        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8)) / timesteps
+        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
         if scaling_factor < 1.0:
             dx *= scaling_factor
             for grad in self.cell.__dict__:
@@ -2122,7 +2132,7 @@ class Attention(Layer):
         input_data = self.cache['input']
         
         if not self.return_sequences:
-            output_error = np.expand_dims(output_error, 1) / seq_length
+            output_error = np.expand_dims(output_error, 1)
             output_error = np.repeat(output_error, seq_length, axis=1)
 
         d_input = np.zeros((batch_size, seq_length, features))
