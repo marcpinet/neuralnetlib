@@ -17,12 +17,18 @@ from neuralnetlib.callbacks import EarlyStopping
 
 
 class Model:
-    def __init__(self):
+    def __init__(self, gradient_clip_threshold: float = 5.0, 
+             enable_padding: bool = False,
+             padding_size: int = 32):
+        
         self.layers = []
         self.loss_function = None
         self.optimizer = None
         self.y_true = None
         self.predictions = None
+        self.gradient_clip_threshold = gradient_clip_threshold
+        self.enable_padding = enable_padding
+        self.padding_size = padding_size
 
     def __str__(self) -> str:
         model_summary = 'Model\n'
@@ -74,53 +80,92 @@ class Model:
             print(str(self))
 
     def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
+        if self.enable_padding:
+            original_shape = X.shape
+            padded_shape = ((original_shape[0] + self.padding_size - 1) // 
+                        self.padding_size * self.padding_size,) + original_shape[1:]
+            
+            if padded_shape != original_shape:
+                padded_X = np.zeros(padded_shape, dtype=X.dtype)
+                padded_X[:original_shape[0]] = X
+                X = padded_X
+
         for layer in self.layers:
             if isinstance(layer, (Dropout, LSTM, Bidirectional, GRU)):
                 X = layer.forward_pass(X, training)
             else:
                 X = layer.forward_pass(X)
+
+        if self.enable_padding and padded_shape != original_shape:
+            X = X[:original_shape[0]]
+            
         return X
 
     def backward_pass(self, error: np.ndarray):
+        def clip_gradients(gradient: np.ndarray) -> np.ndarray:
+            if self.gradient_clip_threshold > 0:
+                grad_norm = np.linalg.norm(gradient)
+                if grad_norm > self.gradient_clip_threshold:
+                    return gradient * (self.gradient_clip_threshold / grad_norm)
+            return gradient
+
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
                 if (type(layer.activation_function).__name__ == "Softmax" and 
-                    (isinstance(self.loss_function, CategoricalCrossentropy))):
+                    isinstance(self.loss_function, CategoricalCrossentropy)):
                     error = self.predictions - self.y_true
 
                 elif (type(layer.activation_function).__name__ == "Sigmoid" and 
                     isinstance(self.loss_function, BinaryCrossentropy)):
-                    error = (self.predictions - self.y_true) / (self.predictions * (1 - self.predictions) + 1e-15)
+                    error = (self.predictions - self.y_true) / (self.predictions * 
+                                                            (1 - self.predictions) + 1e-15)
 
                 elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
                     y_true_one_hot = np.zeros_like(self.predictions)
                     y_true_one_hot[np.arange(len(self.y_true)), self.y_true] = 1
                     error = self.predictions - y_true_one_hot
             else:
+                error = clip_gradients(error)
                 error = layer.backward_pass(error)
 
+            layer_idx = len(self.layers) - 1 - i
+            
             if isinstance(layer, LSTM):
-                layer_idx = len(self.layers) - 1 - i
                 cell = layer.cell
-                self.optimizer.update(layer_idx, cell.Wf, cell.dWf, cell.bf, cell.dbf)
-                self.optimizer.update(layer_idx, cell.Wi, cell.dWi, cell.bi, cell.dbi)
-                self.optimizer.update(layer_idx, cell.Wc, cell.dWc, cell.bc, cell.dbc)
-                self.optimizer.update(layer_idx, cell.Wo, cell.dWo, cell.bo, cell.dbo)
-            
+                for grad_pair in [(cell.dWf, cell.dbf), (cell.dWi, cell.dbi),
+                                (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
+                    weight_grad, bias_grad = grad_pair
+                    clipped_weight_grad = clip_gradients(weight_grad)
+                    clipped_bias_grad = clip_gradients(bias_grad)
+                    
+                self.optimizer.update(layer_idx, cell.Wf, clipped_weight_grad, 
+                                    cell.bf, clipped_bias_grad)
+                self.optimizer.update(layer_idx, cell.Wi, clip_gradients(cell.dWi), 
+                                    cell.bi, clip_gradients(cell.dbi))
+                self.optimizer.update(layer_idx, cell.Wc, clip_gradients(cell.dWc), 
+                                    cell.bc, clip_gradients(cell.dbc))
+                self.optimizer.update(layer_idx, cell.Wo, clip_gradients(cell.dWo), 
+                                    cell.bo, clip_gradients(cell.dbo))
+                
             elif isinstance(layer, GRU):
-                layer_idx = len(self.layers) - 1 - i
                 cell = layer.cell
-                self.optimizer.update(layer_idx, cell.Wz, cell.dWz, cell.bz, cell.dbz)
-                self.optimizer.update(layer_idx, cell.Wr, cell.dWr, cell.br, cell.dbr)
-                self.optimizer.update(layer_idx, cell.Wh, cell.dWh, cell.bh, cell.dbh)
-            
+                # Clipper et mettre à jour les gradients GRU
+                self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz), 
+                                    cell.bz, clip_gradients(cell.dbz))
+                self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr), 
+                                    cell.br, clip_gradients(cell.dbr))
+                self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh), 
+                                    cell.bh, clip_gradients(cell.dbh))
+                
             elif hasattr(layer, 'weights'):
-                layer_idx = len(self.layers) - 1 - i
+                # Clipper et mettre à jour les gradients des couches standards
+                clipped_weights_grad = clip_gradients(layer.d_weights)
                 if hasattr(layer, 'd_bias'):
-                    self.optimizer.update(layer_idx, layer.weights, layer.d_weights, 
-                                        layer.bias, layer.d_bias)
+                    clipped_bias_grad = clip_gradients(layer.d_bias)
+                    self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad,
+                                        layer.bias, clipped_bias_grad)
                 else:
-                    self.optimizer.update(layer_idx, layer.weights, layer.d_weights)
+                    self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad)
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch
