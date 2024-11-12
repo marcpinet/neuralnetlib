@@ -2,11 +2,11 @@
 
 ## 📝 Description
 
-This is a handmade convolutional neural network library, made in python, **using numpy as the only dependency**.
+This is a handmade deep learning framework library, made in python, **using numpy as its only external dependency**.
 
 I made it to challenge myself and to learn more about deep neural networks, how they work _in depth_.
 
-The big part of this project, meaning the [Multilayer (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in 4 hours and a half.
+The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in 4 hours and a half.
 
 I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network) and [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network).
 
@@ -18,7 +18,7 @@ And, of course, I intend to improve the neural networks and add more features in
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
 - Many optimizers (sgd, momentum, rmsprop, adam) 📊
-- Supports binary classification, multiclass classification and regression 📖
+- Supports binary classification, multiclass classification, regression and text generation 📚
 - Save and load models 📁
 - Simple to use 📚
 
