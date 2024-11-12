@@ -3,7 +3,7 @@ import tkinter as tk
 import numpy as np
 from PIL import Image, ImageDraw
 
-from neuralnetlib.modelss import Model
+from neuralnetlib.models import Model
 
 
 def main():

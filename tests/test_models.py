@@ -4,7 +4,7 @@ import numpy as np
 
 from neuralnetlib.activations import Sigmoid
 from neuralnetlib.layers import Input, Dense
-from neuralnetlib.modelss import Model, Activation, CategoricalCrossentropy
+from neuralnetlib.models import Model, Activation, CategoricalCrossentropy
 from neuralnetlib.optimizers import SGD
 
 

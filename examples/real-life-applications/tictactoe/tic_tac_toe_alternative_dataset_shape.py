@@ -8,7 +8,7 @@ from neuralnetlib.activations import ReLU, Sigmoid
 from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score
-from neuralnetlib.modelss import Model
+from neuralnetlib.models import Model
 from neuralnetlib.optimizers import Adam
 from neuralnetlib.callbacks import EarlyStopping
 
