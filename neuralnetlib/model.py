@@ -17,21 +17,25 @@ from neuralnetlib.callbacks import EarlyStopping
 
 
 class Model:
-    def __init__(self, gradient_clip_threshold: float = 5.0, 
+    def __init__(self, temperature: float = 1.0,
+             gradient_clip_threshold: float = 5.0, 
              enable_padding: bool = False,
-             padding_size: int = 32):
-        
+             padding_size: int = 32,
+             random_state: int | None = None):
+
         self.layers = []
         self.loss_function = None
         self.optimizer = None
         self.y_true = None
         self.predictions = None
+        self.temperature = temperature
         self.gradient_clip_threshold = gradient_clip_threshold
         self.enable_padding = enable_padding
         self.padding_size = padding_size
+        self.random_state = random_state if random_state is not None else time.time_ns()
 
     def __str__(self) -> str:
-        model_summary = 'Model\n'
+        model_summary = f'Model(temperature={self.temperature}, gradient_clip_threshold={self.gradient_clip_threshold}, enable_padding={self.enable_padding}, padding_size={self.padding_size})\n'
         model_summary += '-------------------------------------------------\n'
         for i, layer in enumerate(self.layers):
             model_summary += f'Layer {i + 1}: {str(layer)}\n'
@@ -224,7 +228,7 @@ class Model:
         # Set the random_state for every layer that has a random_state attribute
         for layer in self.layers:
             if hasattr(layer, 'random_state'):
-                layer.random_state = random_state
+                layer.random_state = random_state if random_state is not None else self.random_state
 
         has_lstm_or_gru = any(isinstance(layer, (LSTM, Bidirectional, GRU)) for layer in self.layers)
         has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
@@ -263,7 +267,7 @@ class Model:
                 callback.on_epoch_begin(epoch)
 
             start_time = time.time()
-            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state)
+            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state if random_state is not None else self.random_state)
             error = 0
             predictions_list = []
             y_true_list = []
@@ -346,7 +350,7 @@ class Model:
                 print()
 
             if plot_decision_boundary:
-                self.__update_plot(epoch, x_train, y_train, random_state)
+                self.__update_plot(epoch, x_train, y_train, random_state if random_state is not None else self.random_state)
                 plt.pause(0.1)
 
             if stop_training:
@@ -401,9 +405,77 @@ class Model:
         
         return avg_loss, all_predictions
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: np.ndarray, apply_temperature: bool = True) -> np.ndarray:
         X = np.array(X)
-        return self.forward_pass(X, training=False)
+        predictions = self.forward_pass(X, training=False)
+        
+        if apply_temperature and not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
+            if isinstance(predictions, np.ndarray):
+                predictions = np.clip(predictions, 1e-7, 1.0)
+                log_preds = np.log(predictions)
+                scaled_log_preds = log_preds / self.temperature
+                predictions = np.exp(scaled_log_preds)
+                predictions /= np.sum(predictions, axis=-1, keepdims=True)
+        
+        return predictions
+
+    def generate_sequence(self, 
+                        sequence_start: np.ndarray,
+                        max_length: int,
+                        stop_token: int | None = None,
+                        min_length: int | None = None) -> np.ndarray:
+
+        current_sequence = sequence_start.copy()
+        batch_size = current_sequence.shape[0]
+        
+        for _ in range(max_length - sequence_start.shape[1]):
+            predictions = self.predict(current_sequence, apply_temperature=False)  # cuz we already apply temperature in this method
+            
+            if predictions.ndim == 3:
+                next_token_probs = predictions[:, -1, :]  
+            else:
+                next_token_probs = predictions
+                
+            if not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
+                next_token_probs = np.clip(next_token_probs, 1e-7, 1.0)
+                log_probs = np.log(next_token_probs)
+                scaled_log_probs = log_probs / self.temperature
+                next_token_probs = np.exp(scaled_log_probs)
+                next_token_probs /= np.sum(next_token_probs, axis=-1, keepdims=True)
+                
+            if min_length is not None and current_sequence.shape[1] < min_length:
+                if stop_token is not None:
+                    next_token_probs[:, stop_token] = 0
+                    next_token_probs /= np.sum(next_token_probs, axis=-1, keepdims=True)
+            
+            rng = np.random.default_rng(self.random_state)
+            
+            next_tokens = []
+            for probs in next_token_probs:
+                if np.isnan(probs).any() or np.sum(probs) == 0:
+                    next_token = rng.integers(0, probs.shape[0])
+                else:
+                    probs = probs / np.sum(probs)
+                    next_token = rng.choice(probs.shape[0], p=probs)
+                next_tokens.append(next_token)
+            
+            next_tokens = np.array(next_tokens)
+            
+            if stop_token is not None:
+                if min_length is None or current_sequence.shape[1] >= min_length:
+                    if np.all(next_tokens == stop_token):
+                        break
+            
+            current_sequence = np.hstack([current_sequence, next_tokens.reshape(-1, 1)])
+            
+            self.random_state += 1
+        
+        return current_sequence
+
+    def set_temperature(self, temperature: float):
+        if not 0.1 <= temperature <= 2.0:
+            raise ValueError("Temperature must be between 0.1 and 2.0")
+        self.temperature = temperature
 
     def save(self, filename: str):
         model_state = {
