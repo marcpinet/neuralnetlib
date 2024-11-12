@@ -47,7 +47,7 @@ I used the [MNIST dataset](https://en.wikipedia.org/wiki/MNIST_database) to test
 ### Binary Classification
 
 ```python
-from neuralnetlib.model import Model
+from neuralnetlib.models import Model
 from neuralnetlib.layers import Input, Dense
 from neuralnetlib.activations import Sigmoid
 from neuralnetlib.losses import BinaryCrossentropy
