@@ -31,16 +31,16 @@ class Metric:
             return precision_score
         else:
             raise ValueError(f"Metric {name} is not supported.")
-    
+
     def __call__(self, y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
         y_pred, y_true = _reshape_inputs(y_pred, y_true)
-        
+
         if y_pred.ndim == 1:
             y_pred = y_pred.reshape(-1, 1)
-        
+
         if y_true.ndim == 1:
             y_true = y_true.reshape(-1, 1)
-            
+
         return self.function(y_pred, y_true, threshold)
 
 
@@ -100,14 +100,14 @@ def confusion_matrix(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 
     else:
         y_pred_classes = np.argmax(y_pred, axis=1)
         y_true_classes = np.argmax(y_true, axis=1)
-    
+
     classes = np.unique(np.concatenate([y_true_classes, y_pred_classes]))
     n_classes = len(classes)
     cm = np.zeros((n_classes, n_classes), dtype=int)
-    
+
     for i in range(len(y_true_classes)):
         cm[y_true_classes[i], y_pred_classes[i]] += 1
-        
+
     return cm
 
 
@@ -115,111 +115,111 @@ def classification_report(y_pred: np.ndarray, y_true: np.ndarray, threshold: flo
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
     cm = confusion_matrix(y_pred, y_true, threshold)
     n_classes = cm.shape[0]
-    
+
     metrics = {
         'precision': np.zeros(n_classes),
         'recall': np.zeros(n_classes),
         'f1': np.zeros(n_classes),
         'support': np.zeros(n_classes)
     }
-    
+
     for i in range(n_classes):
         tp = cm[i, i]
         fp = np.sum(cm[:, i]) - tp
         fn = np.sum(cm[i, :]) - tp
         support = np.sum(cm[i, :])
-        
+
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-        
+
         metrics['precision'][i] = precision
         metrics['recall'][i] = recall
         metrics['f1'][i] = f1
         metrics['support'][i] = support
-    
+
     # Calculate macro averages
     macro_precision = np.mean(metrics['precision'])
     macro_recall = np.mean(metrics['recall'])
     macro_f1 = np.mean(metrics['f1'])
     total_support = np.sum(metrics['support'])
-    
+
     # Format report
     report = "Classification Report\n"
     report += "=" * 70 + "\n"
     report += f"{'Class':>8} {'Precision':>10} {'Recall':>10} {'F1-score':>10} {'Support':>10}\n"
     report += "-" * 70 + "\n"
-    
+
     # Add per-class metrics
     for i in range(n_classes):
         report += f"{i:>8d} {metrics['precision'][i]:>10.2f} {metrics['recall'][i]:>10.2f} "
         report += f"{metrics['f1'][i]:>10.2f} {metrics['support'][i]:>10.0f}\n"
-    
+
     # Add macro averages
     report += "\n"
     report += f"{'macro avg':>8} {macro_precision:>10.2f} {macro_recall:>10.2f} "
     report += f"{macro_f1:>10.2f} {total_support:>10.0f}\n"
-    
+
     return report
 
 
 def roc_auc_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    
+
     if y_pred.shape[1] == 1:
         y_pred = y_pred.ravel()
     else:
         y_pred = y_pred[:, 1]
-        
+
     desc_sort_indices = np.argsort(y_pred)[::-1]
     y_pred = y_pred[desc_sort_indices]
     y_true = y_true[desc_sort_indices]
-    
+
     n_pos = np.sum(y_true == 1)
     n_neg = len(y_true) - n_pos
-    
+
     if n_pos == 0 or n_neg == 0:
         return 0.0
-        
+
     tpr = np.cumsum(y_true) / n_pos
     fpr = np.cumsum(1 - y_true) / n_neg
-    
+
     tpr = np.concatenate([[0], tpr, [1]])
     fpr = np.concatenate([[0], fpr, [1]])
-    
+
     width = np.diff(fpr)
     height = (tpr[1:] + tpr[:-1]) / 2
-    
+
     return np.sum(width * height)
 
 
 def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    
+
     if y_pred.shape[1] == 1:
         y_pred = y_pred.ravel()
     else:
         y_pred = y_pred[:, 1]
-        
+
     desc_sort_indices = np.argsort(y_pred)[::-1]
     y_pred = y_pred[desc_sort_indices]
     y_true = y_true[desc_sort_indices]
-    
+
     tp = np.cumsum(y_true)
     fp = np.cumsum(1 - y_true)
-    
+
     precision = tp / (tp + fp)
     recall = tp / np.sum(y_true)
-    
+
     precision = np.nan_to_num(precision)
     recall = np.nan_to_num(recall)
-    
+
     precision = np.concatenate([[1], precision, [0]])
     recall = np.concatenate([[0], recall, [1]])
-    
+
     width = np.diff(recall)
     height = (precision[1:] + precision[:-1]) / 2
-    
+
     return np.sum(width * height)
 
 

@@ -1,12 +1,15 @@
-import sys
-import time
 import os
 import platform
 import subprocess
+import sys
+import time
+
 import numpy as np
+
 
 class History(dict):
     """A custom dictionary that doesn't display its contents when returned in Jupyter."""
+
     def __repr__(self):
         return ""
 
@@ -89,7 +92,7 @@ def is_interactive():
 
 def is_display_available():
     system = platform.system()
-    
+
     if system == "Linux":
         return is_display_available_linux()
     elif system == "Windows":

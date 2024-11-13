@@ -5,12 +5,12 @@ from scipy.io import arff
 from sklearn.model_selection import train_test_split
 
 from neuralnetlib.activations import ReLU, Sigmoid
+from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.models import Model
 from neuralnetlib.optimizers import Adam
-from neuralnetlib.callbacks import EarlyStopping
 
 
 def main():
@@ -74,7 +74,8 @@ def main():
 
     # 7. Train the model
     early_stopping = EarlyStopping(patience=5, min_delta=0.001, restore_best_weights=True)
-    model.fit(x_train, y_train, epochs=500, batch_size=32, metrics=[accuracy_score], random_state=42, callbacks=[early_stopping])
+    model.fit(x_train, y_train, epochs=500, batch_size=32, metrics=[accuracy_score], random_state=42,
+              callbacks=[early_stopping])
 
     # 8. Evaluate the model
     loss, preds = model.evaluate(x_test, y_test)

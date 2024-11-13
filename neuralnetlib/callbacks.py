@@ -1,5 +1,6 @@
-from neuralnetlib.metrics import Metric
 import numpy as np
+
+from neuralnetlib.metrics import Metric
 
 
 class Callback:
@@ -23,7 +24,9 @@ class Callback:
 
 
 class EarlyStopping(Callback):
-    def __init__(self, patience: int = 5, min_delta: float = 0.001, restore_best_weights: bool = True,start_from_epoch: int = 0, monitor: str = 'loss', mode: str = 'auto', baseline: float | None = None) -> None:
+    def __init__(self, patience: int = 5, min_delta: float = 0.001, restore_best_weights: bool = True,
+                 start_from_epoch: int = 0, monitor: str = 'loss', mode: str = 'auto',
+                 baseline: float | None = None) -> None:
         super().__init__()
         self.patience: int = patience
         self.min_delta: float = min_delta
@@ -72,7 +75,7 @@ class EarlyStopping(Callback):
             self.stop_training = True
             if self.restore_best_weights and self.best_weights is not None:
                 for layer, best_weights in zip([layer for layer in model.layers if hasattr(layer, 'weights')],
-                                             self.best_weights):
+                                               self.best_weights):
                     layer.weights = best_weights
             print(f"\nEarly stopping triggered after epoch {epoch + 1}")
             return True
@@ -85,7 +88,7 @@ class EarlyStopping(Callback):
             monitor_value = logs.get(self.monitor.name)
         else:
             monitor_value = logs.get(self.monitor)
-        
+
         if monitor_value is None:
             if isinstance(logs, dict) and 'loss' in logs:
                 monitor_value = logs['loss']
@@ -93,5 +96,5 @@ class EarlyStopping(Callback):
                 monitor_value = logs
             else:
                 raise ValueError(f"Monitored metric '{self.monitor}' is not available. "
-                               f"Available metrics are: {','.join(logs.keys())}")
+                                 f"Available metrics are: {','.join(logs.keys())}")
         return float(monitor_value)

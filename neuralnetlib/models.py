@@ -1,27 +1,28 @@
+import inspect
 import json
 import time
-import inspect
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, Bidirectional, Embedding, Attention, Dense
+from neuralnetlib.callbacks import EarlyStopping
+from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, \
+    Bidirectional, Embedding, Attention, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
+from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
-from neuralnetlib.metrics import Metric
-from neuralnetlib.callbacks import EarlyStopping
 
 
 class Model:
     def __init__(self, temperature: float = 1.0,
-             gradient_clip_threshold: float = 5.0, 
-             enable_padding: bool = False,
-             padding_size: int = 32,
-             random_state: int | None = None):
+                 gradient_clip_threshold: float = 5.0,
+                 enable_padding: bool = False,
+                 padding_size: int = 32,
+                 random_state: int | None = None):
 
         self.layers = []
         self.loss_function = None
@@ -86,9 +87,9 @@ class Model:
     def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         if self.enable_padding:
             original_shape = X.shape
-            padded_shape = ((original_shape[0] + self.padding_size - 1) // 
-                        self.padding_size * self.padding_size,) + original_shape[1:]
-            
+            padded_shape = ((original_shape[0] + self.padding_size - 1) //
+                            self.padding_size * self.padding_size,) + original_shape[1:]
+
             if padded_shape != original_shape:
                 padded_X = np.zeros(padded_shape, dtype=X.dtype)
                 padded_X[:original_shape[0]] = X
@@ -102,7 +103,7 @@ class Model:
 
         if self.enable_padding and padded_shape != original_shape:
             X = X[:original_shape[0]]
-            
+
         return X
 
     def backward_pass(self, error: np.ndarray):
@@ -115,14 +116,14 @@ class Model:
 
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
-                if (type(layer.activation_function).__name__ == "Softmax" and 
-                    isinstance(self.loss_function, CategoricalCrossentropy)):
+                if (type(layer.activation_function).__name__ == "Softmax" and
+                        isinstance(self.loss_function, CategoricalCrossentropy)):
                     error = self.predictions - self.y_true
 
-                elif (type(layer.activation_function).__name__ == "Sigmoid" and 
-                    isinstance(self.loss_function, BinaryCrossentropy)):
-                    error = (self.predictions - self.y_true) / (self.predictions * 
-                                                            (1 - self.predictions) + 1e-15)
+                elif (type(layer.activation_function).__name__ == "Sigmoid" and
+                      isinstance(self.loss_function, BinaryCrossentropy)):
+                    error = (self.predictions - self.y_true) / (self.predictions *
+                                                                (1 - self.predictions) + 1e-15)
 
                 elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
                     y_true_one_hot = np.zeros_like(self.predictions)
@@ -133,39 +134,39 @@ class Model:
                 error = layer.backward_pass(error)
 
             layer_idx = len(self.layers) - 1 - i
-            
+
             if isinstance(layer, LSTM):
                 cell = layer.cell
                 for grad_pair in [(cell.dWf, cell.dbf), (cell.dWi, cell.dbi),
-                                (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
+                                  (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
                     weight_grad, bias_grad = grad_pair
                     clipped_weight_grad = clip_gradients(weight_grad)
                     clipped_bias_grad = clip_gradients(bias_grad)
-                    
-                self.optimizer.update(layer_idx, cell.Wf, clipped_weight_grad, 
-                                    cell.bf, clipped_bias_grad)
-                self.optimizer.update(layer_idx, cell.Wi, clip_gradients(cell.dWi), 
-                                    cell.bi, clip_gradients(cell.dbi))
-                self.optimizer.update(layer_idx, cell.Wc, clip_gradients(cell.dWc), 
-                                    cell.bc, clip_gradients(cell.dbc))
-                self.optimizer.update(layer_idx, cell.Wo, clip_gradients(cell.dWo), 
-                                    cell.bo, clip_gradients(cell.dbo))
-                
+
+                self.optimizer.update(layer_idx, cell.Wf, clipped_weight_grad,
+                                      cell.bf, clipped_bias_grad)
+                self.optimizer.update(layer_idx, cell.Wi, clip_gradients(cell.dWi),
+                                      cell.bi, clip_gradients(cell.dbi))
+                self.optimizer.update(layer_idx, cell.Wc, clip_gradients(cell.dWc),
+                                      cell.bc, clip_gradients(cell.dbc))
+                self.optimizer.update(layer_idx, cell.Wo, clip_gradients(cell.dWo),
+                                      cell.bo, clip_gradients(cell.dbo))
+
             elif isinstance(layer, GRU):
                 cell = layer.cell
-                self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz), 
-                                    cell.bz, clip_gradients(cell.dbz))
-                self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr), 
-                                    cell.br, clip_gradients(cell.dbr))
-                self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh), 
-                                    cell.bh, clip_gradients(cell.dbh))
-                
+                self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz),
+                                      cell.bz, clip_gradients(cell.dbz))
+                self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr),
+                                      cell.br, clip_gradients(cell.dbr))
+                self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh),
+                                      cell.bh, clip_gradients(cell.dbh))
+
             elif hasattr(layer, 'weights'):
                 clipped_weights_grad = clip_gradients(layer.d_weights)
                 if hasattr(layer, 'd_bias'):
                     clipped_bias_grad = clip_gradients(layer.d_bias)
                     self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad,
-                                        layer.bias, clipped_bias_grad)
+                                          layer.bias, clipped_bias_grad)
                 else:
                     self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad)
 
@@ -184,14 +185,14 @@ class Model:
         self.backward_pass(error)
         return loss
 
-    def fit(self, x_train: np.ndarray, y_train: np.ndarray, 
-            epochs: int, 
+    def fit(self, x_train: np.ndarray, y_train: np.ndarray,
+            epochs: int,
             batch_size: int | None = None,
-            verbose: bool = True, 
-            metrics: list | None = None, 
+            verbose: bool = True,
+            metrics: list | None = None,
             random_state: int | None = None,
             validation_data: tuple | None = None,
-            callbacks: list = [], 
+            callbacks: list = [],
             plot_decision_boundary: bool = False) -> dict:
         """
         Fit the model to the training data.
@@ -211,18 +212,18 @@ class Model:
         Returns:
             Dictionary containing the training history of metrics (loss and any other metrics)
         """
-        
+
         history = History({
             'loss': [],
             'val_loss': []
         })
-        
+
         if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
-        
+
         # Set the random_state for every layer that has a random_state attribute
         for layer in self.layers:
             if hasattr(layer, 'random_state'):
@@ -230,10 +231,11 @@ class Model:
 
         has_lstm_or_gru = any(isinstance(layer, (LSTM, Bidirectional, GRU)) for layer in self.layers)
         has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
-    
+
         if has_lstm_or_gru and not has_embedding:
             if len(x_train.shape) != 3:
-                raise ValueError("Input data must be 3D (batch_size, time_steps, features) for LSTM/GRU layers without Embedding")
+                raise ValueError(
+                    "Input data must be 3D (batch_size, time_steps, features) for LSTM/GRU layers without Embedding")
         elif has_embedding:
             if len(x_train.shape) != 2:
                 raise ValueError("Input data must be 2D (batch_size, sequence_length) when using Embedding layer")
@@ -242,13 +244,13 @@ class Model:
             x_test, y_test = validation_data
             x_test = np.array(x_test)
             y_test = np.array(y_test)
-            
+
         if metrics is not None:
             metrics: list[Metric] = [Metric(m) for m in metrics]
             for metric in metrics:
                 history[metric.name] = []
                 history[f'val_{metric.name}'] = []
-            
+
         for layer in self.layers:
             if isinstance(layer, TextVectorization):
                 layer.adapt(x_train)
@@ -265,7 +267,8 @@ class Model:
                 callback.on_epoch_begin(epoch)
 
             start_time = time.time()
-            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train, random_state=random_state if random_state is not None else self.random_state)
+            x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train,
+                                                         random_state=random_state if random_state is not None else self.random_state)
             error = 0
             predictions_list = []
             y_true_list = []
@@ -288,7 +291,7 @@ class Model:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                                 metrics_str += f'{metric.name}: {metric_value:.4f} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                     message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -303,22 +306,23 @@ class Model:
                             metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                             history[metric.name].append(metric_value)
                             metrics_str += f'{metric.name}: {metric_value:.4f} - '
-                    progress_bar(1, 1, message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                    progress_bar(1, 1,
+                                 message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             history['loss'].append(error)
-            
+
             logs = {'loss': error}
             if metrics is not None:
                 for metric in metrics:
                     metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                     logs[metric.name] = metric_value
-            
+
             if validation_data is not None:
                 x_test, y_test = validation_data
                 val_loss, val_predictions = self.evaluate(x_test, y_test, batch_size)
                 history['val_loss'].append(val_loss)
                 logs['val_loss'] = val_loss
-                
+
                 if metrics is not None:
                     val_metrics = []
                     for metric in metrics:
@@ -328,11 +332,11 @@ class Model:
                         val_metrics.append(val_metric)
                     if verbose:
                         val_metrics_str = ' - '.join(
-                            f'val_{metric.name}: {val_metric:.4f}' 
+                            f'val_{metric.name}: {val_metric:.4f}'
                             for metric, val_metric in zip(metrics, val_metrics)
                         )
                         print(f' - {val_metrics_str}', end='')
-                
+
                 val_predictions = None
 
             stop_training = False
@@ -348,7 +352,8 @@ class Model:
                 print()
 
             if plot_decision_boundary:
-                self.__update_plot(epoch, x_train, y_train, random_state if random_state is not None else self.random_state)
+                self.__update_plot(epoch, x_train, y_train,
+                                   random_state if random_state is not None else self.random_state)
                 plt.pause(0.1)
 
             if stop_training:
@@ -362,34 +367,34 @@ class Model:
 
         if verbose:
             print()
-            
+
         return history
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray, batch_size: int = 32) -> tuple:
         total_loss = 0
         num_batches = int(np.ceil(len(x_test) / batch_size))
-        
+
         predictions_list = []
-        
+
         for i in range(0, len(x_test), batch_size):
             batch_x = x_test[i:i + batch_size]
             batch_y = y_test[i:i + batch_size]
-            
+
             batch_predictions = self.forward_pass(batch_x, training=False)
             batch_loss = self.loss_function(batch_y, batch_predictions)
-            
+
             total_loss += batch_loss
             predictions_list.append(batch_predictions)
-            
+
             for layer in self.layers:
                 if hasattr(layer, 'reset_cache'):
                     layer.reset_cache()
-        
+
         avg_loss = total_loss / num_batches
-        
+
         all_predictions = np.vstack(predictions_list)
         predictions_list = None
-        
+
         try:
             frame = inspect.currentframe()
             calling_frame = frame.f_back
@@ -400,13 +405,13 @@ class Model:
             pass
         finally:
             del frame  # to avoid leaking references
-        
+
         return avg_loss, all_predictions
 
     def predict(self, X: np.ndarray, apply_temperature: bool = True) -> np.ndarray:
         X = np.array(X)
         predictions = self.forward_pass(X, training=False)
-        
+
         if apply_temperature and not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
             if isinstance(predictions, np.ndarray):
                 predictions = np.clip(predictions, 1e-7, 1.0)
@@ -414,40 +419,41 @@ class Model:
                 scaled_log_preds = log_preds / self.temperature
                 predictions = np.exp(scaled_log_preds)
                 predictions /= np.sum(predictions, axis=-1, keepdims=True)
-        
+
         return predictions
 
-    def generate_sequence(self, 
-                        sequence_start: np.ndarray,
-                        max_length: int,
-                        stop_token: int | None = None,
-                        min_length: int | None = None) -> np.ndarray:
+    def generate_sequence(self,
+                          sequence_start: np.ndarray,
+                          max_length: int,
+                          stop_token: int | None = None,
+                          min_length: int | None = None) -> np.ndarray:
 
         current_sequence = sequence_start.copy()
         batch_size = current_sequence.shape[0]
-        
+
         for _ in range(max_length - sequence_start.shape[1]):
-            predictions = self.predict(current_sequence, apply_temperature=False)  # cuz we already apply temperature in this method
-            
+            predictions = self.predict(current_sequence,
+                                       apply_temperature=False)  # cuz we already apply temperature in this method
+
             if predictions.ndim == 3:
-                next_token_probs = predictions[:, -1, :]  
+                next_token_probs = predictions[:, -1, :]
             else:
                 next_token_probs = predictions
-                
+
             if not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
                 next_token_probs = np.clip(next_token_probs, 1e-7, 1.0)
                 log_probs = np.log(next_token_probs)
                 scaled_log_probs = log_probs / self.temperature
                 next_token_probs = np.exp(scaled_log_probs)
                 next_token_probs /= np.sum(next_token_probs, axis=-1, keepdims=True)
-                
+
             if min_length is not None and current_sequence.shape[1] < min_length:
                 if stop_token is not None:
                     next_token_probs[:, stop_token] = 0
                     next_token_probs /= np.sum(next_token_probs, axis=-1, keepdims=True)
-            
+
             rng = np.random.default_rng(self.random_state)
-            
+
             next_tokens = []
             for probs in next_token_probs:
                 if np.isnan(probs).any() or np.sum(probs) == 0:
@@ -456,18 +462,18 @@ class Model:
                     probs = probs / np.sum(probs)
                     next_token = rng.choice(probs.shape[0], p=probs)
                 next_tokens.append(next_token)
-            
+
             next_tokens = np.array(next_tokens)
-            
+
             if stop_token is not None:
                 if min_length is None or current_sequence.shape[1] >= min_length:
                     if np.all(next_tokens == stop_token):
                         break
-            
+
             current_sequence = np.hstack([current_sequence, next_tokens.reshape(-1, 1)])
-            
+
             self.random_state += 1
-        
+
         return current_sequence
 
     def set_temperature(self, temperature: float):
@@ -484,10 +490,10 @@ class Model:
             if isinstance(layer, TextVectorization):
                 layer_config['vocabulary'] = layer.vocabulary
             model_state['layers'].append(layer_config)
-        
+
         model_state['loss_function'] = self.loss_function.get_config()
         model_state['optimizer'] = self.optimizer.get_config()
-        
+
         with open(filename, 'w') as f:
             json.dump(model_state, f, indent=4)
 
@@ -504,7 +510,7 @@ class Model:
                 layer.vocabulary = layer_config['vocabulary']
                 layer.word_index = {word: i for i, word in enumerate(layer.vocabulary)}
             model.layers.append(layer)
-        
+
         model.loss_function = LossFunction.from_config(model_state['loss_function'])
         model.optimizer = Optimizer.from_config(model_state['optimizer'])
 

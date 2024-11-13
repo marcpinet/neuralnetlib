@@ -95,19 +95,19 @@ class CategoricalCrossentropy(LossFunction):
 class SparseCategoricalCrossentropy(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)
-        
+
         batch_size = y_true.shape[0]
         y_pred_selected = y_pred[np.arange(batch_size), y_true]
-        
+
         return -np.mean(np.log(y_pred_selected))
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, LossFunction.EPSILON, 1 - LossFunction.EPSILON)
-        
+
         batch_size = y_true.shape[0]
         y_true_one_hot = np.zeros_like(y_pred)
         y_true_one_hot[np.arange(batch_size), y_true] = 1
-        
+
         return -y_true_one_hot / y_pred
 
     def __str__(self):

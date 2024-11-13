@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from neuralnetlib.activations import Sigmoid
-from neuralnetlib.layers import Layer, Input, Dense, Activation
+from neuralnetlib.layers import Layer, Dense, Activation
 
 
 class TestLayers(unittest.TestCase):

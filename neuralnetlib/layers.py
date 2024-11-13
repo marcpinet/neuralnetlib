@@ -1,12 +1,11 @@
 import time
+from collections import Counter
 
 import numpy as np
-from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d
 from neuralnetlib.regularizers import AdaptiveDropout
-
 
 EPSILON_SIGMOID = 1e-12
 
@@ -86,7 +85,8 @@ class Input(Layer):
 
 
 class Dense(Layer):
-    def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros", random_state: int = None,
+    def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros",
+                 random_state: int = None,
                  **kwargs):
         super().__init__()
         self.units = units
@@ -107,40 +107,40 @@ class Dense(Layer):
     def initialize_weights(self, input_size: int):
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
-        
+
         fan_in = input_size
         fan_out = self.units
-        
+
         if self.weights_init in ["glorot_uniform", "xavier_uniform"]:
             limit = np.sqrt(6 / (fan_in + fan_out))
             self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
-        
+
         elif self.weights_init in ["glorot_normal", "xavier_normal"]:
             stddev = np.sqrt(2 / (fan_in + fan_out))
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
-        
+
         elif self.weights_init == "he_uniform":
             limit = np.sqrt(6 / fan_in)
             self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
-        
+
         elif self.weights_init == "he_normal":
             stddev = np.sqrt(2 / fan_in)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
-        
+
         elif self.weights_init == "lecun_uniform":
             limit = np.sqrt(3 / fan_in)
             self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
-        
+
         elif self.weights_init == "lecun_normal":
             stddev = np.sqrt(1 / fan_in)
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
-        
+
         elif self.weights_init == "orthogonal":
             nums = self.rng.normal(0, 1, (input_size, self.units))
             q, r = np.linalg.qr(nums)
             q = q * np.sign(np.diag(r))
             self.weights = q
-        
+
         else:
             raise ValueError(
                 "Invalid weights_init value. Possible values are 'glorot_uniform', 'glorot_normal', "
@@ -168,17 +168,17 @@ class Dense(Layer):
         if len(input_data.shape) == 3:
             batch_size, timesteps, features = input_data.shape
             input_reshaped = input_data.reshape(-1, features)
-            
+
             if self.weights is None:
                 self.initialize_weights(features)
-            
+
             output = np.dot(input_reshaped, self.weights) + self.bias
-            
+
             return output.reshape(batch_size, timesteps, self.units)
-        
+
         if self.weights is None:
             self.initialize_weights(input_data.shape[1])
-        
+
         return np.dot(input_data, self.weights) + self.bias
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -186,13 +186,13 @@ class Dense(Layer):
             batch_size, timesteps, _ = output_error.shape
             output_error_reshaped = output_error.reshape(-1, output_error.shape[-1])
             input_reshaped = self.input.reshape(-1, self.input.shape[-1])
-            
+
             input_error = np.dot(output_error_reshaped, self.weights.T)
             self.d_weights = np.dot(input_reshaped.T, output_error_reshaped)
             self.d_bias = np.sum(output_error_reshaped, axis=0, keepdims=True)
-            
+
             return input_error.reshape(batch_size, timesteps, -1)
-        
+
         input_error = np.dot(output_error, self.weights.T)
         self.d_weights = np.dot(self.input.T, output_error)
         self.d_bias = np.sum(output_error, axis=0, keepdims=True)
@@ -262,7 +262,7 @@ class Activation(Layer):
 
 
 class Dropout(Layer):
-    def __init__(self, 
+    def __init__(self,
                  rate: float = 0.5,
                  adaptive: bool = False,
                  min_rate: float = 0.1,
@@ -276,7 +276,7 @@ class Dropout(Layer):
         self.adaptive = adaptive
         self.random_state = random_state
         self.mask = None
-        
+
         if adaptive:
             self.dropout_impl = AdaptiveDropout(
                 initial_rate=rate,
@@ -287,7 +287,7 @@ class Dropout(Layer):
             )
         else:
             self.dropout_impl = None
-            
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -299,13 +299,13 @@ class Dropout(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         if not training:
             return input_data
-            
+
         if self.adaptive:
             return self.dropout_impl(input_data, training)
-            
+
         rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
-        self.mask = rng.binomial(1, 1 - self.rate, 
-                                size=input_data.shape) / (1 - self.rate)
+        self.mask = rng.binomial(1, 1 - self.rate,
+                                 size=input_data.shape) / (1 - self.rate)
         return input_data * self.mask
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -320,10 +320,10 @@ class Dropout(Layer):
             'adaptive': self.adaptive,
             'random_state': self.random_state
         }
-        
+
         if self.adaptive:
             config.update(self.dropout_impl.get_config())
-            
+
         return config
 
     @staticmethod
@@ -1281,7 +1281,8 @@ class Permute(Layer):
 
 
 class TextVectorization(Layer):
-    def __init__(self, max_tokens: int | None = None, output_mode: str = 'int', output_sequence_length: int | None = None):
+    def __init__(self, max_tokens: int | None = None, output_mode: str = 'int',
+                 output_sequence_length: int | None = None):
         super().__init__()
         self.max_tokens = max_tokens
         self.output_mode = output_mode
@@ -1391,23 +1392,23 @@ class LSTMCell(Layer):
         self.random_state = random_state
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
-        
+
         self.Wf = None
         self.Uf = None
         self.bf = None
-        
+
         self.Wi = None
         self.Ui = None
         self.bi = None
-        
+
         self.Wc = None
         self.Uc = None
         self.bc = None
-        
+
         self.Wo = None
         self.Uo = None
         self.bo = None
-        
+
         self._init_gradients()
         self.cache = None
 
@@ -1540,7 +1541,7 @@ class LSTMCell(Layer):
               np.dot(di_input, self.Wi.T) +
               np.dot(dc_tilde_input, self.Wc.T) +
               np.dot(do_input, self.Wo.T))
-        
+
         dh_prev = (np.dot(df_input, self.Uf.T) +
                    np.dot(di_input, self.Ui.T) +
                    np.dot(dc_tilde_input, self.Uc.T) +
@@ -1564,7 +1565,8 @@ class LSTMCell(Layer):
 
 
 class LSTM(Layer):
-    def __init__(self, units: int, return_sequences: bool = False, return_state: bool = False, random_state: int | None = None, clip_value: float = 5.0, **kwargs):
+    def __init__(self, units: int, return_sequences: bool = False, return_state: bool = False,
+                 random_state: int | None = None, clip_value: float = 5.0, **kwargs):
         super().__init__()
         self.units = units
         self.return_sequences = return_sequences
@@ -1584,18 +1586,19 @@ class LSTM(Layer):
     def __str__(self) -> str:
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state}, clip_value={self.clip_value})'
 
-    def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[
+        np.ndarray, np.ndarray, np.ndarray]:
         if x.ndim != 3:
             raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
-        
+
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
-        
+
         if not hasattr(self, '_zeros_template') or self._zeros_template.shape[0] != batch_size:
             self._zeros_template = np.zeros((batch_size, self.units))
         h = self._zeros_template.copy()
         c = self._zeros_template.copy()
-        
+
         if not self.initialized:
             self.cell = LSTMCell(self.units, self.random_state)
             self.cell.initialize_weights(input_dim)
@@ -1640,22 +1643,22 @@ class LSTM(Layer):
         dc_next = np.zeros((batch_size, self.units))
 
         self.cell._init_gradients()
-        
+
         squared_norm_sum = 0.0
 
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
-            
+
             self.cell.cache = self.cache[t]
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
             dx[:, t, :] = dx_t
-            
-            squared_norm_sum += (np.sum(dx_t**2) + 
-                            np.sum(self.cell.dWf**2) + np.sum(self.cell.dUf**2) + np.sum(self.cell.dbf**2) +
-                            np.sum(self.cell.dWi**2) + np.sum(self.cell.dUi**2) + np.sum(self.cell.dbi**2) +
-                            np.sum(self.cell.dWc**2) + np.sum(self.cell.dUc**2) + np.sum(self.cell.dbc**2) +
-                            np.sum(self.cell.dWo**2) + np.sum(self.cell.dUo**2) + np.sum(self.cell.dbo**2))
-            
+
+            squared_norm_sum += (np.sum(dx_t ** 2) +
+                                 np.sum(self.cell.dWf ** 2) + np.sum(self.cell.dUf ** 2) + np.sum(self.cell.dbf ** 2) +
+                                 np.sum(self.cell.dWi ** 2) + np.sum(self.cell.dUi ** 2) + np.sum(self.cell.dbi ** 2) +
+                                 np.sum(self.cell.dWc ** 2) + np.sum(self.cell.dUc ** 2) + np.sum(self.cell.dbc ** 2) +
+                                 np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
+
         global_norm = np.sqrt(squared_norm_sum)
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
         if scaling_factor < 1.0:
@@ -1708,7 +1711,7 @@ class Bidirectional(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         self.forward_output = self.forward_layer.forward_pass(
             input_data, training)
-        
+
         backward_input = input_data[:, ::-1, :]
         self.backward_output = self.backward_layer.forward_pass(
             backward_input, training)
@@ -1717,13 +1720,13 @@ class Bidirectional(Layer):
             if self.forward_layer.return_sequences:
                 forward_seq, forward_h, forward_c = self.forward_output
                 backward_seq, backward_h, backward_c = self.backward_output
-                
+
                 backward_seq = backward_seq[:, ::-1, :]
-                
+
                 combined_seq = np.concatenate([forward_seq, backward_seq], axis=-1)
                 combined_h = np.concatenate([forward_h, backward_h], axis=-1)
                 combined_c = np.concatenate([forward_c, backward_c], axis=-1)
-                
+
                 return combined_seq, combined_h, combined_c
             else:
                 forward_h, _, forward_c = self.forward_output
@@ -1740,22 +1743,22 @@ class Bidirectional(Layer):
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         forward_dim = output_error.shape[-1] // 2
-        
+
         if len(output_error.shape) == 3:
             forward_error = output_error[:, :, :forward_dim]
             backward_error = output_error[:, :, forward_dim:]
-            
+
             backward_error = backward_error[:, ::-1, :]
         else:
             forward_error = output_error[:, :forward_dim]
             backward_error = output_error[:, forward_dim:]
-        
+
         forward_dx = self.forward_layer.backward_pass(forward_error)
         backward_dx = self.backward_layer.backward_pass(backward_error)
-        
+
         if len(output_error.shape) == 3:
             backward_dx = backward_dx[:, ::-1, :]
-        
+
         return forward_dx + backward_dx
 
     def get_config(self) -> dict:
@@ -1807,22 +1810,22 @@ class GRUCell:
         self.clip_value = clip_value
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
-        
+
         # Reset gate weights
         self.Wr = None
         self.Ur = None
         self.br = None
-        
+
         # Update gate weights 
         self.Wz = None
         self.Uz = None
         self.bz = None
-        
+
         # Candidate state weights
         self.Wh = None
         self.Uh = None
         self.bh = None
-        
+
         self._init_gradients()
         self.cache = None
 
@@ -1844,7 +1847,7 @@ class GRUCell:
 
         # Initialize gradients
         self._init_gradients()
-        
+
     def _init_gradients(self):
         if self.Wr is not None:
             self.dWr = np.zeros_like(self.Wr)
@@ -1858,7 +1861,7 @@ class GRUCell:
             self.dWh = np.zeros_like(self.Wh)
             self.dUh = np.zeros_like(self.Uh)
             self.dbh = np.zeros_like(self.bh)
-            
+
     def orthogonal_init(self, shape):
         if len(shape) < 2:
             return self.rng.normal(0, 1, shape)
@@ -1924,7 +1927,7 @@ class GRUCell:
         # Candidate state gradients
         dh_candidate_input = dh_candidate * (1 - h_candidate ** 2)
         dh_candidate_input = self.clip_gradients(dh_candidate_input)
-        
+
         self.dWh += np.dot(x_t.T, dh_candidate_input)
         self.dUh += np.dot((r_t * h_prev).T, dh_candidate_input)
         self.dbh += np.sum(dh_candidate_input, axis=0, keepdims=True)
@@ -1936,7 +1939,7 @@ class GRUCell:
         # Update gate gradients
         dz_input = dz * z_t * (1 - z_t)
         dz_input = self.clip_gradients(dz_input)
-        
+
         self.dWz += np.dot(x_t.T, dz_input)
         self.dUz += np.dot(h_prev.T, dz_input)
         self.dbz += np.sum(dz_input, axis=0, keepdims=True)
@@ -1944,7 +1947,7 @@ class GRUCell:
         # Reset gate gradients
         dr_input = dr * r_t * (1 - r_t)
         dr_input = self.clip_gradients(dr_input)
-        
+
         self.dWr += np.dot(x_t.T, dr_input)
         self.dUr += np.dot(h_prev.T, dr_input)
         self.dbr += np.sum(dr_input, axis=0, keepdims=True)
@@ -1952,9 +1955,9 @@ class GRUCell:
         dx = (np.dot(dz_input, self.Wz.T) +
               np.dot(dr_input, self.Wr.T) +
               np.dot(dh_candidate_input, self.Wh.T))
-              
+
         dh_prev += (np.dot(dz_input, self.Uz.T) +
-                   np.dot(dr_input, self.Ur.T))
+                    np.dot(dr_input, self.Ur.T))
 
         dx = self.clip_gradients(dx)
         dh_prev = self.clip_gradients(dh_prev)
@@ -1975,8 +1978,10 @@ class GRUCell:
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
+
 class GRU(Layer):
-    def __init__(self, units: int, return_sequences: bool = False, random_state: int | None = None, clip_value: float = 5.0, **kwargs):
+    def __init__(self, units: int, return_sequences: bool = False, random_state: int | None = None,
+                 clip_value: float = 5.0, **kwargs):
         super().__init__()
         self.units = units
         self.return_sequences = return_sequences
@@ -1999,12 +2004,12 @@ class GRU(Layer):
             raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
-        
+
         if not hasattr(self, '_zeros_template') or self._zeros_template.shape[0] != batch_size:
-                self._zeros_template = np.zeros((batch_size, self.units))
-        
+            self._zeros_template = np.zeros((batch_size, self.units))
+
         h = self._zeros_template.copy()
-        
+
         if not self.initialized:
             self.cell = GRUCell(self.units, self.random_state, self.clip_value)
             self.cell.initialize_weights(input_dim)
@@ -2039,20 +2044,20 @@ class GRU(Layer):
         dh_next = np.zeros((batch_size, self.units))
 
         self.cell._init_gradients()
-        
+
         squared_norm_sum = 0.0
 
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
-            
+
             self.cell.cache = self.cache[t]
             dx_t, dh_next = self.cell.backward(dh)
             dx[:, t, :] = dx_t
-            
-            squared_norm_sum += (np.sum(dx_t**2) + 
-                            np.sum(self.cell.dWr**2) + np.sum(self.cell.dUr**2) + np.sum(self.cell.dbr**2) +
-                            np.sum(self.cell.dWz**2) + np.sum(self.cell.dUz**2) + np.sum(self.cell.dbz**2) +
-                            np.sum(self.cell.dWh**2) + np.sum(self.cell.dUh**2) + np.sum(self.cell.dbh**2))
+
+            squared_norm_sum += (np.sum(dx_t ** 2) +
+                                 np.sum(self.cell.dWr ** 2) + np.sum(self.cell.dUr ** 2) + np.sum(self.cell.dbr ** 2) +
+                                 np.sum(self.cell.dWz ** 2) + np.sum(self.cell.dUz ** 2) + np.sum(self.cell.dbz ** 2) +
+                                 np.sum(self.cell.dWh ** 2) + np.sum(self.cell.dUh ** 2) + np.sum(self.cell.dbh ** 2))
 
         global_norm = np.sqrt(squared_norm_sum)
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
@@ -2101,27 +2106,27 @@ class Attention(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_length, features = input_data.shape
-        
+
         self.cache['input_shape'] = input_data.shape
         self.cache['input'] = input_data
         scores = np.zeros((batch_size, seq_length, seq_length))
-        
+
         for i in range(batch_size):
             if self.score_mode == "dot":
                 scores[i] = np.dot(input_data[i], input_data[i].T)
                 if self.use_scale:
                     scores[i] *= 1.0 / np.sqrt(features)
-        
+
         attention_weights = np.zeros_like(scores)
         for i in range(batch_size):
             attention_weights[i] = self._softmax(scores[i])
-        
+
         self.cache['attention_weights'] = attention_weights
-        
+
         context = np.zeros_like(input_data)
         for i in range(batch_size):
             context[i] = np.dot(attention_weights[i], input_data[i])
-        
+
         if not self.return_sequences:
             context = np.mean(context, axis=1)
         return context
@@ -2130,30 +2135,30 @@ class Attention(Layer):
         batch_size, seq_length, features = self.cache['input_shape']
         attention_weights = self.cache['attention_weights']
         input_data = self.cache['input']
-        
+
         if not self.return_sequences:
             output_error = np.expand_dims(output_error, 1)
             output_error = np.repeat(output_error, seq_length, axis=1)
 
         d_input = np.zeros((batch_size, seq_length, features))
-        
+
         for i in range(batch_size):
             d_context = output_error[i]
-            
+
             d_weights = np.dot(d_context, input_data[i].T)
-            
+
             d_scores = d_weights * attention_weights[i]
             d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
-            
+
             if self.use_scale:
                 d_scores *= 1.0 / np.sqrt(features)
-            
+
             d_input[i] = np.dot(attention_weights[i].T, d_context)
-            
+
             if self.score_mode == "dot":
                 d_scores_sym = (d_scores + d_scores.T) / 2
                 d_input[i] += np.dot(d_scores_sym, input_data[i])
-        
+
         self.cache.clear()
         return d_input
 
@@ -2184,49 +2189,68 @@ class Attention(Layer):
 
 
 compatibility_dict = {
-    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape],
-    
+    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, GRU, Bidirectional,
+            Unidirectional, Attention],
+
+    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+            Attention],
+
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D,
+                 AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional,
+                 Unidirectional, Attention],
+
+    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Activation, Dropout, Flatten,
+             BatchNormalization, Permute, Reshape],
+
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
-    
+
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
-    
+
     GlobalAveragePooling2D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
-    
-    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
+
+    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten,
+             BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU,
+                   Bidirectional, Unidirectional, Attention],
+
+    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM,
+                       GRU, Bidirectional, Unidirectional, Attention],
+
     GlobalAveragePooling1D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
-    
+
     Flatten: [Dense, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, Dropout, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, LSTM, GRU,Bidirectional, Unidirectional, Attention],
-    
+
+    Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, Dropout, LSTM, GRU, Bidirectional,
+                Unidirectional, Attention],
+
+    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+                         Attention],
+
+    Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
+              BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+
     TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
-    
-    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D, BatchNormalization, Permute, Reshape, TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, LSTM, GRU,Bidirectional, Unidirectional, Attention],
-    
-    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    GRU: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape,LSTM, GRU, Bidirectional, Unidirectional, Attention],
-    
-    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
-    
-    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
-    
-    Attention: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, GlobalAveragePooling1D]
+
+    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
+              BatchNormalization, Permute, Reshape, TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D,
+              GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, LSTM, GRU, Bidirectional,
+              Unidirectional, Attention],
+
+    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+           Attention],
+
+    GRU: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+          Attention],
+
+    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
+                    Unidirectional, Attention, GlobalAveragePooling1D],
+
+    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
+                     Unidirectional, Attention, GlobalAveragePooling1D],
+
+    Attention: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
+                Unidirectional, GlobalAveragePooling1D]
 }

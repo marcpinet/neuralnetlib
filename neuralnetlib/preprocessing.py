@@ -1,10 +1,10 @@
-
-import re
 import random
-import numpy as np
-from enum import Enum, auto
+import re
 from collections import defaultdict
 from collections.abc import Generator
+from enum import Enum, auto
+
+import numpy as np
 
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
@@ -25,7 +25,8 @@ def apply_threshold(y_pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     return (y_pred > threshold).astype(int)
 
 
-def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
+def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1,
+              pad: int | tuple[int, int] = 0) -> np.ndarray:
     """
     Transform 4 dimensional images to 2 dimensional array.
 
@@ -105,7 +106,8 @@ def im2col_1d(input_data: np.ndarray, filter_size: int, stride: int = 1, pad: in
     return col
 
 
-def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
+def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: int, stride: int = 1,
+              pad: int = 0) -> np.ndarray:
     """
     Inverse of im2col_1d.
 
@@ -135,7 +137,8 @@ def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: i
     return image[:, :, pad:L + pad]
 
 
-def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
+def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h: int, filter_w: int,
+              stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
     """
     Inverse of im2col.
 
@@ -301,7 +304,8 @@ class PCA:
 
 
 class Tokenizer:
-    def __init__(self,  num_words: int | None = None, filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n', lower: bool = True, split: str = ' ', char_level: bool = False, oov_token: str | None = None) -> None:
+    def __init__(self, num_words: int | None = None, filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
+                 lower: bool = True, split: str = ' ', char_level: bool = False, oov_token: str | None = None) -> None:
         self.num_words = num_words
         self.filters = filters
         self.lower = lower
@@ -338,7 +342,7 @@ class Tokenizer:
         wcounts = list(self.word_counts.items())
         wcounts.sort(key=lambda x: x[1], reverse=True)
         sorted_voc = [wc[0] for wc in wcounts]
-        
+
         # Note that index 0 is reserved, never assigned to an existing word
         self.word_index = dict(list(zip(sorted_voc, list(range(1, len(sorted_voc) + 1)))))
 
@@ -406,7 +410,8 @@ class Tokenizer:
 
 
 class CountVectorizer:
-    def __init__(self, lowercase: bool = True, token_pattern: str = r'(?u)\b\w\w+\b', max_df: float | int = 1.0, min_df: float | int = 1, max_features: int | None = None) -> None:
+    def __init__(self, lowercase: bool = True, token_pattern: str = r'(?u)\b\w\w+\b', max_df: float | int = 1.0,
+                 min_df: float | int = 1, max_features: int | None = None) -> None:
         self.lowercase = lowercase
         self.token_pattern = token_pattern
         self.max_df = max_df
@@ -432,7 +437,7 @@ class CountVectorizer:
                     term_counts[term] = 1
                 else:
                     term_counts[term] += 1
-            
+
             for term, count in term_counts.items():
                 if term not in term_freq:
                     term_freq[term] = count
@@ -451,7 +456,7 @@ class CountVectorizer:
         else:
             min_doc_count = self.min_df
 
-        terms = [term for term, freq in doc_freq.items() 
+        terms = [term for term, freq in doc_freq.items()
                  if min_doc_count <= freq <= max_doc_count]
 
         if self.max_features is not None:
@@ -482,21 +487,21 @@ class CountVectorizer:
 
     def get_vocabulary(self) -> dict:
         return dict(sorted(self.vocabulary_.items(), key=lambda x: x[1]))
-    
 
 
 class TokenType(Enum):
     CHAR = auto()
     WORD = auto()
 
+
 class NGram:
-    def __init__(self, 
-                 n: int = 3, 
+    def __init__(self,
+                 n: int = 3,
                  token_type: TokenType = TokenType.CHAR,
-                 start_token: str = '$', 
+                 start_token: str = '$',
                  end_token: str = '^',
                  separator: str = ' '):
-        
+
         self.n = n
         self.token_type = token_type
         self.start_token = start_token
@@ -504,89 +509,89 @@ class NGram:
         self.separator = separator
         self.ngrams = defaultdict(list)
         self.transitions = defaultdict(list)
-        
+
     def _tokenize(self, text: str) -> list[str]:
         if self.token_type == TokenType.CHAR:
             return list(text)
         return text.split(self.separator)
-        
+
     def _join_tokens(self, tokens: list[str]) -> str:
         if self.token_type == TokenType.CHAR:
             return ''.join(tokens)
         return self.separator.join(tokens)
-    
+
     def _process_sequence(self, text: str) -> list[str]:
         tokens = self._tokenize(text)
         return ([self.start_token] * (self.n - 1)) + tokens + [self.end_token]
-        
+
     def fit(self, sequences: list[str]) -> "NGram":
         self.ngrams.clear()
         self.transitions.clear()
-        
+
         for sequence in sequences:
             processed_seq = self._process_sequence(sequence)
-            
+
             for i in range(len(processed_seq) - self.n + 1):
                 context = tuple(processed_seq[i:i + self.n - 1])
                 target = processed_seq[i + self.n - 1]
                 self.ngrams[context].append(target)
-            
+
             tokens = self._tokenize(sequence)
             for i in range(len(tokens) - 1):
                 current_token = tokens[i]
                 next_token = tokens[i + 1]
-                
-                if (current_token != self.start_token and 
-                    current_token != self.end_token and 
-                    next_token != self.start_token and 
-                    next_token != self.end_token):
+
+                if (current_token != self.start_token and
+                        current_token != self.end_token and
+                        next_token != self.start_token and
+                        next_token != self.end_token):
                     self.transitions[current_token].append(next_token)
-                
+
         return self
-        
+
     def _get_random_start(self) -> list[str]:
         if self.token_type == TokenType.CHAR:
             return [self.start_token] * (self.n - 1)
-        
+
         start_contexts = [
             context for context in self.ngrams.keys()
-            if (context[0] == self.start_token and 
+            if (context[0] == self.start_token and
                 self.end_token not in context)
         ]
-        
+
         if not start_contexts:
             return [self.start_token] * (self.n - 1)
-            
+
         chosen_context = random.choice(start_contexts)
         return list(chosen_context)
-        
+
     def generate_sequence(self, min_length: int = 5, max_length: int = None, variability: float = 0.3) -> str:
         if not self.ngrams:
             raise ValueError("Model not trained. Call fit() first.")
-            
+
         max_attempts = 100
         attempt = 0
-        
+
         while attempt < max_attempts:
             attempt += 1
             current = self._get_random_start()
-            
+
             while True:
-                context = tuple(current[-(self.n-1):])
-                
+                context = tuple(current[-(self.n - 1):])
+
                 if context not in self.ngrams:
-                    if (self.token_type == TokenType.WORD and 
-                        current[-1] in self.transitions):
+                    if (self.token_type == TokenType.WORD and
+                            current[-1] in self.transitions):
                         next_token = random.choice(self.transitions[current[-1]])
                         current.append(next_token)
                         continue
                     break
-                    
+
                 next_token = random.choice(self.ngrams[context])
                 current.append(next_token)
-                
+
                 if next_token == self.end_token:
-                    sequence = current[(self.n-1):-1]
+                    sequence = current[(self.n - 1):-1]
                     if len(sequence) >= min_length:
                         if max_length is None or len(sequence) <= max_length:
                             result = self._join_tokens(sequence)
@@ -594,26 +599,26 @@ class NGram:
                                 result = result.capitalize()
                             return result
                     break
-                
-                if max_length and len(current) - (self.n-1) > max_length:
+
+                if max_length and len(current) - (self.n - 1) > max_length:
                     break
-                    
-                if (self.token_type == TokenType.WORD and 
-                    random.random() < variability and 
-                    current[-1] in self.transitions):
+
+                if (self.token_type == TokenType.WORD and
+                        random.random() < variability and
+                        current[-1] in self.transitions):
                     next_token = random.choice(self.transitions[current[-1]])
                     current.append(next_token)
-        
+
         raise ValueError(f"Could not generate a sequence after {max_attempts} attempts.")
-    
-    def generate_sequences(self, 
-                         n_sequences: int = 20, 
-                         min_length: int = 5, 
-                         max_length: int = None) -> list[str]:
+
+    def generate_sequences(self,
+                           n_sequences: int = 20,
+                           min_length: int = 5,
+                           max_length: int = None) -> list[str]:
         sequences = []
         attempts = 0
         max_attempts = n_sequences * 2
-        
+
         while len(sequences) < n_sequences and attempts < max_attempts:
             attempts += 1
             try:
@@ -622,8 +627,8 @@ class NGram:
                     sequences.append(sequence)
             except ValueError:
                 continue
-                
+
         return sequences
-    
+
     def get_contexts(self) -> dict:
         return dict(self.ngrams)
