@@ -10,7 +10,7 @@ The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://
 
 I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network) and [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network).
 
-And, of course, I intend to improve this project and add more features in the future (Transformers? Autoencoders? cuDNN support?).
+This project will be maintained as long as I have ideas to improve it, and as long as I have time to work on it.
 
 ## 📦 Features
 
@@ -152,7 +152,19 @@ model = Model.load('my_model.json')
 
 ![plot](resources/img/plot.png)
 
+### Here is the generated dinosaur names using a simple RNN and a list of existing dinosaur names.
+
+![dino](resources/img/dino.png)
+
 **You can __of course__ use the library for any dataset you want.**
+
+## 🎯 TODO
+
+- [ ] Add more model architecture support (like transformers, autoencoders, etc)
+- [ ] Add more preprocessing tools (like image augmentation, etc)
+- [ ] Add more callbacks (like learning rate scheduler, etc)
+- [ ] Add cuDNN support to allow the use of GPUs
+- [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 
 ## ✍️ Authors
 
