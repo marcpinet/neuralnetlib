@@ -42,8 +42,6 @@ More examples in [this folder](examples).
 
 You are free to tweak the hyperparameters and the network architecture to see how it affects the results.
 
-I used the [MNIST dataset](https://en.wikipedia.org/wiki/MNIST_database) to test the library, but you can use any dataset you want.
-
 ## 🚀 Quick examples (more [here](examples/))
 
 ### Binary Classification
