@@ -10,15 +10,17 @@ The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://
 
 I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network) and [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network).
 
-And, of course, I intend to improve the neural networks and add more features in the future (Transformers? Autoencoders? Who knows?).
+And, of course, I intend to improve this project and add more features in the future (Transformers? Autoencoders? cuDNN support?).
 
 ## 📦 Features
 
-- Many layers (wrappers, dense, dropout, conv1d/2d, pooling1d/2d, flatten, embedding, batchnormalization, lstm, attention and more) 🧠
+- Many layers (dense, dropout, conv1d/2d, pooling1d/2d, flatten, embedding, batchnormalization, textvectorization, lstm, gru, attention and more) 🧠
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
 - Many optimizers (sgd, momentum, rmsprop, adam) 📊
 - Supports binary classification, multiclass classification, regression and text generation 📚
+- Preprocessing tools (tokenizer, pca, ngram, standardscaler, pad_sequences, one_hot_encode and more) 🛠
+- Callbacks and regularizers (early stopping, l1/l2 regularization) 📉
 - Save and load models 📁
 - Simple to use 📚
 
