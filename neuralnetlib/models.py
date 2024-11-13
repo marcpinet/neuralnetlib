@@ -153,7 +153,6 @@ class Model:
                 
             elif isinstance(layer, GRU):
                 cell = layer.cell
-                # Clipper et mettre à jour les gradients GRU
                 self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz), 
                                     cell.bz, clip_gradients(cell.dbz))
                 self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr), 
@@ -162,7 +161,6 @@ class Model:
                                     cell.bh, clip_gradients(cell.dbh))
                 
             elif hasattr(layer, 'weights'):
-                # Clipper et mettre à jour les gradients des couches standards
                 clipped_weights_grad = clip_gradients(layer.d_weights)
                 if hasattr(layer, 'd_bias'):
                     clipped_bias_grad = clip_gradients(layer.d_bias)
