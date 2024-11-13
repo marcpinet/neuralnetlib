@@ -160,6 +160,7 @@ model = Model.load('my_model.json')
 
 ## 🎯 TODO
 
+- [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more model architecture support (like transformers, autoencoders, etc)
 - [ ] Add more preprocessing tools (like image augmentation, etc)
 - [ ] Add more callbacks (like learning rate scheduler, etc)
