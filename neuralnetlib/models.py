@@ -483,16 +483,21 @@ class Model:
 
     def save(self, filename: str):
         model_state = {
-            'layers': []
+            'layers': [],
+            'temperature': self.temperature,
+            'gradient_clip_threshold': self.gradient_clip_threshold,
+            'enable_padding': self.enable_padding,
+            'padding_size': self.padding_size,
+            'random_state': self.random_state
         }
+        
         for layer in self.layers:
-            layer_config = layer.get_config()
-            if isinstance(layer, TextVectorization):
-                layer_config['vocabulary'] = layer.vocabulary
-            model_state['layers'].append(layer_config)
+            model_state['layers'].append(layer.get_config())
 
-        model_state['loss_function'] = self.loss_function.get_config()
-        model_state['optimizer'] = self.optimizer.get_config()
+        if self.loss_function:
+            model_state['loss_function'] = self.loss_function.get_config()
+        if self.optimizer:
+            model_state['optimizer'] = self.optimizer.get_config()
 
         with open(filename, 'w') as f:
             json.dump(model_state, f, indent=4)
@@ -506,9 +511,6 @@ class Model:
         model.layers = []
         for layer_config in model_state['layers']:
             layer = Layer.from_config(layer_config)
-            if isinstance(layer, TextVectorization) and 'vocabulary' in layer_config:
-                layer.vocabulary = layer_config['vocabulary']
-                layer.word_index = {word: i for i, word in enumerate(layer.vocabulary)}
             model.layers.append(layer)
 
         model.loss_function = LossFunction.from_config(model_state['loss_function'])

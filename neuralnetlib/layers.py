@@ -26,36 +26,12 @@ class Layer:
 
     @staticmethod
     def from_config(config: dict) -> 'Layer':
-        if config['name'] == 'Input':
-            return Input.from_config(config)
-        elif config['name'] == 'Dense':
-            return Dense.from_config(config)
-        elif config['name'] == 'Activation':
-            return Activation.from_config(config)
-        elif config['name'] == 'Conv2D':
-            return Conv2D.from_config(config)
-        elif config['name'] == 'MaxPooling2D':
-            return MaxPooling2D.from_config(config)
-        elif config['name'] == 'AveragePooling2D':
-            return AveragePooling2D.from_config(config)
-        elif config['name'] == 'Flatten':
-            return Flatten.from_config(config)
-        elif config['name'] == 'Dropout':
-            return Dropout.from_config(config)
-        elif config['name'] == 'Conv1D':
-            return Conv1D.from_config(config)
-        elif config['name'] == 'MaxPooling1D':
-            return MaxPooling1D.from_config(config)
-        elif config['name'] == 'AveragePooling1D':
-            return AveragePooling1D.from_config(config)
-        elif config['name'] == 'Embedding':
-            return Embedding.from_config(config)
-        elif config['name'] == 'BatchNormalization':
-            return BatchNormalization.from_config(config)
-        elif config['name'] == 'Permute':
-            return Permute.from_config(config)
-        else:
-            raise ValueError(f'Invalid layer name: {config["name"]}')
+        layer_name = config['name']
+        try:
+            layer_class = globals()[layer_name]
+            return layer_class.from_config(config)
+        except KeyError:
+            raise ValueError(f'Invalid layer name: {layer_name}. Make sure the class {layer_name} is defined.')
 
 
 class Input(Layer):
@@ -1347,15 +1323,15 @@ class TextVectorization(Layer):
             'max_tokens': self.max_tokens,
             'output_mode': self.output_mode,
             'output_sequence_length': self.output_sequence_length,
-            'vocabulary': self.vocabulary
+            'vocabulary': self.vocabulary,
+            'word_index': self.word_index
         }
 
     @staticmethod
     def from_config(config: dict):
-        layer = TextVectorization(
-            config['max_tokens'], config['output_mode'], config['output_sequence_length'])
+        layer = TextVectorization(config['max_tokens'], config['output_mode'], config['output_sequence_length'])
         layer.vocabulary = config['vocabulary']
-        layer.word_index = {word: i for i, word in enumerate(layer.vocabulary)}
+        layer.word_index = config['word_index']
         return layer
 
 
@@ -1390,6 +1366,7 @@ class LSTMCell(Layer):
     def __init__(self, units: int, random_state: int | None = None):
         self.units = units
         self.random_state = random_state
+        
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
 
@@ -1562,6 +1539,47 @@ class LSTMCell(Layer):
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
+    
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'units': self.units,
+            'random_state': self.random_state,
+            'weights': {
+                'Wf': self.Wf.tolist() if self.Wf is not None else None,
+                'Uf': self.Uf.tolist() if self.Uf is not None else None,
+                'bf': self.bf.tolist() if self.bf is not None else None,
+                'Wi': self.Wi.tolist() if self.Wi is not None else None,
+                'Ui': self.Ui.tolist() if self.Ui is not None else None,
+                'bi': self.bi.tolist() if self.bi is not None else None,
+                'Wc': self.Wc.tolist() if self.Wc is not None else None,
+                'Uc': self.Uc.tolist() if self.Uc is not None else None,
+                'bc': self.bc.tolist() if self.bc is not None else None,
+                'Wo': self.Wo.tolist() if self.Wo is not None else None,
+                'Uo': self.Uo.tolist() if self.Uo is not None else None,
+                'bo': self.bo.tolist() if self.bo is not None else None
+            }
+        }
+
+    @staticmethod
+    def from_config(config: dict) -> 'LSTMCell':
+        cell = LSTMCell(config['units'], config['random_state'])
+        if config.get('weights'):
+            w = config['weights']
+            if w['Wf'] is not None:
+                cell.Wf = np.array(w['Wf'])
+                cell.Uf = np.array(w['Uf'])
+                cell.bf = np.array(w['bf'])
+                cell.Wi = np.array(w['Wi'])
+                cell.Ui = np.array(w['Ui'])
+                cell.bi = np.array(w['bi'])
+                cell.Wc = np.array(w['Wc'])
+                cell.Uc = np.array(w['Uc'])
+                cell.bc = np.array(w['bc'])
+                cell.Wo = np.array(w['Wo'])
+                cell.Uo = np.array(w['Uo'])
+                cell.bo = np.array(w['bo'])
+        return cell
 
 
 class LSTM(Layer):
@@ -1677,18 +1695,22 @@ class LSTM(Layer):
             'return_state': self.return_state,
             'clip_value': self.clip_value,
             'random_state': self.random_state,
-            'cell': self.cell.get_config() if self.cell is not None else None
+            'cell_config': self.cell.get_config() if self.cell is not None else None
         }
 
     @staticmethod
-    def from_config(config: dict):
-        return LSTM(
+    def from_config(config: dict) -> 'LSTM':
+        lstm = LSTM(
             config['units'],
             config['return_sequences'],
-            config['return_state'],
-            config.get('clip_value', 5.0),
-            config['random_state']
+            config.get('return_state', False),
+            config['random_state'],
+            config.get('clip_value', 5.0)
         )
+        if config.get('cell_config'):
+            lstm.cell = LSTMCell.from_config(config['cell_config'])
+            lstm.initialized = True
+        return lstm
 
 
 class Bidirectional(Layer):
@@ -1764,13 +1786,16 @@ class Bidirectional(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'layer': self.forward_layer.get_config()
+            'forward_layer': self.forward_layer.get_config(),
+            'backward_layer': self.backward_layer.get_config()
         }
 
     @staticmethod
-    def from_config(config: dict):
-        layer = LSTM.from_config(config['layer'])
-        return Bidirectional(layer)
+    def from_config(config: dict) -> 'Bidirectional':
+        forward_layer = Layer.from_config(config['forward_layer'])
+        layer = Bidirectional(forward_layer)
+        layer.backward_layer = Layer.from_config(config['backward_layer'])
+        return layer
 
 
 class Unidirectional(Layer):
@@ -1798,8 +1823,8 @@ class Unidirectional(Layer):
         }
 
     @staticmethod
-    def from_config(config: dict):
-        layer = LSTM.from_config(config['layer'])
+    def from_config(config: dict) -> 'Unidirectional':
+        layer = Layer.from_config(config['layer'])
         return Unidirectional(layer)
 
 
@@ -1964,19 +1989,48 @@ class GRUCell:
 
         return dx, dh_prev
 
-    def get_config(self) -> dict:
-        return {
-            'units': self.units,
-            'random_state': self.random_state,
-            'clip_value': self.clip_value
-        }
-
     def clip_gradients(self, gradient: np.ndarray) -> np.ndarray:
         return np.clip(gradient, -self.clip_value, self.clip_value)
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
+    
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'units': self.units,
+            'random_state': self.random_state,
+            'clip_value': self.clip_value,
+            'weights': {
+                'Wr': self.Wr.tolist() if self.Wr is not None else None,
+                'Ur': self.Ur.tolist() if self.Ur is not None else None,
+                'br': self.br.tolist() if self.br is not None else None,
+                'Wz': self.Wz.tolist() if self.Wz is not None else None,
+                'Uz': self.Uz.tolist() if self.Uz is not None else None,
+                'bz': self.bz.tolist() if self.bz is not None else None,
+                'Wh': self.Wh.tolist() if self.Wh is not None else None,
+                'Uh': self.Uh.tolist() if self.Uh is not None else None,
+                'bh': self.bh.tolist() if self.bh is not None else None
+            }
+        }
+
+    @staticmethod
+    def from_config(config: dict) -> 'GRUCell':
+        cell = GRUCell(config['units'], config['random_state'], config.get('clip_value', 5.0))
+        if config.get('weights'):
+            w = config['weights']
+            if w['Wr'] is not None:
+                cell.Wr = np.array(w['Wr'])
+                cell.Ur = np.array(w['Ur'])
+                cell.br = np.array(w['br'])
+                cell.Wz = np.array(w['Wz'])
+                cell.Uz = np.array(w['Uz'])
+                cell.bz = np.array(w['bz'])
+                cell.Wh = np.array(w['Wh'])
+                cell.Uh = np.array(w['Uh'])
+                cell.bh = np.array(w['bh'])
+        return cell
 
 
 class GRU(Layer):
@@ -2076,18 +2130,21 @@ class GRU(Layer):
             'return_sequences': self.return_sequences,
             'random_state': self.random_state,
             'clip_value': self.clip_value,
-            'cell': self.cell.get_config() if self.cell is not None else None
+            'cell_config': self.cell.get_config() if self.cell is not None else None
         }
 
     @staticmethod
-    def from_config(config: dict):
-        return GRU(
+    def from_config(config: dict) -> 'GRU':
+        gru = GRU(
             config['units'],
             config['return_sequences'],
             config['random_state'],
-            config.get('clip_value', 5.0),
-            config['cell']
+            config.get('clip_value', 5.0)
         )
+        if config.get('cell_config'):
+            gru.cell = GRUCell.from_config(config['cell_config'])
+            gru.initialized = True
+        return gru
 
 
 class Attention(Layer):
