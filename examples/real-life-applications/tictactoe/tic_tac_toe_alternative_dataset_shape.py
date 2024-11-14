@@ -60,10 +60,10 @@ def main():
 
     model = Sequential()
     model.add(Input(input_neurones))
-    model.add(Dense(hidden_neurones, weights_init='he', random_state=42))
+    model.add(Dense(hidden_neurones, weights_init='he_uniform', random_state=42))
     model.add(Activation(ReLU()))
     for _ in range(hidden_layers):
-        model.add(Dense(hidden_neurones, weights_init='he', random_state=42))
+        model.add(Dense(hidden_neurones, weights_init='he_uniform', random_state=42))
         model.add(Activation(ReLU()))
 
     model.add(Dense(output_neurones, random_state=42))
