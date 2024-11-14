@@ -553,19 +553,27 @@ class Sequential(BaseModel):
         with open(filename, 'w') as f:
             json.dump(model_state, f, indent=4)
 
-    @staticmethod
-    def load(filename: str) -> 'Sequential':
+    @classmethod
+    def load(cls, filename: str) -> 'Sequential':
         with open(filename, 'r') as f:
             model_state = json.load(f)
 
-        model = Sequential()
-        model.layers = []
-        for layer_config in model_state['layers']:
-            layer = Layer.from_config(layer_config)
-            model.layers.append(layer)
+        model = cls()
 
-        model.loss_function = LossFunction.from_config(model_state['loss_function'])
-        model.optimizer = Optimizer.from_config(model_state['optimizer'])
+        model_attributes = vars(model)
+
+        for param, value in model_state.items():
+            if param in model_attributes:
+                setattr(model, param, value)
+
+        model.layers = [
+            Layer.from_config(layer_config) for layer_config in model_state.get('layers', [])
+        ]
+
+        if 'loss_function' in model_state:
+            model.loss_function = LossFunction.from_config(model_state['loss_function'])
+        if 'optimizer' in model_state:
+            model.optimizer = Optimizer.from_config(model_state['optimizer'])
 
         return model
 
@@ -620,7 +628,7 @@ class Sequential(BaseModel):
 
         fig.canvas.draw()
         plt.pause(0.1)
-
+        
 
 class Autoencoder(BaseModel):
     def __init__(self, 
@@ -633,7 +641,8 @@ class Autoencoder(BaseModel):
                  random_state: int | None = None,
                  skip_connections: bool = False,
                  l1_reg: float = 0.0,
-                 l2_reg: float = 0.0):
+                 l2_reg: float = 0.0,
+                 variational: bool = False):
         super().__init__(temperature, gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
@@ -648,11 +657,27 @@ class Autoencoder(BaseModel):
         self.y_true = None
         self.predictions = None
         self.latent_space = None
-        
+        self.latent_mean = None
+        self.latent_log_var = None
         self.skip_connections = skip_connections
+        
         self.l1_reg = l1_reg
         self.l2_reg = l2_reg
+        self.variational = variational
         self.skip_cache = {}
+
+    def _calculate_kl_divergence(self):
+        if not self.variational:
+            return 0.0
+        kl_loss = -0.5 * np.sum(1 + self.latent_log_var - np.square(self.latent_mean) - np.exp(self.latent_log_var))
+        return kl_loss / len(self.latent_mean)
+
+    def _reparameterize(self):
+        if not self.variational:
+            return self.latent_space
+        rng = np.random.default_rng(self.random_state)
+        epsilon = rng.normal(size=self.latent_mean.shape)
+        return self.latent_mean + np.exp(0.5 * self.latent_log_var) * epsilon
     
     def _calculate_regularization(self):
         reg_loss = 0.0
@@ -803,7 +828,13 @@ class Autoencoder(BaseModel):
             if self.skip_connections and isinstance(layer, Dense):
                 self.skip_cache[layer.units] = encoded
         
-        self.latent_space = encoded
+        if self.variational:
+            latent_dim = encoded.shape[-1] // 2
+            self.latent_mean = encoded[:, :latent_dim]
+            self.latent_log_var = encoded[:, latent_dim:]
+            self.latent_space = self._reparameterize()
+        else:
+            self.latent_space = encoded
         
         # Decoder forward pass
         decoded = encoded
@@ -914,8 +945,8 @@ class Autoencoder(BaseModel):
         self.predictions = self.forward_pass(x_batch)
         
         reconstruction_loss = self.decoder_loss(y_batch, self.predictions)
-        
         regularization_loss = self._calculate_regularization()
+        kl_loss = self._calculate_kl_divergence() if self.variational else 0
         
         latent_l2 = 0.0001 * np.mean(np.square(self.latent_space))
         latent_std = np.std(self.latent_space, axis=0)
@@ -925,7 +956,7 @@ class Autoencoder(BaseModel):
             latent_l2 *= 0.1
             distribution_penalty *= 0.1
         
-        total_loss = reconstruction_loss + regularization_loss + latent_l2 + distribution_penalty
+        total_loss = reconstruction_loss + regularization_loss + latent_l2 + distribution_penalty + kl_loss
         
         error = self.decoder_loss.derivative(y_batch, self.predictions)
         if error.ndim == 1:
@@ -983,36 +1014,27 @@ class Autoencoder(BaseModel):
         all_predictions = np.vstack(predictions_list)
         
         return avg_loss, all_predictions
-    
-    def get_config(self) -> dict:
-        """Return configuration of the autoencoder"""
-        config = super().get_config()
-        config.update({
-            'skip_connections': self.skip_connections,
-            'l1_reg': self.l1_reg,
-            'l2_reg': self.l2_reg
-        })
-        return config
-    
+  
     @classmethod
     def load(cls, filename: str) -> 'Autoencoder':
         with open(filename, 'r') as f:
             model_state = json.load(f)
-            
-        model = cls(
-            skip_connections=model_state.get('skip_connections', False),
-            l1_reg=model_state.get('l1_reg', 0.0),
-            l2_reg=model_state.get('l2_reg', 0.0)
-        )
-        
-        for layer_config in model_state['encoder_layers']:
-            layer = Layer.from_config(layer_config)
-            model.encoder_layers.append(layer)
-            
-        for layer_config in model_state['decoder_layers']:
-            layer = Layer.from_config(layer_config)
-            model.decoder_layers.append(layer)
-            
+
+        model = cls()
+
+        model_attributes = vars(model)
+
+        for param, value in model_state.items():
+            if param in model_attributes:
+                setattr(model, param, value)
+
+        model.encoder_layers = [
+            Layer.from_config(layer_config) for layer_config in model_state.get('encoder_layers', [])
+        ]
+        model.decoder_layers = [
+            Layer.from_config(layer_config) for layer_config in model_state.get('decoder_layers', [])
+        ]
+
         if 'encoder_loss' in model_state:
             model.encoder_loss = LossFunction.from_config(model_state['encoder_loss'])
         if 'decoder_loss' in model_state:
@@ -1021,7 +1043,7 @@ class Autoencoder(BaseModel):
             model.encoder_optimizer = Optimizer.from_config(model_state['encoder_optimizer'])
         if 'decoder_optimizer' in model_state:
             model.decoder_optimizer = Optimizer.from_config(model_state['decoder_optimizer'])
-        
+
         return model
         
     def save(self, filename: str):
