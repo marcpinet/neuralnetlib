@@ -313,6 +313,54 @@ class PCA:
         return X_reconstructed.reshape((-1, *self.input_shape))
 
 
+class TSNE:
+    def __init__(self, n_components: int = 2, perplexity: float = 30.0, learning_rate: float = 200.0, n_iter: int = 1000, random_state: int = None):
+        self.n_components = n_components
+        self.perplexity = perplexity
+        self.learning_rate = learning_rate
+        self.n_iter = n_iter
+        self.random_state = random_state
+        self.embedding_ = None
+        self.kl_div = None
+
+    def _calculate_pairwise_affinities(self, X):
+        distances = np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis=2)
+        P = np.exp(-distances / (2 * self.perplexity ** 2))
+        np.fill_diagonal(P, 0)
+        P /= np.sum(P, axis=1, keepdims=True)
+        return P
+
+    def _kl_divergence(self, P, Q):
+        return np.sum(P * np.log((P + 1e-8) / (Q + 1e-8)))
+
+    def fit_transform(self, X):
+        np.random.seed(self.random_state)
+        n_samples, n_features = X.shape
+        P = self._calculate_pairwise_affinities(X)
+        rng = np.random.default_rng(self.random_state)
+        Y = rng.standard_normal((n_samples, self.n_components)) * 1e-4
+
+        for i in range(self.n_iter):
+            distances = np.sum((Y[:, np.newaxis, :] - Y[np.newaxis, :, :]) ** 2, axis=2)
+            Q = 1 / (1 + distances)
+            np.fill_diagonal(Q, 0)
+            Q /= np.sum(Q)
+
+            PQ_diff = (P - Q) * Q
+            grad = np.zeros_like(Y)
+            for j in range(n_samples):
+                grad[j] = np.sum((Y[j] - Y) * PQ_diff[j, :, np.newaxis], axis=0)
+
+            Y -= self.learning_rate * grad
+
+            if (i + 1) % 100 == 0:
+                kl_div = self._kl_divergence(P, Q)
+                self.kl_div = kl_div
+
+        self.embedding_ = Y
+        return self.embedding_
+
+
 class Tokenizer:
     def __init__(self, num_words: int | None = None, filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
                  lower: bool = True, split: str = ' ', char_level: bool = False, oov_token: str | None = None) -> None:
