@@ -98,3 +98,27 @@ class EarlyStopping(Callback):
                 raise ValueError(f"Monitored metric '{self.monitor}' is not available. "
                                  f"Available metrics are: {','.join(logs.keys())}")
         return float(monitor_value)
+
+
+class LearningRateScheduler(Callback):
+    def __init__(self, schedule: callable, verbose: int = 0) -> None:
+        super().__init__()
+        self.schedule = schedule
+        self.verbose = verbose
+
+    def on_epoch_begin(self, epoch: int, logs: dict | None = None) -> None:
+        logs = logs or {}
+        model = logs.get('model')
+        if model is None:
+            raise ValueError("Model not found in logs. Ensure 'model' is passed in logs.")
+
+        new_lr = self.schedule(epoch)
+
+        if hasattr(model, 'optimizer') and hasattr(model.optimizer, 'learning_rate'):
+            old_lr = model.optimizer.learning_rate
+            model.optimizer.learning_rate = new_lr
+            if self.verbose > 0:
+                print(f"Epoch {epoch + 1}: Learning rate updated from {old_lr:.5f} to {new_lr:.5f}")
+        else:
+            raise AttributeError("Model's optimizer does not have a learning rate attribute.")
+
