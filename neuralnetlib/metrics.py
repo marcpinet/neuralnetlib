@@ -29,6 +29,18 @@ class Metric:
             return recall_score
         elif name in ['precision', 'precision_score', 'precision-score', 'positive-predictive-value']:
             return precision_score
+        elif name in ['roc-auc', 'roc_auc', 'roc-auc-score']:
+            return roc_auc_score
+        elif name in ['pr-auc', 'pr_auc', 'pr-auc-score']:
+            return pr_auc_score
+        elif name in ['mean-squared-error', 'mse']:
+            return mean_squared_error
+        elif name in ['mean-absolute-error', 'mae']:
+            return mean_absolute_error
+        elif name in ['mean-absolute-percentage-error', 'mape']:
+            return mean_absolute_percentage_error
+        elif name in ['r2', 'r2_score']:
+            return r2_score
         else:
             raise ValueError(f"Metric {name} is not supported.")
 
@@ -162,85 +174,120 @@ def classification_report(y_pred: np.ndarray, y_true: np.ndarray, threshold: flo
 
     return report
 
-
-def roc_auc_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def roc_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-
+    
     if y_pred.shape[1] == 1:
         y_pred = y_pred.ravel()
+        y_true = y_true.ravel()
     else:
-        y_pred = y_pred[:, 1]
-
-    desc_sort_indices = np.argsort(y_pred)[::-1]
-    y_pred = y_pred[desc_sort_indices]
-    y_true = y_true[desc_sort_indices]
-
+        raise ValueError("Multiclass ROC AUC not implemented yet.")
+    
+    if len(np.unique(y_true)) != 2:
+        return 0.0
+    
+    desc_score_indices = np.argsort(y_pred)[::-1]
+    y_true = y_true[desc_score_indices]
+    
+    distinct_value_indices = np.nonzero(np.diff(y_pred[desc_score_indices]))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
+    
+    tps = np.cumsum(y_true)[threshold_idxs]
+    fps = 1 + threshold_idxs - tps
+    
     n_pos = np.sum(y_true == 1)
     n_neg = len(y_true) - n_pos
-
+    
     if n_pos == 0 or n_neg == 0:
         return 0.0
+        
+    tpr = tps / n_pos
+    fpr = fps / n_neg
+    
+    tpr = np.r_[0, tpr]
+    fpr = np.r_[0, fpr]
+    
+    return np.trapz(tpr, fpr)
 
-    tpr = np.cumsum(y_true) / n_pos
-    fpr = np.cumsum(1 - y_true) / n_neg
-
-    tpr = np.concatenate([[0], tpr, [1]])
-    fpr = np.concatenate([[0], fpr, [1]])
-
-    width = np.diff(fpr)
-    height = (tpr[1:] + tpr[:-1]) / 2
-
-    return np.sum(width * height)
-
-
-def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-
+    
     if y_pred.shape[1] == 1:
         y_pred = y_pred.ravel()
+        y_true = y_true.ravel()
     else:
-        y_pred = y_pred[:, 1]
+        raise ValueError("Multiclass PR AUC not implemented yet.")
+    
+    if len(np.unique(y_true)) != 2:
+        return 0.0
+        
+    desc_score_indices = np.argsort(y_pred)[::-1]
+    y_true = y_true[desc_score_indices]
+    
+    distinct_value_indices = np.nonzero(np.diff(y_pred[desc_score_indices]))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
+    
+    tps = np.cumsum(y_true)[threshold_idxs]
+    fps = 1 + threshold_idxs - tps
+    
+    precision = tps / (tps + fps)
+    recall = tps / tps[-1]
+    
+    precision = np.r_[1, precision]
+    recall = np.r_[0, recall]
+    
+    last_ind = precision.size
+    sl = slice(0, last_ind)
+    
+    return np.trapz(precision[sl], recall[sl])
 
-    desc_sort_indices = np.argsort(y_pred)[::-1]
-    y_pred = y_pred[desc_sort_indices]
-    y_true = y_true[desc_sort_indices]
 
-    tp = np.cumsum(y_true)
-    fp = np.cumsum(1 - y_true)
-
-    precision = tp / (tp + fp)
-    recall = tp / np.sum(y_true)
-
-    precision = np.nan_to_num(precision)
-    recall = np.nan_to_num(recall)
-
-    precision = np.concatenate([[1], precision, [0]])
-    recall = np.concatenate([[0], recall, [1]])
-
-    width = np.diff(recall)
-    height = (precision[1:] + precision[:-1]) / 2
-
-    return np.sum(width * height)
-
-
-def mean_squared_error(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def mean_squared_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    return np.mean((y_pred - y_true) ** 2)
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
+        y_true_classes = y_true.ravel()
+    else:
+        y_pred_classes = np.argmax(y_pred, axis=1)
+        y_true_classes = np.argmax(y_true, axis=1)
+
+    return np.mean((y_pred_classes - y_true_classes) ** 2)
 
 
-def mean_absolute_error(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def mean_absolute_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    return np.mean(np.abs(y_pred - y_true))
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
+        y_true_classes = y_true.ravel()
+    else:
+        y_pred_classes = np.argmax(y_pred, axis=1)
+        y_true_classes = np.argmax(y_true, axis=1)
+    
+    return np.mean(np.abs(y_pred_classes - y_true_classes))
 
 
-def mean_absolute_percentage_error(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def mean_absolute_percentage_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    mask = y_true != 0
-    return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
+        y_true_classes = y_true.ravel()
+    else:
+        y_pred_classes = np.argmax(y_pred, axis=1)
+        y_true_classes = np.argmax(y_true, axis=1)
+    
+    mask = y_true_classes != 0
+    return np.mean(np.abs((y_true_classes[mask] - y_pred_classes[mask]) / y_true_classes[mask])) * 100
 
 
-def r2_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    if y_pred.shape[1] == 1:
+        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
+        y_true_classes = y_true.ravel()
+    else:
+        y_pred_classes = np.argmax(y_pred, axis=1)
+        y_true_classes = np.argmax(y_true, axis=1)
+        
+    ss_res = np.sum((y_true_classes - y_pred_classes) ** 2)
+    ss_tot = np.sum((y_true_classes - np.mean(y_true_classes)) ** 2)
     return 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
