@@ -997,6 +997,67 @@ class BatchNormalization(Layer):
         return layer
 
 
+import numpy as np
+
+class LayerNormalization(Layer):
+    def __init__(self, epsilon: float = 1e-8):
+        super().__init__()
+        self.epsilon = epsilon
+        self.gamma = None
+        self.beta = None
+        self.d_gamma = None
+        self.d_beta = None
+
+    def initialize_weights(self, input_shape: tuple):
+        self.gamma = np.ones(input_shape)
+        self.beta = np.zeros(input_shape)
+        self.d_gamma = np.zeros_like(self.gamma)
+        self.d_beta = np.zeros_like(self.beta)
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        if self.gamma is None:
+            self.initialize_weights(input_data.shape[1:])
+        
+        mean = np.mean(input_data, axis=-1, keepdims=True)
+        variance = np.var(input_data, axis=-1, keepdims=True)
+        
+        self.input_normalized = (input_data - mean) / np.sqrt(variance + self.epsilon)
+        output = self.gamma * self.input_normalized + self.beta
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        self.d_gamma = np.sum(output_error * self.input_normalized, axis=0, keepdims=True)
+        self.d_beta = np.sum(output_error, axis=0, keepdims=True)
+        
+        N, D = output_error.shape
+        d_input_normalized = output_error * self.gamma
+        d_variance = np.sum(d_input_normalized * (self.input - self.input.mean(axis=-1, keepdims=True)) * -0.5 *
+                            np.power(self.input.var(axis=-1, keepdims=True) + self.epsilon, -1.5), axis=-1, keepdims=True)
+        d_mean = np.sum(d_input_normalized * -1 / np.sqrt(self.input.var(axis=-1, keepdims=True) + self.epsilon), axis=-1, keepdims=True) + \
+                 d_variance * np.mean(-2 * (self.input - self.input.mean(axis=-1, keepdims=True)), axis=-1, keepdims=True)
+
+        d_input = (d_input_normalized / np.sqrt(self.input.var(axis=-1, keepdims=True) + self.epsilon)) + \
+                  (d_variance * 2 * (self.input - self.input.mean(axis=-1, keepdims=True)) / D) + \
+                  (d_mean / D)
+        return d_input
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'epsilon': self.epsilon,
+            'gamma': self.gamma.tolist() if self.gamma is not None else None,
+            'beta': self.beta.tolist() if self.beta is not None else None
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        layer = LayerNormalization(config['epsilon'])
+        if config.get('gamma') is not None:
+            layer.gamma = np.array(config['gamma'])
+            layer.beta = np.array(config['beta'])
+        return layer
+
+
 class AveragePooling2D(Layer):
     def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
         if isinstance(pool_size, int):
@@ -2247,67 +2308,73 @@ class Attention(Layer):
 
 compatibility_dict = {
     Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, GRU, Bidirectional,
-            Unidirectional, Attention],
+            Unidirectional, Attention, LayerNormalization],
 
-    Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-            Attention],
+    Dense: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
+            Bidirectional, Unidirectional, Attention],
 
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, BatchNormalization,
-                 AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional,
-                 Unidirectional, Attention],
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D,
+                 BatchNormalization, LayerNormalization, AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout,
+                 Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
 
     Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Activation, Dropout, Flatten,
-             BatchNormalization, Permute, Reshape],
+             BatchNormalization, LayerNormalization, Permute, Reshape],
 
     MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
 
     AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
 
-    GlobalAveragePooling2D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
+    GlobalAveragePooling2D: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape],
 
     Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten,
-             BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+             BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+             Attention],
 
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM, GRU,
-                   Bidirectional, Unidirectional, Attention],
+    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM,
+                   GRU, Bidirectional, Unidirectional, Attention],
 
     AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM,
                        GRU, Bidirectional, Unidirectional, Attention],
 
-    GlobalAveragePooling1D: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape],
+    GlobalAveragePooling1D: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape],
 
     Flatten: [Dense, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
 
-    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention,
+              LayerNormalization],
 
     Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, Dropout, LSTM, GRU, Bidirectional,
-                Unidirectional, Attention],
+                Unidirectional, Attention, LayerNormalization, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D],
 
     BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-                         Attention],
+                         Attention, LayerNormalization, Embedding],
+
+    LayerNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+                         Attention, Dropout, BatchNormalization, Embedding],
 
     Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
-              BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+              BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
+              Attention],
 
-    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
+    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Dropout, BatchNormalization, LayerNormalization],
 
     Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
-              BatchNormalization, Permute, Reshape, TextVectorization, Embedding, Input, MaxPooling2D, AveragePooling2D,
-              GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, LSTM, GRU, Bidirectional,
-              Unidirectional, Attention],
+              BatchNormalization, LayerNormalization, Permute, Reshape, TextVectorization, Embedding, Input,
+              MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D,
+              GlobalAveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional, Attention],
 
-    LSTM: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-           Attention],
+    LSTM: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, Flatten, LSTM, GRU,
+           Bidirectional, Unidirectional, Attention],
 
-    GRU: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-          Attention],
+    GRU: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, Flatten, LSTM, GRU,
+          Bidirectional, Unidirectional, Attention],
 
-    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
-                    Unidirectional, Attention, GlobalAveragePooling1D],
+    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
+                    Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
 
-    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
-                     Unidirectional, Attention, GlobalAveragePooling1D],
+    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
+                     Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
 
-    Attention: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional,
-                Unidirectional, GlobalAveragePooling1D]
+    Attention: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
+                Bidirectional, Unidirectional, GlobalAveragePooling1D, Embedding, Flatten],
 }
