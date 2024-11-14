@@ -214,6 +214,24 @@ def pad_sequences(sequences: np.ndarray, max_length: int, padding: str = 'pre', 
     return padded_sequences
 
 
+def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
+    """
+    Compute the cosine similarity between two vectors.
+
+    Args:
+        vector1 (np.ndarray): First vector.
+        vector2 (np.ndarray): Second vector.
+
+    Returns:
+        float: Cosine similarity between the two vectors.
+    """
+    dot_product = np.dot(vector1, vector2)
+    norm_vector1 = np.linalg.norm(vector1)
+    norm_vector2 = np.linalg.norm(vector2)
+    similarity = dot_product / (norm_vector1 * norm_vector2)
+    return similarity
+
+
 class StandardScaler:
     def __init__(self):
         self.mean_ = None
