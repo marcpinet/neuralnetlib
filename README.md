@@ -160,8 +160,8 @@ model = Model.load('my_model.json')
 
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more model architecture support (like transformers, etc)
-- [ ] Add more preprocessing tools (like data augmentation, cosine similarity, etc)
-- [ ] Add more callbacks (like learning rate scheduler, etc)
+- [ ] Add more preprocessing tools (like data augmentation, etc)
+- [ ] Add more callbacks
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 
