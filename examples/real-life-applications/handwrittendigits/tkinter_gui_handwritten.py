@@ -3,11 +3,11 @@ import tkinter as tk
 import numpy as np
 from PIL import Image, ImageDraw
 
-from neuralnetlib.models import Model
+from neuralnetlib.models import Sequential
 
 
 def main():
-    model = Model.load('my_mnist_model.npz')
+    model = Sequential.load('my_mnist_model.npz')
     window = tk.Tk()
     window.geometry("480x480")
     canvas = tk.Canvas(window, width=280, height=280, bg='black')

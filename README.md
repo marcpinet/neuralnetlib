@@ -47,7 +47,7 @@ You are free to tweak the hyperparameters and the network architecture to see ho
 ### Binary Classification
 
 ```python
-from neuralnetlib.models import Model
+from neuralnetlib.models import Sequential
 from neuralnetlib.layers import Input, Dense
 from neuralnetlib.activations import Sigmoid
 from neuralnetlib.losses import BinaryCrossentropy
@@ -57,7 +57,7 @@ from neuralnetlib.metrics import accuracy_score
 # ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
 
 # Create a model
-model = Model()
+model = Sequential()
 model.add(Input(10))  # 10 features
 model.add(Dense(8))
 model.add(Dense(1))
@@ -81,7 +81,7 @@ from neuralnetlib.metrics import accuracy_score
 # ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
 
 # Create and compile a model
-model = Model()
+model = Sequential()
 model.add(Input(28, 28, 1)) # For example, MNIST images
 model.add(Conv2D(32, kernel_size=3, padding='same'), activation='relu')  # activation supports both str...
 model.add(BatchNormalization())
@@ -106,7 +106,7 @@ from neuralnetlib.metrics import accuracy_score
 # ... Preprocess x_train, y_train, x_test, y_test if necessary (you can use neuralnetlib.preprocess and neuralnetlib.utils)
 
 # Create and compile a model
-model = Model()
+model = Sequential()
 model.add(Input(13))
 model.add(Dense(64, activation='leakyrelu'))
 model.add(Dense(1), activation="linear")
@@ -160,7 +160,7 @@ model = Model.load('my_model.json')
 
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more model architecture support (like transformers, autoencoders, etc)
-- [ ] Add more preprocessing tools (like image augmentation, etc)
+- [ ] Add more preprocessing tools (like data augmentation, cosine similarity, etc)
 - [ ] Add more callbacks (like learning rate scheduler, etc)
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)

@@ -2252,7 +2252,7 @@ compatibility_dict = {
     Dense: [Dense, Activation, Dropout, BatchNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
             Attention],
 
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D,
+    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, BatchNormalization,
                  AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional,
                  Unidirectional, Attention],
 

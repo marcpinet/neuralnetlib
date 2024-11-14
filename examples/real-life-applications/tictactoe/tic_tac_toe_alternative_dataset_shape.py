@@ -9,7 +9,7 @@ from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import Input, Dense, Activation
 from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score
-from neuralnetlib.models import Model
+from neuralnetlib.models import Sequential
 from neuralnetlib.optimizers import Adam
 
 
@@ -58,7 +58,7 @@ def main():
     print(f"x_test shape: {x_test.shape}")
     print(f"y_test shape: {y_test.shape}")
 
-    model = Model()
+    model = Sequential()
     model.add(Input(input_neurones))
     model.add(Dense(hidden_neurones, weights_init='he', random_state=42))
     model.add(Activation(ReLU()))
