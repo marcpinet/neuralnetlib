@@ -163,6 +163,7 @@ model = Model.load('my_model.json')
 - [ ] Add more model architecture support (like transformers, etc)
 - [ ] Add more preprocessing tools (like data augmentation, etc)
 - [ ] Add more callbacks
+- [ ] Add more layers (like Conv2dTranspose, etc)
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 
