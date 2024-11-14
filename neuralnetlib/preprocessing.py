@@ -264,14 +264,18 @@ class MinMaxScaler:
 
 
 class PCA:
-    def __init__(self, n_components: int, random_state: int = None):
+    def __init__(self, n_components: int = None, random_state: int = None):
         self.n_components = n_components
         self.random_state = random_state
         self.components = None
         self.mean = None
         self.input_shape = None
+        self.explained_variance_ratio = None
 
     def fit(self, X: np.ndarray):
+        if self.n_components is None:
+            self.n_components = X.shape[1]
+        
         self.input_shape = X.shape[1:]
         X = X.reshape(X.shape[0], -1)
 
@@ -287,6 +291,12 @@ class PCA:
         eigenvectors = eigenvectors[:, sorted_indices]
 
         self.components = eigenvectors[:, :self.n_components]
+        
+        explained_variance = np.var(np.dot(X_centered, self.components), axis=0)
+        total_variance = np.sum(np.var(X_centered, axis=0))
+
+        self.explained_variance_ratio = explained_variance / total_variance
+
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         X = X.reshape(X.shape[0], -1)
