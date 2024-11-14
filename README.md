@@ -8,13 +8,13 @@ I made it to challenge myself and to learn more about deep neural networks, how 
 
 The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in a week.
 
-I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network) and [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder).
+I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder) and Variational [Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder).
 
 This project will be maintained as long as I have ideas to improve it, and as long as I have time to work on it.
 
 ## 📦 Features
 
-- Many models (sequential, functional, autoencoder) 🧠
+- Many models architectures (sequential, functional, autoencoder) 🏗
 - Many layers (dense, dropout, conv1d/2d, pooling1d/2d, flatten, embedding, batchnormalization, textvectorization, lstm, gru, attention and more) 🧠
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
