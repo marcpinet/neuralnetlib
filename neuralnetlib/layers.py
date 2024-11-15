@@ -412,27 +412,44 @@ class Conv2D(Layer):
         batch_size, in_channels, in_height, in_width = input_data.shape
         out_channels, _, kernel_height, kernel_width = weights.shape
 
-        assert in_channels == _
+        assert in_channels == _, "Number of input channels must match"
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          stride[0] + kernel_height - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         stride[1] + kernel_width - in_width) // 2
+            out_height = int(np.ceil(float(in_height) / float(stride[0])))
+            out_width = int(np.ceil(float(in_width) / float(stride[1])))
+            
+            pad_height_total = int(max(0, (out_height - 1) * stride[0] + kernel_height - in_height))
+            pad_width_total = int(max(0, (out_width - 1) * stride[1] + kernel_width - in_width))
+            
+            pad_height = pad_height_total // 2
+            pad_width = pad_width_total // 2
+            
+            out_height = (in_height + 2 * pad_height - kernel_height) // stride[0] + 1
+            out_width = (in_width + 2 * pad_width - kernel_width) // stride[1] + 1
         else:
             pad_height, pad_width = 0, 0
-
-        out_height = (in_height + 2 * pad_height -
-                      kernel_height) // stride[0] + 1
-        out_width = (in_width + 2 * pad_width - kernel_width) // stride[1] + 1
+            out_height = (in_height - kernel_height) // stride[0] + 1
+            out_width = (in_width - kernel_width) // stride[1] + 1
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
-                        stride, (pad_height, pad_width))
+                       stride, (pad_height, pad_width))
+        
         col_W = weights.reshape(out_channels, -1).T
 
-        output = np.dot(col, col_W) + bias
-        output = output.reshape(batch_size, out_height,
-                                out_width, -1).transpose(0, 3, 1, 2)
+        output = np.dot(col, col_W)
+        
+        output = output + bias
+
+        expected_elements = batch_size * out_height * out_width * out_channels
+        actual_elements = output.size
+        
+        if expected_elements != actual_elements:
+            raise ValueError(f"Size mismatch: Expected {expected_elements} elements "
+                           f"({batch_size}×{out_height}×{out_width}×{out_channels}), "
+                           f"but got {actual_elements} elements.")
+
+        output = output.reshape(batch_size, out_height, out_width, out_channels)
+        output = output.transpose(0, 3, 1, 2)
 
         return output
 
@@ -444,29 +461,34 @@ class Conv2D(Layer):
         _, _, kernel_height, kernel_width = weights.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          stride[0] + kernel_height - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         stride[1] + kernel_width - in_width) // 2
+            out_height_temp = int(np.ceil(float(in_height) / float(stride[0])))
+            out_width_temp = int(np.ceil(float(in_width) / float(stride[1])))
+            
+            pad_height_total = int(max(0, (out_height_temp - 1) * stride[0] + kernel_height - in_height))
+            pad_width_total = int(max(0, (out_width_temp - 1) * stride[1] + kernel_width - in_width))
+            
+            pad_height = pad_height_total // 2
+            pad_width = pad_width_total // 2
         else:
             pad_height, pad_width = 0, 0
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
-                        stride, (pad_height, pad_width))
+                       stride, (pad_height, pad_width))
+        
         col_W = weights.reshape(out_channels, -1).T
 
         d_output = output_error.transpose(0, 2, 3, 1).reshape(
             batch_size * out_height * out_width, -1)
+        
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
         d_weights = d_weights.transpose(1, 0).reshape(weights.shape)
-
         d_col = np.dot(d_output, col_W.T)
+
         d_input = col2im_2d(d_col, input_data.shape, kernel_height,
-                            kernel_width, stride, (pad_height, pad_width))
+                           kernel_width, stride, (pad_height, pad_width))
 
         return d_input, d_weights, d_bias
-
 
 class MaxPooling2D(Layer):
     def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):

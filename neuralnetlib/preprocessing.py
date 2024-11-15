@@ -26,43 +26,36 @@ def apply_threshold(y_pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
 
 
 def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int | tuple[int, int] = 1,
-              pad: int | tuple[int, int] = 0) -> np.ndarray:
-    """
-    Transform 4 dimensional images to 2 dimensional array.
+              pad: int | tuple[int, int | float] = 0) -> np.ndarray:
+    """Transform 4 dimensional images to 2 dimensional array.
 
     Args:
         input_data (np.ndarray): 4 dimensional input images (The number of images, The number of channels, Height, Width)
         filter_h (int): height of filter
         filter_w (int): width of filter
-        stride (int or tuple): the interval of stride
-        pad (int or tuple): the interval of padding
+        stride (int | tuple[int, int], optional): the interval of stride. Defaults to 1.
+        pad (int | tuple[int, int  |  float], optional): the interval of padding. Defaults to 0.
 
     Returns:
-        col (np.ndarray): 2 dimensional array
-
+        np.ndarray: 
     """
     N, C, H, W = input_data.shape
 
     if isinstance(pad, int):
         pad_h, pad_w = pad, pad
     else:
-        pad_h, pad_w = pad
+        pad_h, pad_w = map(int, pad)
 
     if isinstance(stride, int):
         stride_h, stride_w = stride, stride
     else:
         stride_h, stride_w = stride
 
-    # Make sure that the convolution can be executed
-    assert (
-                   H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
-    assert (
-                   W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
-
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
 
-    padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)), mode='constant')
+    pad_width = [(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)]
+    padded_input = np.pad(input_data, pad_width, mode='constant')
 
     col = np.zeros((N, C, filter_h, filter_w, out_h, out_w))
 
@@ -73,7 +66,58 @@ def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int 
             col[:, :, y, x, :, :] = padded_input[:, :, y:y_max:stride_h, x:x_max:stride_w]
 
     col = col.transpose(0, 4, 5, 1, 2, 3).reshape(N * out_h * out_w, -1)
+    
     return col
+
+def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h: int, filter_w: int,
+              stride: int | tuple[int, int] = 1, pad: int | tuple[int, int | float] = 0) -> np.ndarray:
+    """
+    Inverse of im2col.
+
+    Args:
+        col (np.ndarray): 2 dimensional array
+        input_shape (tuple): the shape of original input images
+        filter_h (int): height of filter
+        filter_w (int): width of filter
+        stride (int or tuple): the interval of stride
+        pad (int or tuple): the interval of padding
+
+    Returns:
+        image (np.ndarray): original images
+    """
+    N, C, H, W = input_shape
+
+    if isinstance(pad, int):
+        pad_h, pad_w = pad, pad
+    else:
+        pad_h, pad_w = map(int, pad)
+
+    if isinstance(stride, int):
+        stride_h, stride_w = stride, stride
+    else:
+        stride_h, stride_w = stride
+
+    # Calculate output dimensions
+    out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
+    out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
+
+    # Reshape col back to original format
+    col = col.reshape(N, out_h, out_w, C, filter_h, filter_w).transpose(0, 3, 4, 5, 1, 2)
+
+    # Initialize output image with padding
+    img_h = H + 2 * pad_h + stride_h - 1
+    img_w = W + 2 * pad_w + stride_w - 1
+    img = np.zeros((N, C, img_h, img_w))
+
+    # Fill output image
+    for y in range(filter_h):
+        y_max = y + stride_h * out_h
+        for x in range(filter_w):
+            x_max = x + stride_w * out_w
+            img[:, :, y:y_max:stride_h, x:x_max:stride_w] += col[:, :, y, x, :, :]
+
+    # Remove padding
+    return img[:, :, pad_h:H + pad_h, pad_w:W + pad_w]
 
 
 def im2col_1d(input_data: np.ndarray, filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
@@ -135,57 +179,6 @@ def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: i
         image[:, :, y:y_max:stride] += col[:, :, y, :]
 
     return image[:, :, pad:L + pad]
-
-
-def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h: int, filter_w: int,
-              stride: int | tuple[int, int] = 1, pad: int | tuple[int, int] = 0) -> np.ndarray:
-    """
-    Inverse of im2col.
-
-    Args:
-        col (np.ndarray): 2 dimensional array
-        input_shape (tuple): the shape of original input images
-        filter_h (int): height of filter
-        filter_w (int): width of filter
-        stride (int or tuple): the interval of stride
-        pad (int or tuple): the interval of padding
-
-    Returns:
-        image (np.ndarray): original images
-
-    """
-    N, C, H, W = input_shape
-
-    if isinstance(pad, int):
-        pad_h, pad_w = pad, pad
-    else:
-        pad_h, pad_w = pad
-
-    if isinstance(stride, int):
-        stride_h, stride_w = stride, stride
-    else:
-        stride_h, stride_w = stride
-
-    # Make sure that the convolution can be executed
-    assert (
-                   H + 2 * pad_h - filter_h) % stride_h == 0, f'invalid parameters, (H + 2 * pad_h - filter_h) % stride_h != 0, got H={H}, pad_h={pad_h}, filter_h={filter_h}, stride_h={stride_h}'
-    assert (
-                   W + 2 * pad_w - filter_w) % stride_w == 0, f'invalid parameters, (W + 2 * pad_w - filter_w) % stride_w != 0, got W={W}, pad_w={pad_w}, filter_w={filter_w}, stride_w={stride_w}'
-
-    out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
-    out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
-
-    col = col.reshape(N, out_h, out_w, C, filter_h, filter_w).transpose(0, 3, 4, 5, 1, 2)
-
-    image = np.zeros((N, C, H + 2 * pad_h + stride_h - 1, W + 2 * pad_w + stride_w - 1))
-
-    for y in range(filter_h):
-        y_max = y + stride_h * out_h
-        for x in range(filter_w):
-            x_max = x + stride_w * out_w
-            image[:, :, y:y_max:stride_h, x:x_max:stride_w] += col[:, :, y, x, :, :]
-
-    return image[:, :, pad_h:H + pad_h, pad_w:W + pad_w]
 
 
 def pad_sequences(sequences: np.ndarray, max_length: int, padding: str = 'pre', truncating: str = 'pre') -> np.ndarray:
