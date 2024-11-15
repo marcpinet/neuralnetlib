@@ -2306,75 +2306,70 @@ class Attention(Layer):
 # --------------------------------------------------------------------------------------------------------------
 
 
-compatibility_dict = {
-    Input: [Dense, Conv2D, Conv1D, Embedding, Permute, TextVectorization, Reshape, LSTM, GRU, Bidirectional,
-            Unidirectional, Attention, LayerNormalization],
+incompatibility_dict = {
+    Input: [MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
+            GlobalAveragePooling2D,
+            Flatten, Activation, BatchNormalization, Dropout],
 
-    Dense: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
-            Bidirectional, Unidirectional, Attention],
+    Dense: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
+            GlobalAveragePooling2D, Flatten, TextVectorization, Embedding, Input],
 
-    Activation: [Dense, Conv2D, Conv1D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D,
-                 BatchNormalization, LayerNormalization, AveragePooling1D, GlobalAveragePooling1D, Flatten, Dropout,
-                 Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    Activation: [TextVectorization, Input, Embedding],
 
-    Conv2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Activation, Dropout, Flatten,
-             BatchNormalization, LayerNormalization, Permute, Reshape],
+    Conv2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional,
+             Attention, TextVectorization, Embedding, Input],
 
-    MaxPooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
+    MaxPooling2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional,
+                   Unidirectional,
+                   Attention, TextVectorization, Dense, Embedding, Input, BatchNormalization, LayerNormalization,
+            ],
 
-    AveragePooling2D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Flatten, Permute, Reshape],
+    AveragePooling2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional,
+                       Unidirectional, Attention, TextVectorization, Dense, Embedding, Input, BatchNormalization,
+                       LayerNormalization, Activation, Dropout],
 
-    GlobalAveragePooling2D: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape],
+    GlobalAveragePooling2D: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D,
+                             GlobalAveragePooling1D, TextVectorization, Embedding, Input],
 
-    Conv1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Activation, Dropout, Flatten,
-             BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-             Attention],
+    Conv1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
 
-    MaxPooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM,
-                   GRU, Bidirectional, Unidirectional, Attention],
+    MaxPooling1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
 
-    AveragePooling1D: [Conv1D, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D, Flatten, Permute, Reshape, LSTM,
-                       GRU, Bidirectional, Unidirectional, Attention],
+    AveragePooling1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
 
-    GlobalAveragePooling1D: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape],
+    GlobalAveragePooling1D: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D,
+                             GlobalAveragePooling2D, TextVectorization, Embedding, Input],
 
-    Flatten: [Dense, Dropout, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional],
-
-    Dropout: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Attention,
+    Flatten: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
+              GlobalAveragePooling2D, TextVectorization, Embedding, Input, Attention, BatchNormalization,
               LayerNormalization],
 
-    Embedding: [Conv1D, Flatten, GlobalAveragePooling1D, Dense, Permute, Reshape, Dropout, LSTM, GRU, Bidirectional,
-                Unidirectional, Attention, LayerNormalization, MaxPooling1D, AveragePooling1D, GlobalAveragePooling1D],
+    Dropout: [Input, GlobalAveragePooling1D, GlobalAveragePooling2D],
 
-    BatchNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-                         Attention, LayerNormalization, Embedding],
+    Embedding: [Dense, Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, BatchNormalization,
+                TextVectorization],
 
-    LayerNormalization: [Dense, Conv2D, Conv1D, Activation, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-                         Attention, Dropout, BatchNormalization, Embedding],
+    BatchNormalization: [Flatten, Input, TextVectorization],
 
-    Permute: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
-              BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU, Bidirectional, Unidirectional,
-              Attention],
+    LayerNormalization: [Flatten, Input, TextVectorization],
 
-    TextVectorization: [Embedding, Dense, Conv1D, Reshape, LSTM, GRU, Bidirectional, Unidirectional, Dropout, BatchNormalization, LayerNormalization],
+    Permute: [Input],
 
-    Reshape: [Dense, Conv2D, Conv1D, Activation, Dropout, Flatten, GlobalAveragePooling1D, GlobalAveragePooling2D,
-              BatchNormalization, LayerNormalization, Permute, Reshape, TextVectorization, Embedding, Input,
-              MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D,
-              GlobalAveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional, Attention],
+    TextVectorization: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D,
+                        GlobalAveragePooling1D, Flatten, Permute, Input, Attention],
 
-    LSTM: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, Flatten, LSTM, GRU,
-           Bidirectional, Unidirectional, Attention],
+    Reshape: [Input],
 
-    GRU: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, Flatten, LSTM, GRU,
-          Bidirectional, Unidirectional, Attention],
+    LSTM: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization],
 
-    Bidirectional: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
-                    Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
+    GRU: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization],
 
-    Unidirectional: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
-                     Bidirectional, Unidirectional, Attention, GlobalAveragePooling1D],
+    Bidirectional: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization, Flatten,
+            ],
 
-    Attention: [Dense, Activation, Dropout, BatchNormalization, LayerNormalization, Permute, Reshape, LSTM, GRU,
-                Bidirectional, Unidirectional, GlobalAveragePooling1D, Embedding, Flatten],
+    Unidirectional: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization, Flatten,
+                ],
+
+    Attention: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization,
+        ],
 }

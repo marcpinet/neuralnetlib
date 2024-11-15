@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
-from neuralnetlib.layers import compatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, \
+from neuralnetlib.layers import incompatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, \
     Bidirectional, Embedding, Attention, Dense
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
 from neuralnetlib.metrics import Metric
@@ -105,11 +105,16 @@ class Sequential(BaseModel):
                 raise ValueError("The first layer must be an Input layer.")
         else:
             previous_layer = self.layers[-1]
-            if type(layer) not in compatibility_dict[type(previous_layer)]:
-                raise ValueError(
-                    f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer.")
+            previous_type = type(previous_layer)
+            current_type = type(layer)
+            
+            if previous_type in incompatibility_dict:
+                if current_type in incompatibility_dict[previous_type]:
+                    raise ValueError(
+                        f"{current_type.__name__} layer cannot follow {previous_type.__name__} layer.")
+            
             if isinstance(previous_layer, Attention) and isinstance(layer, Dense):
-                layer.return_sequences = False
+                previous_layer.return_sequences = False
 
         self.layers.append(layer)
 
@@ -733,9 +738,13 @@ class Autoencoder(BaseModel):
                 raise ValueError("The first encoder layer must be an Input layer.")
         else:
             previous_layer = self.encoder_layers[-1]
-            if type(layer) not in compatibility_dict[type(previous_layer)]:
-                raise ValueError(
-                    f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer in encoder.")
+            previous_type = type(previous_layer)
+            current_type = type(layer)
+            
+            if previous_type in incompatibility_dict:
+                if current_type in incompatibility_dict[previous_type]:
+                    raise ValueError(
+                        f"{current_type.__name__} layer cannot follow {previous_type.__name__} layer.")
 
         self.encoder_layers.append(layer)
 
@@ -755,9 +764,13 @@ class Autoencoder(BaseModel):
     def add_decoder_layer(self, layer: Layer):
         if self.decoder_layers:
             previous_layer = self.decoder_layers[-1]
-            if type(layer) not in compatibility_dict[type(previous_layer)]:
-                raise ValueError(
-                    f"{type(layer).__name__} layer cannot follow {type(previous_layer).__name__} layer in decoder.")
+            previous_type = type(previous_layer)
+            current_type = type(layer)
+            
+            if previous_type in incompatibility_dict:
+                if current_type in incompatibility_dict[previous_type]:
+                    raise ValueError(
+                        f"{current_type.__name__} layer cannot follow {previous_type.__name__} layer.")
         
         self.decoder_layers.append(layer)
 
