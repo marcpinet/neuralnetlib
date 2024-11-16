@@ -97,26 +97,21 @@ def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h:
     else:
         stride_h, stride_w = stride
 
-    # Calculate output dimensions
     out_h = (H + 2 * pad_h - filter_h) // stride_h + 1
     out_w = (W + 2 * pad_w - filter_w) // stride_w + 1
 
-    # Reshape col back to original format
     col = col.reshape(N, out_h, out_w, C, filter_h, filter_w).transpose(0, 3, 4, 5, 1, 2)
 
-    # Initialize output image with padding
     img_h = H + 2 * pad_h + stride_h - 1
     img_w = W + 2 * pad_w + stride_w - 1
     img = np.zeros((N, C, img_h, img_w))
 
-    # Fill output image
     for y in range(filter_h):
         y_max = y + stride_h * out_h
         for x in range(filter_w):
             x_max = x + stride_w * out_w
             img[:, :, y:y_max:stride_h, x:x_max:stride_w] += col[:, :, y, x, :, :]
 
-    # Remove padding
     return img[:, :, pad_h:H + pad_h, pad_w:W + pad_w]
 
 
