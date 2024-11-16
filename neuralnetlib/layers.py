@@ -311,12 +311,12 @@ class Dropout(Layer):
 
 
 class Conv2D(Layer):
-    def __init__(self, filters: int, kernel_size: int | tuple, stride: int | tuple = 1, padding: str = 'valid',
+    def __init__(self, filters: int, kernel_size: int | tuple, strides: int | tuple = 1, padding: str = 'valid',
                  weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.filters = filters
         self.kernel_size = (kernel_size, kernel_size) if isinstance(
             kernel_size, int) else kernel_size
-        self.stride = (stride, stride) if isinstance(stride, int) else stride
+        self.strides = (strides, strides) if isinstance(strides, int) else strides
         self.padding = padding
 
         self.weights = None
@@ -365,7 +365,7 @@ class Conv2D(Layer):
         self.d_bias = np.zeros_like(self.bias)
 
     def __str__(self) -> str:
-        return f'Conv2D(num_filters={self.filters}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding})'
+        return f'Conv2D(num_filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
@@ -375,12 +375,12 @@ class Conv2D(Layer):
 
         self.input = input_data
         output = self._convolve(self.input, self.weights,
-                                self.bias, self.stride, self.padding)
+                                self.bias, self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
-                                                                           self.stride, self.padding)
+                                                                           self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
@@ -390,7 +390,7 @@ class Conv2D(Layer):
             'bias': self.bias.tolist() if self.bias is not None else None,
             'filters': self.filters,
             'kernel_size': self.kernel_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding,
             'weights_init': self.weights_init,
             'bias_init': self.bias_init,
@@ -399,7 +399,7 @@ class Conv2D(Layer):
 
     @staticmethod
     def from_config(config: dict):
-        layer = Conv2D(config['filters'], config['kernel_size'], config['stride'], config['padding'],
+        layer = Conv2D(config['filters'], config['kernel_size'], config['strides'], config['padding'],
                        config['weights_init'], config['bias_init'], config['random_state'])
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
@@ -407,7 +407,7 @@ class Conv2D(Layer):
         return layer
 
     @staticmethod
-    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, stride: tuple,
+    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: tuple,
                   padding: str) -> np.ndarray:
         batch_size, in_channels, in_height, in_width = input_data.shape
         out_channels, _, kernel_height, kernel_width = weights.shape
@@ -415,24 +415,24 @@ class Conv2D(Layer):
         assert in_channels == _, "Number of input channels must match"
 
         if padding == 'same':
-            out_height = int(np.ceil(float(in_height) / float(stride[0])))
-            out_width = int(np.ceil(float(in_width) / float(stride[1])))
+            out_height = int(np.ceil(float(in_height) / float(strides[0])))
+            out_width = int(np.ceil(float(in_width) / float(strides[1])))
             
-            pad_height_total = int(max(0, (out_height - 1) * stride[0] + kernel_height - in_height))
-            pad_width_total = int(max(0, (out_width - 1) * stride[1] + kernel_width - in_width))
+            pad_height_total = int(max(0, (out_height - 1) * strides[0] + kernel_height - in_height))
+            pad_width_total = int(max(0, (out_width - 1) * strides[1] + kernel_width - in_width))
             
             pad_height = pad_height_total // 2
             pad_width = pad_width_total // 2
             
-            out_height = (in_height + 2 * pad_height - kernel_height) // stride[0] + 1
-            out_width = (in_width + 2 * pad_width - kernel_width) // stride[1] + 1
+            out_height = (in_height + 2 * pad_height - kernel_height) // strides[0] + 1
+            out_width = (in_width + 2 * pad_width - kernel_width) // strides[1] + 1
         else:
             pad_height, pad_width = 0, 0
-            out_height = (in_height - kernel_height) // stride[0] + 1
-            out_width = (in_width - kernel_width) // stride[1] + 1
+            out_height = (in_height - kernel_height) // strides[0] + 1
+            out_width = (in_width - kernel_width) // strides[1] + 1
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
-                       stride, (pad_height, pad_width))
+                       strides, (pad_height, pad_width))
         
         col_W = weights.reshape(out_channels, -1).T
 
@@ -454,18 +454,18 @@ class Conv2D(Layer):
         return output
 
     @staticmethod
-    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, stride: tuple,
+    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: tuple,
                            padding: str) -> tuple:
         batch_size, in_channels, in_height, in_width = input_data.shape
         _, out_channels, out_height, out_width = output_error.shape
         _, _, kernel_height, kernel_width = weights.shape
 
         if padding == 'same':
-            out_height_temp = int(np.ceil(float(in_height) / float(stride[0])))
-            out_width_temp = int(np.ceil(float(in_width) / float(stride[1])))
+            out_height_temp = int(np.ceil(float(in_height) / float(strides[0])))
+            out_width_temp = int(np.ceil(float(in_width) / float(strides[1])))
             
-            pad_height_total = int(max(0, (out_height_temp - 1) * stride[0] + kernel_height - in_height))
-            pad_width_total = int(max(0, (out_width_temp - 1) * stride[1] + kernel_width - in_width))
+            pad_height_total = int(max(0, (out_height_temp - 1) * strides[0] + kernel_height - in_height))
+            pad_width_total = int(max(0, (out_width_temp - 1) * strides[1] + kernel_width - in_width))
             
             pad_height = pad_height_total // 2
             pad_width = pad_width_total // 2
@@ -473,7 +473,7 @@ class Conv2D(Layer):
             pad_height, pad_width = 0, 0
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
-                       stride, (pad_height, pad_width))
+                        strides, (pad_height, pad_width))
         
         col_W = weights.reshape(out_channels, -1).T
 
@@ -486,56 +486,56 @@ class Conv2D(Layer):
         d_col = np.dot(d_output, col_W.T)
 
         d_input = col2im_2d(d_col, input_data.shape, kernel_height,
-                           kernel_width, stride, (pad_height, pad_width))
+                            kernel_width, strides, (pad_height, pad_width))
 
         return d_input, d_weights, d_bias
 
 class MaxPooling2D(Layer):
-    def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
+    def __init__(self, pool_size: tuple | int, strides: tuple = None, padding: str = 'valid'):
         if isinstance(pool_size, int):
             self.pool_size = (pool_size, pool_size)
         else:
             self.pool_size = pool_size
-        self.stride = stride if stride is not None else self.pool_size
+        self.strides = strides if strides is not None else self.pool_size
         self.padding = padding
 
     def __str__(self) -> str:
-        return f'MaxPooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+        return f'MaxPooling2D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
             input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                            self.stride, self.padding)
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.stride, self.padding)
+            output_error, self.input, self.pool_size, self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'pool_size': self.pool_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding
         }
 
     @staticmethod
     def from_config(config: dict):
-        return MaxPooling2D(config['pool_size'], config['stride'], config['padding'])
+        return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: tuple, stride: tuple, padding: str) -> np.ndarray:
+    def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
         batch_size, channels, in_height, in_width = input_data.shape
 
         if padding == 'same':
             pad_height = ((in_height - 1) *
-                          stride[0] + pool_size[0] - in_height) // 2
+                          strides[0] + pool_size[0] - in_height) // 2
             pad_width = ((in_width - 1) *
-                         stride[1] + pool_size[1] - in_width) // 2
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
@@ -543,30 +543,30 @@ class MaxPooling2D(Layer):
                               mode='constant')
 
         out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // stride[0] + 1
-        out_width = (in_width + 2 * pad_width - pool_size[1]) // stride[1] + 1
+                      pool_size[0]) // strides[0] + 1
+        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
         output = np.zeros((batch_size, channels, out_height, out_width))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
+                              j * strides[1]:j * strides[1] + pool_size[1]]
                 output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
 
         return output
 
     @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, stride: tuple,
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
         batch_size, channels, in_height, in_width = input_data.shape
         _, _, out_height, out_width = output_error.shape
 
         if padding == 'same':
             pad_height = ((in_height - 1) *
-                          stride[0] + pool_size[0] - in_height) // 2
+                          strides[0] + pool_size[0] - in_height) // 2
             pad_width = ((in_width - 1) *
-                         stride[1] + pool_size[1] - in_width) // 2
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
@@ -577,12 +577,12 @@ class MaxPooling2D(Layer):
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
+                              j * strides[1]:j * strides[1] + pool_size[1]]
                 mask = (input_slice == np.max(
                     input_slice, axis=(2, 3), keepdims=True))
-                d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                d_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
+                j * strides[1]:j * strides[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
                                                                np.newaxis] * mask
 
         if padding == 'same':
@@ -614,11 +614,11 @@ class Flatten(Layer):
 
 
 class Conv1D(Layer):
-    def __init__(self, filters: int, kernel_size: int, stride: int = 1, padding: str = 'valid',
+    def __init__(self, filters: int, kernel_size: int, strides: int = 1, padding: str = 'valid',
                  weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.filters = filters
         self.kernel_size = kernel_size
-        self.stride = stride
+        self.strides = strides
         self.padding = padding
 
         self.weights = None
@@ -667,7 +667,7 @@ class Conv1D(Layer):
         self.d_bias = np.zeros_like(self.bias)
 
     def __str__(self) -> str:
-        return f'Conv1D(num_filters={self.filters}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding})'
+        return f'Conv1D(num_filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
@@ -677,12 +677,12 @@ class Conv1D(Layer):
 
         self.input = input_data
         output = self._convolve(self.input, self.weights,
-                                self.bias, self.stride, self.padding)
+                                self.bias, self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
-                                                                           self.stride, self.padding)
+                                                                           self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
@@ -692,7 +692,7 @@ class Conv1D(Layer):
             'bias': self.bias.tolist() if self.bias is not None else None,
             'filters': self.filters,
             'kernel_size': self.kernel_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding,
             'weights_init': self.weights_init,
             'bias_init': self.bias_init,
@@ -701,7 +701,7 @@ class Conv1D(Layer):
 
     @staticmethod
     def from_config(config: dict):
-        layer = Conv1D(config['filters'], config['kernel_size'], config['stride'], config['padding'],
+        layer = Conv1D(config['filters'], config['kernel_size'], config['strides'], config['padding'],
                        config['weights_init'], config['bias_init'], config['random_state'])
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
@@ -709,7 +709,7 @@ class Conv1D(Layer):
         return layer
 
     @staticmethod
-    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, stride: int,
+    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: int,
                   padding: str) -> np.ndarray:
         batch_size, in_channels, in_length = input_data.shape
         out_channels, _, kernel_length = weights.shape
@@ -717,14 +717,14 @@ class Conv1D(Layer):
         assert in_channels == _
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * stride +
+            pad_length = ((in_length - 1) * strides +
                           kernel_length - in_length) // 2
         else:
             pad_length = 0
 
-        out_length = (in_length + 2 * pad_length - kernel_length) // stride + 1
+        out_length = (in_length + 2 * pad_length - kernel_length) // strides + 1
 
-        col = im2col_1d(input_data, kernel_length, stride, pad_length)
+        col = im2col_1d(input_data, kernel_length, strides, pad_length)
         col_W = weights.reshape(out_channels, -1).T
 
         output = np.dot(col, col_W) + bias
@@ -733,19 +733,19 @@ class Conv1D(Layer):
         return output
 
     @staticmethod
-    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, stride: int,
+    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: int,
                            padding: str) -> tuple:
         batch_size, in_channels, in_length = input_data.shape
         _, out_channels, out_length = output_error.shape
         _, _, kernel_length = weights.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * stride +
+            pad_length = ((in_length - 1) * strides +
                           kernel_length - in_length) // 2
         else:
             pad_length = 0
 
-        col = im2col_1d(input_data, kernel_length, stride, pad_length)
+        col = im2col_1d(input_data, kernel_length, strides, pad_length)
         col_W = weights.reshape(out_channels, -1).T
 
         d_output = output_error.transpose(
@@ -756,51 +756,51 @@ class Conv1D(Layer):
 
         d_col = np.dot(d_output, col_W.T)
         d_input = col2im_1d(d_col, input_data.shape,
-                            kernel_length, stride, pad_length)
+                            kernel_length, strides, pad_length)
 
         return d_input, d_weights, d_bias
 
 
 class MaxPooling1D(Layer):
-    def __init__(self, pool_size: int, stride: int = None, padding: str = 'valid'):
+    def __init__(self, pool_size: int, strides: int = None, padding: str = 'valid'):
         self.pool_size = pool_size
-        self.stride = stride if stride is not None else pool_size
+        self.strides = strides if strides is not None else pool_size
         self.padding = padding
 
     def __str__(self) -> str:
-        return f'MaxPooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+        return f'MaxPooling1D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
             input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                            self.stride, self.padding)
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.stride, self.padding)
+            output_error, self.input, self.pool_size, self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'pool_size': self.pool_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding
         }
 
     @staticmethod
     def from_config(config: dict):
-        return MaxPooling1D(config['pool_size'], config['stride'], config['padding'])
+        return MaxPooling1D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: int, stride: int, padding: str) -> np.ndarray:
+    def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
         batch_size, channels, in_length = input_data.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * stride +
+            pad_length = ((in_length - 1) * strides +
                           pool_size - in_length) // 2
         else:
             pad_length = 0
@@ -808,24 +808,24 @@ class MaxPooling1D(Layer):
         padded_input = np.pad(
             input_data, ((0, 0), (0, 0), (pad_length, pad_length)), mode='constant')
 
-        out_length = (in_length + 2 * pad_length - pool_size) // stride + 1
+        out_length = (in_length + 2 * pad_length - pool_size) // strides + 1
 
         output = np.zeros((batch_size, channels, out_length))
 
         for i in range(out_length):
-            input_slice = padded_input[:, :, i * stride:i * stride + pool_size]
+            input_slice = padded_input[:, :, i * strides:i * strides + pool_size]
             output[:, :, i] = np.max(input_slice, axis=2)
 
         return output
 
     @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, stride: int,
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
                        padding: str) -> np.ndarray:
         batch_size, channels, in_length = input_data.shape
         _, _, out_length = output_error.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * stride +
+            pad_length = ((in_length - 1) * strides +
                           pool_size - in_length) // 2
         else:
             pad_length = 0
@@ -836,9 +836,9 @@ class MaxPooling1D(Layer):
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_length):
-            input_slice = padded_input[:, :, i * stride:i * stride + pool_size]
+            input_slice = padded_input[:, :, i * strides:i * strides + pool_size]
             mask = (input_slice == np.max(input_slice, axis=2, keepdims=True))
-            d_input[:, :, i * stride:i * stride +
+            d_input[:, :, i * strides:i * strides +
                                      pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
 
         if padding == 'same':
@@ -1081,51 +1081,51 @@ class LayerNormalization(Layer):
 
 
 class AveragePooling2D(Layer):
-    def __init__(self, pool_size: tuple | int, stride: tuple = None, padding: str = 'valid'):
+    def __init__(self, pool_size: tuple | int, strides: tuple = None, padding: str = 'valid'):
         if isinstance(pool_size, int):
             self.pool_size = (pool_size, pool_size)
         else:
             self.pool_size = pool_size
-        self.stride = stride if stride is not None else self.pool_size
+        self.strides = strides if strides is not None else self.pool_size
         self.padding = padding
 
     def __str__(self) -> str:
-        return f'AveragePooling2D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+        return f'AveragePooling2D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
             input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                            self.stride, self.padding)
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.stride, self.padding)
+            output_error, self.input, self.pool_size, self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'pool_size': self.pool_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding
         }
 
     @staticmethod
     def from_config(config: dict):
-        return AveragePooling2D(config['pool_size'], config['stride'], config['padding'])
+        return AveragePooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: tuple, stride: tuple, padding: str) -> np.ndarray:
+    def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
         batch_size, channels, in_height, in_width = input_data.shape
 
         if padding == 'same':
             pad_height = ((in_height - 1) *
-                          stride[0] + pool_size[0] - in_height) // 2
+                          strides[0] + pool_size[0] - in_height) // 2
             pad_width = ((in_width - 1) *
-                         stride[1] + pool_size[1] - in_width) // 2
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
@@ -1133,30 +1133,30 @@ class AveragePooling2D(Layer):
                               mode='constant')
 
         out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // stride[0] + 1
-        out_width = (in_width + 2 * pad_width - pool_size[1]) // stride[1] + 1
+                      pool_size[0]) // strides[0] + 1
+        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
         output = np.zeros((batch_size, channels, out_height, out_width))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                              j * stride[1]:j * stride[1] + pool_size[1]]
+                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
+                              j * strides[1]:j * strides[1] + pool_size[1]]
                 output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
 
         return output
 
     @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, stride: tuple,
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
         batch_size, channels, in_height, in_width = input_data.shape
         _, _, out_height, out_width = output_error.shape
 
         if padding == 'same':
             pad_height = ((in_height - 1) *
-                          stride[0] + pool_size[0] - in_height) // 2
+                          strides[0] + pool_size[0] - in_height) // 2
             pad_width = ((in_width - 1) *
-                         stride[1] + pool_size[1] - in_width) // 2
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
@@ -1167,8 +1167,8 @@ class AveragePooling2D(Layer):
 
         for i in range(out_height):
             for j in range(out_width):
-                d_input[:, :, i * stride[0]:i * stride[0] + pool_size[0],
-                j * stride[1]:j * stride[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
+                d_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
+                j * strides[1]:j * strides[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
                                                                np.newaxis] / np.prod(pool_size)
 
         if padding == 'same':
@@ -1179,69 +1179,69 @@ class AveragePooling2D(Layer):
 
 
 class AveragePooling1D(Layer):
-    def __init__(self, pool_size: int, stride: int = None, padding: str = 'valid'):
+    def __init__(self, pool_size: int, strides: int = None, padding: str = 'valid'):
         self.pool_size = pool_size
-        self.stride = stride if stride is not None else pool_size
+        self.strides = strides if strides is not None else pool_size
         self.padding = padding
 
     def __str__(self) -> str:
-        return f'AveragePooling1D(pool_size={self.pool_size}, stride={self.stride}, padding={self.padding})'
+        return f'AveragePooling1D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
             input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                            self.stride, self.padding)
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.stride, self.padding)
+            output_error, self.input, self.pool_size, self.strides, self.padding)
         return input_error
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'pool_size': self.pool_size,
-            'stride': self.stride,
+            'strides': self.strides,
             'padding': self.padding
         }
 
     @staticmethod
     def from_config(config: dict):
-        return AveragePooling1D(config['pool_size'], config['stride'], config['padding'])
+        return AveragePooling1D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: int, stride: int, padding: str) -> np.ndarray:
+    def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
         batch_size, steps, features = input_data.shape
 
         if padding == 'same':
-            pad_steps = ((steps - 1) * stride + pool_size - steps) // 2
+            pad_steps = ((steps - 1) * strides + pool_size - steps) // 2
         else:
             pad_steps = 0
 
         padded_input = np.pad(
             input_data, ((0, 0), (pad_steps, pad_steps), (0, 0)), mode='constant')
 
-        out_steps = (steps + 2 * pad_steps - pool_size) // stride + 1
+        out_steps = (steps + 2 * pad_steps - pool_size) // strides + 1
 
         output = np.zeros((batch_size, out_steps, features))
 
         for i in range(out_steps):
-            input_slice = padded_input[:, i * stride:i * stride + pool_size, :]
+            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
             output[:, i, :] = np.mean(input_slice, axis=1)
 
         return output
 
     @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, stride: int,
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
                        padding: str) -> np.ndarray:
         batch_size, steps, features = input_data.shape
         _, out_steps, _ = output_error.shape
 
         if padding == 'same':
-            pad_steps = ((steps - 1) * stride + pool_size - steps) // 2
+            pad_steps = ((steps - 1) * strides + pool_size - steps) // 2
         else:
             pad_steps = 0
 
@@ -1251,7 +1251,7 @@ class AveragePooling1D(Layer):
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_steps):
-            d_input[:, i * stride:i * stride + pool_size,
+            d_input[:, i * strides:i * strides + pool_size,
             :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
 
         if padding == 'same':
@@ -2325,73 +2325,61 @@ class Attention(Layer):
         )
 
 
+class Conv2DTranspose(Layer):
+    pass
+
+
 # --------------------------------------------------------------------------------------------------------------
 
 
 incompatibility_dict = {
-    Input: [MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
-            GlobalAveragePooling2D,
-            Flatten, Activation, BatchNormalization, Dropout],
-
-    Dense: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
-            GlobalAveragePooling2D, Flatten, TextVectorization, Embedding, Input],
-
-    Activation: [TextVectorization, Input, Embedding],
-
-    Conv2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional,
-             Attention, TextVectorization, Embedding, Input],
-
-    MaxPooling2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional,
-                   Unidirectional,
-                   Attention, TextVectorization, Dense, Embedding, Input, BatchNormalization, LayerNormalization,
-            ],
-
-    AveragePooling2D: [Conv1D, GlobalAveragePooling1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional,
-                       Unidirectional, Attention, TextVectorization, Dense, Embedding, Input, BatchNormalization,
-                       LayerNormalization, Activation, Dropout],
-
-    GlobalAveragePooling2D: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D,
-                             GlobalAveragePooling1D, TextVectorization, Embedding, Input],
-
-    Conv1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
-
-    MaxPooling1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
-
-    AveragePooling1D: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, TextVectorization, Input],
-
-    GlobalAveragePooling1D: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D,
-                             GlobalAveragePooling2D, TextVectorization, Embedding, Input],
-
-    Flatten: [Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, AveragePooling1D, AveragePooling2D, GlobalAveragePooling1D,
-              GlobalAveragePooling2D, TextVectorization, Embedding, Input, Attention, BatchNormalization,
-              LayerNormalization],
-
-    Dropout: [Input, GlobalAveragePooling1D, GlobalAveragePooling2D],
-
-    Embedding: [Dense, Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, BatchNormalization,
-                TextVectorization],
-
-    BatchNormalization: [Flatten, Input, TextVectorization],
-
-    LayerNormalization: [Flatten, Input, TextVectorization],
-
-    Permute: [Input],
-
-    TextVectorization: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, MaxPooling1D, AveragePooling1D,
-                        GlobalAveragePooling1D, Flatten, Permute, Input, Attention],
-
-    Reshape: [Input],
-
-    LSTM: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization],
-
-    GRU: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization],
-
-    Bidirectional: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization, Flatten,
-            ],
-
-    Unidirectional: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization, Flatten,
-                ],
-
-    Attention: [Conv2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D, Input, TextVectorization,
-        ],
+    Input: [],
+    
+    Dense: [Conv1D, Conv2D, Conv2DTranspose],
+    
+    Activation: [],
+    
+    Conv2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    Conv2DTranspose: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    MaxPooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    AveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    GlobalAveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    Conv1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    
+    MaxPooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    
+    AveragePooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    
+    GlobalAveragePooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    Flatten: [],
+    
+    Dropout: [],
+    
+    Embedding: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    BatchNormalization: [],
+    
+    LayerNormalization: [],
+    
+    Permute: [],
+    
+    TextVectorization: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    Reshape: [],
+    
+    LSTM: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    GRU: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    Bidirectional: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    Unidirectional: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    
+    Attention: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D]
 }

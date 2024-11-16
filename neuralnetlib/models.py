@@ -964,7 +964,7 @@ class Autoencoder(BaseModel):
         latent_l2 = 0.0001 * np.mean(np.square(self.latent_space))
         latent_std = np.std(self.latent_space, axis=0)
         distribution_penalty = 0.0001 * np.mean(np.abs(latent_std - 1.0))
-        
+
         if self.skip_connections:
             latent_l2 *= 0.1
             distribution_penalty *= 0.1
