@@ -1,11 +1,12 @@
 import time
-from collections import Counter
-
 import numpy as np
+
+from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d
 from neuralnetlib.regularizers import AdaptiveDropout
+
 
 EPSILON_SIGMOID = 1e-12
 
