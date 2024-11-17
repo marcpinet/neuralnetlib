@@ -1,10 +1,11 @@
 import random
 import re
+import numpy as np
+
+from time import time_ns
+from enum import Enum, auto
 from collections import defaultdict
 from collections.abc import Generator
-from enum import Enum, auto
-
-import numpy as np
 
 
 def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
@@ -698,3 +699,240 @@ class NGram:
 
     def get_contexts(self) -> dict:
         return dict(self.ngrams)
+
+
+import numpy as np
+from time import time_ns
+
+class ImageDataGenerator:
+    def __init__(
+        self,
+        rotation_range=0,
+        width_shift_range=0.0,
+        height_shift_range=0.0,
+        brightness_range=None,
+        horizontal_flip=False,
+        vertical_flip=False,
+        zoom_range=0.0,
+        channel_shift_range=0.0,
+        fill_mode='nearest',
+        cval=0.0,
+        rescale=None,
+        random_state=None
+    ):
+        self.rotation_range = rotation_range
+        self.width_shift_range = width_shift_range
+        self.height_shift_range = height_shift_range
+        self.brightness_range = brightness_range
+        self.horizontal_flip = horizontal_flip
+        self.vertical_flip = vertical_flip
+        self.channel_shift_range = channel_shift_range
+        self.fill_mode = fill_mode
+        self.cval = cval
+        self.rescale = rescale
+        self.random_state = random_state if random_state is not None else time_ns()
+        self.rng = np.random.default_rng(self.random_state)
+        
+        if isinstance(zoom_range, (float, int)):
+            self.zoom_range = [1 - zoom_range, 1 + zoom_range]
+        else:
+            self.zoom_range = [zoom_range[0], zoom_range[1]]
+
+    def random_transform(self, x, seed=None):
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = self.rng
+            
+        if x.ndim == 2:
+            x = np.expand_dims(x, axis=2)
+
+        img_row_axis, img_col_axis, img_channel_axis = 0, 1, 2
+        h, w = x.shape[img_row_axis], x.shape[img_col_axis]
+        
+        transform_matrix = np.eye(3)
+        
+        if self.rotation_range:
+            theta = rng.uniform(-self.rotation_range, self.rotation_range)
+            rotation_matrix = self._get_rotation_matrix(theta)
+            transform_matrix = np.dot(transform_matrix, rotation_matrix)
+            
+        if self.width_shift_range or self.height_shift_range:
+            tx = 0
+            ty = 0
+            if self.width_shift_range:
+                if isinstance(self.width_shift_range, int):
+                    tx = rng.integers(-self.width_shift_range, 
+                                    self.width_shift_range + 1)
+                else:
+                    tx = rng.uniform(-self.width_shift_range, 
+                                   self.width_shift_range) * w
+            if self.height_shift_range:
+                if isinstance(self.height_shift_range, int):
+                    ty = rng.integers(-self.height_shift_range,
+                                    self.height_shift_range + 1)
+                else:
+                    ty = rng.uniform(-self.height_shift_range,
+                                   self.height_shift_range) * h
+                    
+            translation_matrix = np.array([[1, 0, tx],
+                                         [0, 1, ty],
+                                         [0, 0, 1]])
+            transform_matrix = np.dot(transform_matrix, translation_matrix)
+            
+        if self.zoom_range[0] != 1 or self.zoom_range[1] != 1:
+            zx = rng.uniform(self.zoom_range[0], self.zoom_range[1])
+            zy = zx
+            zoom_matrix = np.array([[zx, 0, 0],
+                                  [0, zy, 0],
+                                  [0, 0, 1]])
+            transform_matrix = np.dot(transform_matrix, zoom_matrix)
+            
+        if not np.array_equal(transform_matrix, np.eye(3)):
+            h, w = x.shape[img_row_axis], x.shape[img_col_axis]
+            transforms = []
+            for i in range(x.shape[img_channel_axis]):
+                transforms.append(self._affine_transform(
+                    x[..., i],
+                    transform_matrix,
+                    fill_mode=self.fill_mode,
+                    cval=self.cval))
+            x = np.stack(transforms, axis=-1)
+            
+        if self.horizontal_flip and rng.random() < 0.5:
+            x = x[:, ::-1]
+        if self.vertical_flip and rng.random() < 0.5:
+            x = x[::-1]
+            
+        if self.brightness_range is not None:
+            brightness = rng.uniform(self.brightness_range[0],
+                                   self.brightness_range[1])
+            x = x * brightness
+            
+        if self.channel_shift_range != 0:
+            x = self._channel_shift(x, self.channel_shift_range, rng)
+            
+        if self.rescale is not None:
+            x *= self.rescale
+            
+        return x
+
+    def flow(self, x, y=None, batch_size=32, shuffle=True, seed=None):
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = self.rng
+            
+        n = x.shape[0]
+        batch_index = 0
+        index_array = np.arange(n)
+        
+        while True:
+            if shuffle:
+                rng.shuffle(index_array)
+                
+            current_index = (batch_index * batch_size) % n
+            
+            if n > current_index + batch_size:
+                current_batch_size = batch_size
+            else:
+                current_batch_size = n - current_index
+                
+            batch_index += 1
+            batch_indices = index_array[current_index:
+                                      current_index + current_batch_size]
+            
+            batch_x = np.zeros((current_batch_size,) + x.shape[1:],
+                             dtype=x.dtype)
+            
+            for i, j in enumerate(batch_indices):
+                x_aug = self.random_transform(x[j])
+                batch_x[i] = x_aug
+                
+            if y is None:
+                yield batch_x
+            else:
+                batch_y = y[batch_indices]
+                yield batch_x, batch_y
+
+    def _get_rotation_matrix(self, theta):
+        theta = np.deg2rad(theta)
+        c, s = np.cos(theta), np.sin(theta)
+        return np.array([[c, -s, 0],
+                        [s, c, 0],
+                        [0, 0, 1]])
+
+    def _affine_transform(self, x, matrix, fill_mode='nearest', cval=0.0):
+        h, w = x.shape[:2]
+        
+        y_coords, x_coords = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+        coords = np.stack([y_coords, x_coords, np.ones_like(x_coords)])
+        coords_reshaped = coords.reshape(3, -1)
+        
+        matrix_inv = np.linalg.inv(matrix)
+        transformed_coords = np.dot(matrix_inv, coords_reshaped)
+        
+        y_coords = transformed_coords[0].reshape(h, w)
+        x_coords = transformed_coords[1].reshape(h, w)
+        
+        if fill_mode == 'nearest':
+            y_coords = np.clip(np.round(y_coords), 0, h - 1).astype(np.int32)
+            x_coords = np.clip(np.round(x_coords), 0, w - 1).astype(np.int32)
+            return x[y_coords, x_coords]
+            
+        elif fill_mode == 'constant':
+            y_floor = np.floor(y_coords).astype(np.int32)
+            y_ceil = y_floor + 1
+            x_floor = np.floor(x_coords).astype(np.int32)
+            x_ceil = x_floor + 1
+            
+            valid_coords = (y_floor >= 0) & (y_ceil < h) & (x_floor >= 0) & (x_ceil < w)
+            
+            y_floor = np.clip(y_floor, 0, h-1)
+            y_ceil = np.clip(y_ceil, 0, h-1)
+            x_floor = np.clip(x_floor, 0, w-1)
+            x_ceil = np.clip(x_ceil, 0, w-1)
+            
+            dy = y_coords - y_floor
+            dx = x_coords - x_floor
+            
+            dy = dy[..., np.newaxis]
+            dx = dx[..., np.newaxis]
+            
+            values = (
+                x[y_floor, x_floor] * (1 - dy) * (1 - dx) +
+                x[y_ceil, x_floor] * dy * (1 - dx) +
+                x[y_floor, x_ceil] * (1 - dy) * dx +
+                x[y_ceil, x_ceil] * dy * dx
+            )
+            
+            return np.where(valid_coords[..., np.newaxis], values, cval)
+            
+        elif fill_mode == 'reflect':
+            y_coords = np.clip(y_coords, -h, 2*h-1)
+            x_coords = np.clip(x_coords, -w, 2*w-1)
+            y_coords = np.where(y_coords < 0, -y_coords, y_coords)
+            x_coords = np.where(x_coords < 0, -x_coords, x_coords)
+            y_coords = np.where(y_coords >= h, 2*h - y_coords - 2, y_coords)
+            x_coords = np.where(x_coords >= w, 2*w - x_coords - 2, x_coords)
+            y_coords = y_coords.astype(np.int32)
+            x_coords = x_coords.astype(np.int32)
+            return x[y_coords, x_coords]
+            
+        elif fill_mode == 'wrap':
+            y_coords = np.remainder(y_coords, h).astype(np.int32)
+            x_coords = np.remainder(x_coords, w).astype(np.int32)
+            return x[y_coords, x_coords]
+        
+        return x
+
+    def _channel_shift(self, x, intensity, rng):
+        x = np.array(x, copy=True)
+        channels = x.shape[-1] if x.ndim > 2 else 1
+        for i in range(channels):
+            shift = rng.uniform(-intensity, intensity)
+            if x.ndim > 2:
+                x[..., i] = np.clip(x[..., i] + shift, 0, 1)
+            else:
+                x = np.clip(x + shift, 0, 1)
+        return x
