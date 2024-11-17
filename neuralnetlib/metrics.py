@@ -23,6 +23,8 @@ class Metric:
     def _get_function_by_name(self, name: str):
         if name in ['accuracy', 'accuracy_score', 'accuracy-score', 'acc']:
             return accuracy_score
+        elif name in ['sparse_categorical_accuracy', 'sparse-categorical-accuracy', 'sparse_acc']:
+            return sparse_categorical_accuracy_score
         elif name in ['f1', 'f1_score', 'f1-score']:
             return f1_score
         elif name in ['recall', 'recall_score', 'recall-score', 'sensitivity', 'rec']:
@@ -62,6 +64,24 @@ def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.
         y_pred_classes = (y_pred >= threshold).astype(int)
         return np.mean(y_pred_classes == y_true)
     return np.mean(np.argmax(y_pred, axis=1) == np.argmax(y_true, axis=1))
+
+
+def sparse_categorical_accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    
+    if y_true.ndim > 1:
+        if y_true.shape[1] == 1:
+            y_true = y_true.ravel()
+        else:
+            raise ValueError("y_true should be a 1D array of shape (n_samples,) containing integer class indices")
+    
+    predicted_classes = np.argmax(y_pred, axis=1)
+    
+    return np.mean(predicted_classes == y_true)
 
 
 def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:

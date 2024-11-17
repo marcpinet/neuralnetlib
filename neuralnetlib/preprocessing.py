@@ -8,17 +8,22 @@ from collections import defaultdict
 from collections.abc import Generator
 
 
-def one_hot_encode(labels: np.ndarray, num_classes: int) -> np.ndarray:
-    """One hot encoded labels are binary vectors representing categorical values,
+def one_hot_encode(indices: np.ndarray, num_classes: int) -> np.ndarray:
+    """One-hot encode 1D or 2D indices. One hot encoded labels are binary vectors representing categorical values,
     with exactly one high (or "hot" = 1) bit indicating the presence of a specific category
     and all other bits low (or "cold" = 0)."""
-    if labels.ndim > 1:
-        labels = labels.reshape(-1)
-
-    labels = labels.astype(int)
-    one_hot = np.zeros((labels.size, num_classes))
-    one_hot[np.arange(labels.size), labels] = 1
+    if indices.ndim == 1:
+        one_hot = np.zeros((indices.size, num_classes))
+        one_hot[np.arange(indices.size), indices] = 1
+    elif indices.ndim == 2:
+        batch_size, seq_len = indices.shape
+        one_hot = np.zeros((batch_size, seq_len, num_classes))
+        rows, cols = np.meshgrid(np.arange(batch_size), np.arange(seq_len), indexing='ij')
+        one_hot[rows, cols, indices] = 1
+    else:
+        raise ValueError("Unsupported input shape. Expected 1D or 2D indices.")
     return one_hot
+
 
 
 def apply_threshold(y_pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
@@ -179,30 +184,36 @@ def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: i
     return image[:, pad:L + pad, :]
 
 
-def pad_sequences(sequences: np.ndarray, max_length: int, padding: str = 'pre', truncating: str = 'pre') -> np.ndarray:
-    """Pads sequences to the same length.
+def pad_sequences(sequences: np.ndarray, max_length: int, pad_value: int = 0, padding: str = 'pre', truncating: str = 'pre') -> np.ndarray:
+    """
+    Pads or truncates sequences to a specified maximum length.
 
     Args:
-        sequences (np.ndarray): List of sequences.
-        max_length (int): Maximum length of sequences.
-        padding (str): 'pre' or 'post', pad either before or after each sequence.
-        truncating (str): 'pre' or 'post', remove values from sequences larger than max_length, either at the beginning or at the end of the sequences.
+        sequences (list of list or np.ndarray): Input sequences of varying lengths.
+        max_length (int): Maximum length of the output sequences.
+        pad_value (int/float): Value to use for padding.
+        padding (str): 'pre' or 'post', to pad before or after the sequence.
+        truncating (str): 'pre' or 'post', to truncate the sequence at the beginning or end.
 
     Returns:
-        np.ndarray: Padded sequences.
+        np.ndarray: Padded or truncated sequences as a NumPy array.
     """
-    padded_sequences = np.zeros((len(sequences), max_length))
-    for i, sequence in enumerate(sequences):
-        if len(sequence) > max_length:
+    padded_sequences = []
+    for seq in sequences:
+        if len(seq) > max_length:
             if truncating == 'pre':
-                sequence = sequence[-max_length:]
+                seq = seq[-max_length:]
             else:
-                sequence = sequence[:max_length]
+                seq = seq[:max_length]
+
         if padding == 'pre':
-            padded_sequences[i, -len(sequence):] = sequence
+            padded_seq = [pad_value] * (max_length - len(seq)) + seq
         else:
-            padded_sequences[i, :len(sequence)] = sequence
-    return padded_sequences
+            padded_seq = seq + [pad_value] * (max_length - len(seq))
+
+        padded_sequences.append(padded_seq)
+
+    return np.array(padded_sequences)
 
 
 def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
@@ -385,8 +396,15 @@ class Tokenizer:
         self.word_docs = {}
         self.document_count = 0
 
-    def fit_on_texts(self, texts: list[str]) -> None:
+    def preprocess_text(self, text):
+        text = re.sub(r"([!\"#$%&()*+,-./:;<=>?@\[\]^_`{|}~])", r" \1 ", text)
+        text = re.sub(r"(\b\w)'(\w)", r"\1' \2", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
         for text in texts:
+            text = self.preprocess_text(text) if preprocess_ponctuation else text
             self.document_count += 1
             if self.char_level:
                 seq = text
@@ -423,8 +441,10 @@ class Tokenizer:
 
         self.index_word = dict((c, w) for w, c in self.word_index.items())
 
-    def texts_to_sequences(self, texts: list[str]) -> list[list[int]]:
-        return list(self.texts_to_sequences_generator(texts))
+    def texts_to_sequences(self, texts: list[str], preprocess_ponctuation: bool = False) -> list[list[int]]:
+        if preprocess_ponctuation:
+            texts = [self.preprocess_text(text) for text in texts]
+        return list(self.texts_to_sequences_generator(texts)) 
 
     def texts_to_sequences_generator(self, texts: list[str]) -> Generator[list[int], None, None]:
         for text in texts:

@@ -1194,8 +1194,6 @@ class BatchNormalization(Layer):
         return layer
 
 
-import numpy as np
-
 class LayerNormalization(Layer):
     def __init__(self, epsilon: float = 1e-8):
         super().__init__()
@@ -1206,37 +1204,66 @@ class LayerNormalization(Layer):
         self.d_beta = None
 
     def initialize_weights(self, input_shape: tuple):
-        self.gamma = np.ones(input_shape)
-        self.beta = np.zeros(input_shape)
+        feature_shape = input_shape[-1:]
+        self.gamma = np.ones(feature_shape)
+        self.beta = np.zeros(feature_shape)
         self.d_gamma = np.zeros_like(self.gamma)
         self.d_beta = np.zeros_like(self.beta)
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.gamma is None:
-            self.initialize_weights(input_data.shape[1:])
-        
-        mean = np.mean(input_data, axis=-1, keepdims=True)
-        variance = np.var(input_data, axis=-1, keepdims=True)
-        
-        self.input_normalized = (input_data - mean) / np.sqrt(variance + self.epsilon)
-        output = self.gamma * self.input_normalized + self.beta
-        return output
+            self.initialize_weights(input_data.shape)
+
+        self.input_shape = input_shape = input_data.shape
+        self.input = input_data
+
+        if len(input_shape) == 3:
+            input_data = input_data.reshape(-1, input_shape[-1])
+
+        self.mean = np.mean(input_data, axis=-1, keepdims=True)
+        self.var = np.var(input_data, axis=-1, keepdims=True) + self.epsilon
+        self.std = np.sqrt(self.var)
+
+        self.x_centered = input_data - self.mean
+        self.x_norm = self.x_centered / self.std
+
+        if len(input_shape) == 3:
+            self.x_norm = self.x_norm.reshape(input_shape)
+            self.mean = self.mean.reshape(input_shape[:-1] + (1,))
+            self.var = self.var.reshape(input_shape[:-1] + (1,))
+            self.std = self.std.reshape(input_shape[:-1] + (1,))
+            self.x_centered = self.x_centered.reshape(input_shape)
+
+        return self.gamma * self.x_norm + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        self.d_gamma = np.sum(output_error * self.input_normalized, axis=0, keepdims=True)
-        self.d_beta = np.sum(output_error, axis=0, keepdims=True)
+        input_shape = self.input_shape
         
-        N, D = output_error.shape
-        d_input_normalized = output_error * self.gamma
-        d_variance = np.sum(d_input_normalized * (self.input - self.input.mean(axis=-1, keepdims=True)) * -0.5 *
-                            np.power(self.input.var(axis=-1, keepdims=True) + self.epsilon, -1.5), axis=-1, keepdims=True)
-        d_mean = np.sum(d_input_normalized * -1 / np.sqrt(self.input.var(axis=-1, keepdims=True) + self.epsilon), axis=-1, keepdims=True) + \
-                 d_variance * np.mean(-2 * (self.input - self.input.mean(axis=-1, keepdims=True)), axis=-1, keepdims=True)
+        if len(input_shape) == 3:
+            output_error = output_error.reshape(-1, input_shape[-1])
+            x_norm = self.x_norm.reshape(-1, input_shape[-1])
+            std = self.std.reshape(-1, 1)
+        else:
+            x_norm = self.x_norm
+            std = self.std
 
-        d_input = (d_input_normalized / np.sqrt(self.input.var(axis=-1, keepdims=True) + self.epsilon)) + \
-                  (d_variance * 2 * (self.input - self.input.mean(axis=-1, keepdims=True)) / D) + \
-                  (d_mean / D)
-        return d_input
+        N = output_error.shape[-1]
+
+        self.d_gamma = np.sum(output_error * x_norm, axis=0, keepdims=True)
+        self.d_beta = np.sum(output_error, axis=0, keepdims=True)
+
+        dx_norm = output_error * self.gamma
+
+        dx = (1.0 / std) * (
+            dx_norm - 
+            np.mean(dx_norm, axis=-1, keepdims=True) -
+            x_norm * np.mean(dx_norm * x_norm, axis=-1, keepdims=True)
+        )
+
+        if len(input_shape) == 3:
+            dx = dx.reshape(input_shape)
+
+        return dx
 
     def get_config(self) -> dict:
         return {
@@ -2435,6 +2462,702 @@ class UpSampling2D(Layer):
         )
 
 
+class MultiHeadAttention(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        num_heads: int,
+        key_dim: int,
+        value_dim: int = None,
+        dropout_rate: float = 0.0,
+        use_bias: bool = True,
+        output_shape: int = None,
+        attention_axes: list[int] = None,
+        kernel_initializer: str = "glorot_uniform",
+        bias_initializer: str = "zeros",
+        random_state: int = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.num_heads: int = num_heads
+        self.key_dim: int = key_dim
+        self.value_dim: int = value_dim if value_dim else key_dim
+        self.dropout_rate: float = dropout_rate
+        self.use_bias: bool = use_bias
+        self.output_shape: int = output_shape
+        self.attention_axes: list[int] = attention_axes
+        self.kernel_initializer: str = kernel_initializer
+        self.bias_initializer: str = bias_initializer
+        self.random_state: int = random_state
+
+        self.query_dense: Dense = None
+        self.key_dense: Dense = None
+        self.value_dense: Dense = None
+        self.output_dense: Dense = None
+
+        self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __str__(self) -> str:
+        return f'MultiHeadAttention(num_heads={self.num_heads}, key_dim={self.key_dim})'
+
+    def build_dense_layer(self, units: int, input_shape: tuple[int, ...]) -> Dense:
+        return Dense(
+            units=units,
+            weights_init=self.kernel_initializer,
+            bias_init=self.bias_initializer if self.use_bias else None,
+            random_state=self.random_state
+        )
+
+    def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
+        embedding_dim: int = input_shape[-1]
+
+        if self.query_dense is None:
+            self.query_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
+            self.key_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
+            self.value_dense = self.build_dense_layer(self.num_heads * self.value_dim, input_shape)
+
+        output_dim: int = self.output_shape if self.output_shape else embedding_dim
+        if self.output_dense is None:
+            self.output_dense = self.build_dense_layer(output_dim, input_shape)
+
+    def _reshape_for_attention(self, x: np.ndarray, batch_size: int, seq_length: int) -> np.ndarray:
+        x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
+        return np.transpose(x, (0, 2, 1, 3))
+
+    def _scaled_dot_product_attention(
+        self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True
+    ) -> np.ndarray:
+        self.query: np.ndarray = query
+        self.key: np.ndarray = key
+        self.value: np.ndarray = value
+
+        scores: np.ndarray = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
+        scale: float = np.sqrt(self.key_dim)
+        self.scaled_scores: np.ndarray = scores / scale
+
+        if mask is not None:
+            self.scaled_scores += (mask * -1e9)
+
+        self.attention_weights: np.ndarray = self._softmax(self.scaled_scores)
+
+        if self.dropout and training:
+            self.attention_weights = self.dropout.forward_pass(self.attention_weights, training=True)
+
+        output: np.ndarray = np.matmul(self.attention_weights, value)
+        return output
+
+    def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
+        if isinstance(inputs, tuple):
+            query, key, value = inputs
+            self.is_cross_attention: bool = True
+        else:
+            query = key = value = inputs
+            self.is_cross_attention: bool = False
+
+        batch_size: int = query.shape[0]
+        query_seq_length: int = query.shape[1]
+        value_seq_length: int = value.shape[1]
+
+        if self.query_dense is None:
+            self.initialize_weights(query.shape)
+
+        self.query_input: np.ndarray = query
+        self.key_input: np.ndarray = key
+        self.value_input: np.ndarray = value
+
+        query = self.query_dense.forward_pass(query)
+        key = self.key_dense.forward_pass(key)
+        value = self.value_dense.forward_pass(value)
+
+        self.reshaped_query: np.ndarray = self._reshape_for_attention(query, batch_size, query_seq_length)
+        self.reshaped_key: np.ndarray = self._reshape_for_attention(key, batch_size, value_seq_length)
+        self.reshaped_value: np.ndarray = self._reshape_for_attention(value, batch_size, value_seq_length)
+
+        attention_output: np.ndarray = self._scaled_dot_product_attention(
+            self.reshaped_query, self.reshaped_key, self.reshaped_value, mask, training)
+
+        attention_output = np.transpose(attention_output, (0, 2, 1, 3))
+        self.concat_attention: np.ndarray = np.reshape(attention_output,
+                                                        (batch_size, query_seq_length, self.num_heads * self.value_dim))
+
+        output: np.ndarray = self.output_dense.forward_pass(self.concat_attention)
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+        batch_size: int = output_error.shape[0]
+        seq_length: int = output_error.shape[1]
+
+        d_concat_attention: np.ndarray = self.output_dense.backward_pass(output_error)
+
+        d_attention_output: np.ndarray = np.reshape(d_concat_attention,
+                                                     (batch_size, seq_length, self.num_heads, self.value_dim))
+        d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
+
+        d_weights: np.ndarray = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
+        d_values: np.ndarray = np.matmul(np.transpose(self.attention_weights, (0, 1, 3, 2)), d_attention_output)
+
+        d_scores: np.ndarray = d_weights * self.attention_weights
+        d_scores -= self.attention_weights * np.sum(d_weights * self.attention_weights, axis=-1, keepdims=True)
+
+        d_scores /= np.sqrt(self.key_dim)
+
+        if self.dropout and isinstance(self.attention_weights, np.ndarray):
+            d_scores = self.dropout.backward_pass(d_scores)
+
+        d_query: np.ndarray = np.matmul(d_scores, self.reshaped_key)
+        d_key: np.ndarray = np.matmul(np.transpose(d_scores, (0, 1, 3, 2)), self.reshaped_query)
+
+        d_query = np.transpose(d_query, (0, 2, 1, 3))
+        d_key = np.transpose(d_key, (0, 2, 1, 3))
+        d_values = np.transpose(d_values, (0, 2, 1, 3))
+
+        d_query = np.reshape(d_query, (batch_size, seq_length, -1))
+        d_key = np.reshape(d_key, (batch_size, seq_length, -1))
+        d_values = np.reshape(d_values, (batch_size, seq_length, -1))
+
+        d_query = self.query_dense.backward_pass(d_query)
+        d_key = self.key_dense.backward_pass(d_key)
+        d_value = self.value_dense.backward_pass(d_values)
+
+        if self.is_cross_attention:
+            return d_query, d_key, d_value
+        return d_query
+
+    def _softmax(self, x: np.ndarray) -> np.ndarray:
+        exp_x: np.ndarray = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'num_heads': self.num_heads,
+            'key_dim': self.key_dim,
+            'value_dim': self.value_dim,
+            'dropout_rate': self.dropout_rate,
+            'use_bias': self.use_bias,
+            'output_shape': self.output_shape,
+            'attention_axes': self.attention_axes,
+            'kernel_initializer': self.kernel_initializer,
+            'bias_initializer': self.bias_initializer,
+            'random_state': self.random_state
+        }
+
+    @staticmethod
+    def from_config(config: dict) -> "MultiHeadAttention":
+        return MultiHeadAttention(
+            num_heads=config['num_heads'],
+            key_dim=config['key_dim'],
+            value_dim=config['value_dim'],
+            dropout_rate=config['dropout_rate'],
+            use_bias=config['use_bias'],
+            output_shape=config['output_shape'],
+            attention_axes=config['attention_axes'],
+            kernel_initializer=config['kernel_initializer'],
+            bias_initializer=config['bias_initializer'],
+            random_state=config['random_state']
+        )
+
+
+class PositionalEncoding(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        max_sequence_length: int,
+        embedding_dim: int,
+        trainable: bool = False,
+        random_state: int = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.max_sequence_length = max_sequence_length
+        self.embedding_dim = embedding_dim
+        self.trainable = trainable
+        self.random_state = random_state
+        self.weights = None
+        self.d_weights = None
+
+        if trainable:
+            self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
+        else:
+            self._build_sinusoidal_encoding()
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    def __str__(self) -> str:
+        return f'PositionalEncoding(seq_length={self.seq_length}, embedding_dim={self.embedding_dim}, trainable={self.trainable})'
+    
+    def _build_sinusoidal_encoding(self) -> None:
+        position = np.arange(self.max_sequence_length)[:, np.newaxis]
+        div_term = np.exp(np.arange(0, self.embedding_dim, 2) * (-np.log(10000.0) / self.embedding_dim))
+        
+        pe = np.zeros((self.max_sequence_length, self.embedding_dim))
+        pe[:, 0::2] = np.sin(position * div_term)
+        pe[:, 1::2] = np.cos(position * div_term)
+        
+        self.weights = pe[np.newaxis, :, :]
+        self.d_weights = np.zeros_like(self.weights)
+    
+    def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
+        if self.trainable and self.weights is None:
+            limit: float = np.sqrt(6 / (self.seq_length + self.embedding_dim))
+            self.weights = self.rng.uniform(-limit, limit, (1, self.seq_length, self.embedding_dim))
+            self.d_weights = np.zeros_like(self.weights)
+    
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        batch_size, seq_len, _ = input_data.shape
+        
+        encoding = self.weights[:, :seq_len, :]
+        
+        if batch_size > 1:
+            encoding = np.repeat(encoding, batch_size, axis=0)
+            
+        return input_data + encoding
+    
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if self.trainable:
+            batch_size, seq_len, _ = output_error.shape
+            self.d_weights[:, :seq_len, :] += np.sum(output_error, axis=0, keepdims=True)
+        return output_error
+    
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'seq_length': self.seq_length,
+            'embedding_dim': self.embedding_dim,
+            'trainable': self.trainable,
+            'random_state': self.random_state,
+            'weights': self.weights.tolist() if self.weights is not None else None
+        }
+    
+    @staticmethod
+    def from_config(config: dict) -> "PositionalEncoding":
+        layer = PositionalEncoding(
+            seq_length=config['seq_length'],
+            embedding_dim=config['embedding_dim'],
+            trainable=config['trainable'],
+            random_state=config['random_state']
+        )
+        if config['weights'] is not None:
+            layer.weights = np.array(config['weights'])
+            layer.d_weights = np.zeros_like(layer.weights)
+        return layer
+
+
+class FeedForward(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        d_ff: int,
+        d_model: int,
+        dropout_rate: float = 0.1,
+        activation: str = 'relu',
+        kernel_initializer: str = "glorot_uniform",
+        bias_initializer: str = "zeros",
+        random_state: int = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.d_ff: int = d_ff
+        self.d_model: int = d_model
+        self.dropout_rate: float = dropout_rate
+        self.activation_name: str = activation
+        self.kernel_initializer: str = kernel_initializer
+        self.bias_initializer: str = bias_initializer
+        self.random_state: int = random_state
+
+        self.dense1: Dense = Dense(d_ff, kernel_initializer, bias_initializer, random_state=random_state)
+        self.dense2: Dense = Dense(d_model, kernel_initializer, bias_initializer, random_state=random_state)
+        self.activation: Activation = Activation.from_name(activation)
+        self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    def __str__(self) -> str:
+        return f'FeedForward(d_ff={self.d_ff}, d_model={self.d_model})'
+        
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        x: np.ndarray = self.dense1.forward_pass(input_data)
+        x = self.activation.forward_pass(x)
+        if training:
+            x = self.dropout.forward_pass(x, training=True)
+        x = self.dense2.forward_pass(x)
+        return x
+        
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        dx: np.ndarray = self.dense2.backward_pass(output_error)
+        dx = self.dropout.backward_pass(dx)
+        dx = self.activation.backward_pass(dx)
+        dx = self.dense1.backward_pass(dx)
+        return dx
+        
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'd_ff': self.d_ff,
+            'd_model': self.d_model,
+            'dropout_rate': self.dropout_rate,
+            'activation': self.activation_name,
+            'kernel_initializer': self.kernel_initializer,
+            'bias_initializer': self.bias_initializer,
+            'random_state': self.random_state
+        }
+        
+    @staticmethod
+    def from_config(config: dict) -> "FeedForward":
+        return FeedForward(
+            d_ff=config['d_ff'],
+            d_model=config['d_model'],
+            dropout_rate=config['dropout_rate'],
+            activation=config['activation'],
+            kernel_initializer=config['kernel_initializer'],
+            bias_initializer=config['bias_initializer'],
+            random_state=config['random_state']
+        )
+
+
+class AddNorm(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        epsilon: float = 1e-6,
+        random_state: int = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.layernorm: LayerNormalization = LayerNormalization(epsilon)
+        self.random_state: int = random_state
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    def __str__(self) -> str:
+        return f'AddNorm(epsilon={self.layernorm.epsilon}, random_state={self.random_state})'
+        
+    def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+        x, residual = inputs
+        x = x + residual
+        x = self.layernorm.forward_pass(x)
+        return x
+        
+    def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        dx: np.ndarray = self.layernorm.backward_pass(output_error)
+        return dx, dx
+        
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'epsilon': self.layernorm.epsilon,
+            'random_state': self.random_state
+        }
+        
+    @staticmethod
+    def from_config(config: dict) -> "AddNorm":
+        return AddNorm(
+            epsilon=config['epsilon'],
+            random_state=config['random_state']
+        )
+
+
+class TransformerEncoderLayer(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        dropout_rate: float = 0.1,
+        attention_dropout: float = 0.0,
+        activation: str = 'relu',
+        kernel_initializer: str = "glorot_uniform",
+        bias_initializer: str = "zeros",
+        random_state: int = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.d_model: int = d_model
+        self.num_heads: int = num_heads
+        self.d_ff: int = d_ff
+        self.dropout_rate: float = dropout_rate
+        self.attention_dropout: float = attention_dropout
+        self.activation_name: str = activation
+        self.kernel_initializer: str = kernel_initializer
+        self.bias_initializer: str = bias_initializer
+        self.random_state: int | None = random_state
+
+        self.attention: MultiHeadAttention = MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=d_model // num_heads,
+            dropout_rate=attention_dropout,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.ffn: FeedForward = FeedForward(
+            d_ff=d_ff,
+            d_model=d_model,
+            dropout_rate=dropout_rate,
+            activation=activation,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        self.ffn_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        
+        self.attention_norm: AddNorm = AddNorm(random_state=random_state)
+        self.ffn_norm: AddNorm = AddNorm(random_state=random_state)
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    def __str__(self) -> str:
+        return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
+        
+    def forward_pass(
+        self, inputs: np.ndarray, mask: np.ndarray | None = None, training: bool = True
+    ) -> np.ndarray:
+        self.x: np.ndarray = inputs
+        
+        attn_output: np.ndarray = self.attention.forward_pass(self.x, mask=mask, training=training)
+        if training:
+            attn_output = self.attention_dropout.forward_pass(attn_output, training=True)
+        self.attn_output: np.ndarray = self.attention_norm.forward_pass((attn_output, self.x))
+        
+        ffn_output: np.ndarray = self.ffn.forward_pass(self.attn_output, training=training)
+        if training:
+            ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
+        output: np.ndarray = self.ffn_norm.forward_pass((ffn_output, self.attn_output))
+        
+        return output
+        
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        ffn_norm_dx: np.ndarray
+        ffn_norm_dresidual: np.ndarray
+        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
+        
+        ffn_dx: np.ndarray = self.ffn_dropout.backward_pass(ffn_norm_dx)
+        ffn_dx = self.ffn.backward_pass(ffn_dx)
+        
+        ffn_dx = ffn_dx + ffn_norm_dresidual
+        
+        attn_norm_dx: np.ndarray
+        attn_norm_dresidual: np.ndarray
+        attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
+        
+        attn_dx: np.ndarray = self.attention_dropout.backward_pass(attn_norm_dx)
+        attn_dx = self.attention.backward_pass(attn_dx)
+        
+        dx: np.ndarray = attn_dx + attn_norm_dresidual
+        return dx
+        
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'd_model': self.d_model,
+            'num_heads': self.num_heads,
+            'd_ff': self.d_ff,
+            'dropout_rate': self.dropout_rate,
+            'attention_dropout': self.attention_dropout,
+            'activation': self.activation_name,
+            'kernel_initializer': self.kernel_initializer,
+            'bias_initializer': self.bias_initializer,
+            'random_state': self.random_state
+        }
+        
+    @staticmethod
+    def from_config(config: dict) -> "TransformerEncoderLayer":
+        return TransformerEncoderLayer(
+            d_model=config['d_model'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            dropout_rate=config['dropout_rate'],
+            attention_dropout=config['attention_dropout'],
+            activation=config['activation'],
+            kernel_initializer=config['kernel_initializer'],
+            bias_initializer=config['bias_initializer'],
+            random_state=config['random_state']
+        )
+
+
+class TransformerDecoderLayer(Layer):
+    """Typing this thing as much as I can to speed up Python's interpreter"""
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        dropout_rate: float = 0.1,
+        attention_dropout: float = 0.0,
+        activation: str = 'relu',
+        kernel_initializer: str = "glorot_uniform",
+        bias_initializer: str = "zeros",
+        random_state: int | None = None,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.d_model: int = d_model
+        self.num_heads: int = num_heads
+        self.d_ff: int = d_ff
+        self.dropout_rate: float = dropout_rate
+        self.attention_dropout: float = attention_dropout
+        self.activation_name: str = activation
+        self.kernel_initializer: str = kernel_initializer
+        self.bias_initializer: str = bias_initializer
+        self.random_state: int | None = random_state
+        
+        self.self_attention: MultiHeadAttention = MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=d_model // num_heads,
+            dropout_rate=attention_dropout,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.cross_attention: MultiHeadAttention = MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=d_model // num_heads,
+            dropout_rate=attention_dropout,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.ffn: FeedForward = FeedForward(
+            d_ff=d_ff,
+            d_model=d_model,
+            dropout_rate=dropout_rate,
+            activation=activation,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.self_attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        self.cross_attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        self.ffn_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        
+        self.self_attention_norm: AddNorm = AddNorm(random_state=random_state)
+        self.cross_attention_norm: AddNorm = AddNorm(random_state=random_state)
+        self.ffn_norm: AddNorm = AddNorm(random_state=random_state)
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    def __str__(self) -> str:
+        return f'TransformerDecoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
+        
+    def forward_pass(
+        self,
+        inputs: np.ndarray,
+        memory: np.ndarray,
+        self_attention_mask: np.ndarray | None = None,
+        cross_attention_mask: np.ndarray | None = None,
+        training: bool = True
+    ) -> np.ndarray:
+        self.x: np.ndarray = inputs
+        self.memory: np.ndarray = memory
+        
+        # Self attention
+        self_attn_output: np.ndarray = self.self_attention.forward_pass(
+            self.x, mask=self_attention_mask, training=training
+        )
+        if training:
+            self_attn_output = self.self_attention_dropout.forward_pass(self_attn_output, training=True)
+        self.self_attn_output: np.ndarray = self.self_attention_norm.forward_pass((self_attn_output, self.x))
+        
+        # Cross attention
+        cross_attn_inputs: tuple[np.ndarray, np.ndarray, np.ndarray] = (
+            self.self_attn_output, self.memory, self.memory
+        )
+        cross_attn_output: np.ndarray = self.cross_attention.forward_pass(
+            cross_attn_inputs, mask=cross_attention_mask, training=training
+        )
+        if training:
+            cross_attn_output = self.cross_attention_dropout.forward_pass(cross_attn_output, training=True)
+        self.cross_attn_output: np.ndarray = self.cross_attention_norm.forward_pass(
+            (cross_attn_output, self.self_attn_output)
+        )
+        
+        # Feed forward
+        ffn_output: np.ndarray = self.ffn.forward_pass(self.cross_attn_output, training=training)
+        if training:
+            ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
+        output: np.ndarray = self.ffn_norm.forward_pass((ffn_output, self.cross_attn_output))
+        
+        return output
+        
+    def backward_pass(
+        self, output_error: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        # Feed forward backward
+        ffn_norm_dx: np.ndarray
+        ffn_norm_dresidual: np.ndarray
+        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
+        ffn_dx: np.ndarray = self.ffn_dropout.backward_pass(ffn_norm_dx)
+        ffn_dx = self.ffn.backward_pass(ffn_dx)
+        ffn_dx = ffn_dx + ffn_norm_dresidual
+        
+        # Cross attention backward
+        cross_norm_dx: np.ndarray
+        cross_norm_dresidual: np.ndarray
+        cross_norm_dx, cross_norm_dresidual = self.cross_attention_norm.backward_pass(ffn_dx)
+        cross_dx: np.ndarray = self.cross_attention_dropout.backward_pass(cross_norm_dx)
+        cross_dx_query: np.ndarray
+        cross_dx_key: np.ndarray
+        cross_dx_value: np.ndarray
+        cross_dx_query, cross_dx_key, cross_dx_value = self.cross_attention.backward_pass(cross_dx)
+        cross_dx = cross_dx_query + cross_norm_dresidual
+        
+        # Self attention backward
+        self_norm_dx: np.ndarray
+        self_norm_dresidual: np.ndarray
+        self_norm_dx, self_norm_dresidual = self.self_attention_norm.backward_pass(cross_dx)
+        self_dx: np.ndarray = self.self_attention_dropout.backward_pass(self_norm_dx)
+        self_dx = self.self_attention.backward_pass(self_dx)
+        dx: np.ndarray = self_dx + self_norm_dresidual
+        
+        # Memory gradients for cross attention
+        d_memory: np.ndarray = cross_dx_key + cross_dx_value
+        
+        return dx, d_memory
+        
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'd_model': self.d_model,
+            'num_heads': self.num_heads,
+            'd_ff': self.d_ff,
+            'dropout_rate': self.dropout_rate,
+            'attention_dropout': self.attention_dropout,
+            'activation': self.activation_name,
+            'kernel_initializer': self.kernel_initializer,
+            'bias_initializer': self.bias_initializer,
+            'random_state': self.random_state
+        }
+        
+    @staticmethod
+    def from_config(config: dict) -> "TransformerDecoderLayer":
+        return TransformerDecoderLayer(
+            d_model=config['d_model'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            dropout_rate=config['dropout_rate'],
+            attention_dropout=config['attention_dropout'],
+            activation=config['activation'],
+            kernel_initializer=config['kernel_initializer'],
+            bias_initializer=config['bias_initializer'],
+            random_state=config['random_state']
+        )
+
+
 # --------------------------------------------------------------------------------------------------------------
 
 
@@ -2487,5 +3210,17 @@ incompatibility_dict = {
     
     Unidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
-    Attention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D]
+    Attention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    MultiHeadAttention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    PositionalEncoding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    FeedForward: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    AddNorm: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    TransformerEncoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    
+    TransformerDecoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
 }

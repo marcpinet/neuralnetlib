@@ -10,8 +10,7 @@ from abc import ABC, abstractmethod
 
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
-from neuralnetlib.layers import incompatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, \
-    Bidirectional, Embedding, Attention, Dense, Reshape
+from neuralnetlib.layers import *
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
@@ -1310,3 +1309,412 @@ class Autoencoder(BaseModel):
                 generated = layer.forward_pass(generated)
 
         return generated
+
+
+class Transformer(BaseModel):
+    def __init__(self,
+                 vocab_size: int,
+                 d_model: int = 512,
+                 n_heads: int = 8,
+                 n_encoder_layers: int = 6,
+                 n_decoder_layers: int = 6,
+                 d_ff: int = 2048,
+                 dropout_rate: float = 0.1,
+                 max_sequence_length: int = 512,
+                 temperature: float = 1.0,
+                 gradient_clip_threshold: float = 5.0,
+                 enable_padding: bool = True,
+                 padding_size: int = 32,
+                 random_state: int | None = None) -> None:
+                 
+        self.PAD_IDX: int = vocab_size
+        self.SOS_IDX: int = vocab_size + 1
+        self.EOS_IDX: int = vocab_size + 2
+        vocab_size = vocab_size + 3
+        super().__init__(temperature, gradient_clip_threshold, 
+                        enable_padding, padding_size, random_state)
+        
+        self.vocab_size: int = vocab_size
+        self.d_model: int = d_model
+        self.n_heads: int = n_heads
+        self.n_encoder_layers: int = n_encoder_layers
+        self.n_decoder_layers: int = n_decoder_layers
+        self.d_ff: int = d_ff
+        self.dropout_rate: float = dropout_rate
+        self.max_sequence_length: int = max_sequence_length
+        
+        self.embedding = Embedding(vocab_size, d_model, random_state=random_state)
+        self.positional_encoding = PositionalEncoding(max_sequence_length, d_model)
+        
+        self.encoder_dropout = Dropout(dropout_rate, random_state=random_state)
+        self.encoder_layers: list = []
+        for _ in range(n_encoder_layers):
+            encoder_layer = TransformerEncoderLayer(
+                d_model=d_model,
+                num_heads=n_heads,
+                d_ff=d_ff,
+                dropout_rate=dropout_rate,
+                attention_dropout=dropout_rate,
+                random_state=random_state
+            )
+            self.encoder_layers.append(encoder_layer)
+            
+        self.decoder_dropout = Dropout(dropout_rate, random_state=random_state)
+        self.decoder_layers: list = []
+        for _ in range(n_decoder_layers):
+            decoder_layer = TransformerDecoderLayer(
+                d_model=d_model,
+                num_heads=n_heads,
+                d_ff=d_ff,
+                dropout_rate=dropout_rate,
+                attention_dropout=dropout_rate,
+                random_state=random_state
+            )
+            self.decoder_layers.append(decoder_layer)
+            
+        self.output_layer = Dense(vocab_size)
+        
+        self.optimizer = None
+        self.loss_function = None
+
+    def create_padding_mask(self, seq: np.ndarray) -> np.ndarray:
+        mask = (seq == 0)[:, np.newaxis, np.newaxis, :]
+        return mask
+
+    def create_look_ahead_mask(self, size: int) -> np.ndarray:
+        mask = np.triu(np.ones((size, size)), k=1)
+        return mask[np.newaxis, np.newaxis, :, :]
+
+    def create_masks(self, inp: np.ndarray, tar: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        enc_padding_mask = self.create_padding_mask(inp)
+        dec_padding_mask = self.create_padding_mask(inp)
+        
+        look_ahead_mask = self.create_look_ahead_mask(tar.shape[1])
+        dec_target_padding_mask = self.create_padding_mask(tar)
+        combined_mask = np.maximum(dec_target_padding_mask, look_ahead_mask)
+        
+        return enc_padding_mask, combined_mask, dec_padding_mask
+
+    def encode(self, inp: np.ndarray, training: bool = True, mask: np.ndarray | None = None) -> np.ndarray:
+        x = self.embedding.forward_pass(inp)
+        x = x * np.sqrt(self.d_model)  # Scale embeddings
+        x = self.positional_encoding.forward_pass(x)
+        
+        x = self.encoder_dropout.forward_pass(x, training=training)
+        
+        for encoder_layer in self.encoder_layers:
+            x = encoder_layer.forward_pass(x, mask=mask, training=training)
+            
+        return x
+
+    def decode(self, 
+               tar: np.ndarray, 
+               enc_output: np.ndarray, 
+               training: bool = True, 
+               look_ahead_mask: np.ndarray | None = None, 
+               padding_mask: np.ndarray | None = None) -> np.ndarray:
+        x = self.embedding.forward_pass(tar)
+        x = x * np.sqrt(self.d_model)
+        x = self.positional_encoding.forward_pass(x)
+        
+        x = self.decoder_dropout.forward_pass(x, training=training)
+        
+        for decoder_layer in self.decoder_layers:
+            x = decoder_layer.forward_pass(x, enc_output,
+                                         self_attention_mask=look_ahead_mask,
+                                         cross_attention_mask=padding_mask,
+                                         training=training)
+            
+        output = self.output_layer.forward_pass(x)
+        return output
+
+    def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray], training: bool = True) -> np.ndarray:
+        inp, tar = inputs
+        
+        enc_padding_mask, look_ahead_mask, dec_padding_mask = self.create_masks(inp, tar)
+        
+        enc_output = self.encode(inp, training, enc_padding_mask)
+        dec_output = self.decode(tar, enc_output, training, 
+                               look_ahead_mask, dec_padding_mask)
+        
+        return dec_output
+
+    def backward_pass(self, error: np.ndarray) -> None:
+        dx = self.output_layer.backward_pass(error)
+        
+        d_enc_output = None
+        for decoder_layer in reversed(self.decoder_layers):
+            dx, d_enc = decoder_layer.backward_pass(dx)
+            if d_enc_output is None:
+                d_enc_output = d_enc
+            else:
+                d_enc_output += d_enc
+                
+        dx = self.decoder_dropout.backward_pass(dx)
+        dx = dx * np.sqrt(self.d_model)
+        dx = self.embedding.backward_pass(dx)
+        
+        dx_enc = d_enc_output
+        for encoder_layer in reversed(self.encoder_layers):
+            dx_enc = encoder_layer.backward_pass(dx_enc)
+            
+        dx_enc = self.encoder_dropout.backward_pass(dx_enc)
+        dx_enc = dx_enc * np.sqrt(self.d_model)
+        dx_enc = self.embedding.backward_pass(dx_enc)
+
+    def compile(self, 
+                loss_function: LossFunction | str, 
+                optimizer: Optimizer | str, 
+                verbose: bool = False) -> None:
+        self.loss_function = loss_function if isinstance(loss_function, LossFunction) else LossFunction.from_name(loss_function)
+        self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
+        if verbose:
+            print(str(self))
+
+    def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
+        decoder_input = y_batch[:, :-1]
+        targets = y_batch[:, 1:]
+        
+        self.predictions = self.forward_pass((x_batch, decoder_input), training=True)
+        loss = self.loss_function(targets, self.predictions)
+        error = self.loss_function.derivative(targets, self.predictions)
+        self.backward_pass(error)
+        
+        return loss
+
+    def fit(self, x_train: np.ndarray, y_train: np.ndarray,
+                epochs: int,
+                batch_size: int | None = None,
+                verbose: bool = True,
+                metrics: list | None = None,
+                random_state: int | None = None,
+                validation_data: tuple | None = None,
+                callbacks: list = []) -> dict:
+
+            history = History({
+                'loss': [],
+                'val_loss': []
+            })
+
+            x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
+            y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+
+            if metrics is not None:
+                metrics: list[Metric] = [Metric(m) for m in metrics]
+                for metric in metrics:
+                    history[metric.name] = []
+                    history[f'val_{metric.name}'] = []
+
+            if callbacks is None:
+                callbacks = []
+
+            for callback in callbacks:
+                callback.on_train_begin()
+
+            for epoch in range(epochs):
+                for callback in callbacks:
+                    callback.on_epoch_begin(epoch)
+
+                start_time = time.time()
+                x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train,
+                                                        random_state=random_state if random_state is not None else self.random_state)
+                error = 0
+                predictions_list = []
+                y_true_list = []
+
+                if batch_size is not None:
+                    num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
+                    for j in range(0, x_train.shape[0], batch_size):
+                        x_batch = x_train_shuffled[j:j + batch_size]
+                        y_batch = y_train_shuffled[j:j + batch_size]
+
+                        error += self.train_on_batch(x_batch, y_batch)
+                        predictions_list.append(self.predictions)
+                        y_true_list.append(y_batch[:, 1:])  # Remove SOS token
+
+                        if verbose:
+                            metrics_str = ''
+                            if metrics is not None:
+                                for metric in metrics:
+                                    metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                                    metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                            progress_bar(j / batch_size + 1, num_batches,
+                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+
+                    error /= num_batches
+                else:
+                    error = self.train_on_batch(x_train, y_train)
+                    predictions_list.append(self.predictions)
+                    y_true_list.append(y_train[:, 1:])  # Remove SOS token
+
+                    if verbose:
+                        metrics_str = ''
+                        if metrics is not None:
+                            for metric in metrics:
+                                metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                                history[metric.name].append(metric_value)
+                                metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                        progress_bar(1, 1,
+                                message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+
+                history['loss'].append(error)
+
+                logs = {'loss': error}
+                if metrics is not None:
+                    for metric in metrics:
+                        metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
+                        logs[metric.name] = metric_value
+
+                if validation_data is not None:
+                    x_test, y_test = validation_data
+                    val_loss, val_predictions = self.evaluate(x_test, y_test, batch_size)
+                    history['val_loss'].append(val_loss)
+                    logs['val_loss'] = val_loss
+
+                    if metrics is not None:
+                        val_metrics = []
+                        for metric in metrics:
+                            val_metric = metric(val_predictions, y_test[:, 1:])  # Remove SOS token
+                            history[f'val_{metric.name}'].append(val_metric)
+                            logs[f'val_{metric.name}'] = val_metric
+                            val_metrics.append(val_metric)
+                        if verbose:
+                            val_metrics_str = ' - '.join(
+                                f'val_{metric.name}: {val_metric:.4f}'
+                                for metric, val_metric in zip(metrics, val_metrics)
+                            )
+                            print(f' - {val_metrics_str}', end='')
+
+                    val_predictions = None
+
+                stop_training = False
+                for callback in callbacks:
+                    if isinstance(callback, EarlyStopping):
+                        if callback.on_epoch_end(epoch, {**logs, 'model': self}):
+                            stop_training = True
+                            break
+                    else:
+                        callback.on_epoch_end(epoch, logs)
+
+                if verbose:
+                    print()
+
+                if stop_training:
+                    break
+
+            for callback in callbacks:
+                callback.on_train_end()
+
+            if verbose:
+                print()
+
+            return history
+
+    def predict(self, inp: np.ndarray, max_length: int = 50, apply_temperature: bool = True) -> np.ndarray:
+        batch_size = inp.shape[0]
+        output = np.zeros((batch_size, 1), dtype=np.int32)
+        output.fill(self.SOS_IDX)
+        
+        enc_output = self.encode(inp, training=False)
+        
+        for _ in range(max_length - 1):
+            dec_padding_mask = self.create_padding_mask(inp)
+            
+            look_ahead_mask = self.create_look_ahead_mask(output.shape[1])
+            dec_target_padding_mask = self.create_padding_mask(output)
+            combined_mask = np.maximum(dec_target_padding_mask, look_ahead_mask)
+            
+            predictions = self.decode(
+                output,
+                enc_output,
+                training=False,
+                look_ahead_mask=combined_mask,
+                padding_mask=dec_padding_mask
+            )
+            
+            predictions = predictions[:, -1, :]
+            
+            if apply_temperature and not np.isclose(self.temperature, 1.0):
+                predictions = np.clip(predictions, 1e-7, 1.0)
+                log_probs = np.log(predictions)
+                scaled_log_probs = log_probs / self.temperature
+                predictions = np.exp(scaled_log_probs)
+                predictions /= np.sum(predictions, axis=-1, keepdims=True)
+            
+            next_token = np.argmax(predictions, axis=-1, keepdims=True)
+            
+            output = np.concatenate([output, next_token], axis=1)
+            
+            if np.all(next_token == self.EOS_IDX):
+                break
+        
+        return output
+
+    def evaluate(self, 
+                x_test: np.ndarray, 
+                y_test: np.ndarray, 
+                batch_size: int = 32) -> tuple[float, np.ndarray]:
+        total_loss = 0
+        num_batches = int(np.ceil(len(x_test) / batch_size))
+        predictions_list: list = []
+        
+        for i in range(0, len(x_test), batch_size):
+            batch_x = x_test[i:i + batch_size]
+            batch_y = y_test[i:i + batch_size]
+            
+            predictions = self.forward_pass((batch_x, batch_y[:, :-1]), training=False)
+            batch_loss = self.loss_function(batch_y[:, 1:], predictions)
+            
+            total_loss += batch_loss
+            predictions_list.append(predictions)
+            
+        avg_loss = total_loss / num_batches
+        all_predictions = np.vstack(predictions_list)
+        
+        return avg_loss, all_predictions
+
+    def get_config(self) -> dict:
+        return {
+            'vocab_size': self.vocab_size,
+            'd_model': self.d_model,
+            'n_heads': self.n_heads,
+            'n_encoder_layers': self.n_encoder_layers,
+            'n_decoder_layers': self.n_decoder_layers,
+            'd_ff': self.d_ff,
+            'dropout_rate': self.dropout_rate,
+            'max_sequence_length': self.max_sequence_length,
+            'temperature': self.temperature,
+            'gradient_clip_threshold': self.gradient_clip_threshold,
+            'enable_padding': self.enable_padding,
+            'padding_size': self.padding_size,
+            'random_state': self.random_state
+        }
+
+    def save(self, filename: str) -> None:
+        config = self.get_config()
+        config['type'] = 'Transformer'
+        
+        with open(filename, 'w') as f:
+            json.dump(config, f, indent=4)
+
+    @classmethod
+    def load(cls, filename: str) -> 'Transformer':
+        with open(filename, 'r') as f:
+            config = json.load(f)
+            
+        if config['type'] != 'Transformer':
+            raise ValueError(f"Invalid model type {config['type']}")
+            
+        return cls(**{k: v for k, v in config.items() if k != 'type'})
+
+    def __str__(self) -> str:
+        return (f"Transformer(\n"
+                f"  vocab_size={self.vocab_size},\n"
+                f"  d_model={self.d_model},\n"
+                f"  n_heads={self.n_heads},\n"
+                f"  n_encoder_layers={self.n_encoder_layers},\n"
+                f"  n_decoder_layers={self.n_decoder_layers},\n"
+                f"  d_ff={self.d_ff},\n"
+                f"  dropout_rate={self.dropout_rate},\n"
+                f"  max_sequence_length={self.max_sequence_length}\n"
+                f")")

@@ -33,19 +33,21 @@ class LossFunction:
     @staticmethod
     def from_name(name: str) -> "LossFunction":
         name = name.lower().replace("_", "")
-        if name == "mse":
+        if name == "mse" or name == "meansquarederror":
             return MeanSquaredError()
-        elif name == "bce":
+        elif name == "bce" or name == "binarycrossentropy":
             return BinaryCrossentropy()
-        elif name == "cce":
+        elif name == "cce" or name == "categorycrossentropy":
             return CategoricalCrossentropy()
-        elif name == "scce":
+        elif name == "scce" or name == "sparsecategoricalcrossentropy":
             return SparseCategoricalCrossentropy()
-        elif name == "mae":
+        elif name == "mae" or name == "meanabsoluteerror":
             return MeanAbsoluteError()
-        elif name == "kld":
+        elif name == "kld" or name == "kullbackleiblerdivergence":
             return KullbackLeiblerDivergence()
-        elif name.startswith("huber"):
+        elif name == "sequencecrossentropy" or name == "sce":
+            return SequenceCrossEntropy()
+        elif name.startswith("huber") and len(name.split("_")) == 2:
             delta = float(name.split("_")[-1])
             return HuberLoss(delta)
         else:
@@ -163,3 +165,35 @@ class KullbackLeiblerDivergence(LossFunction):
 
     def __str__(self):
         return "KullbackLeiblerDivergence"
+    
+
+class SequenceCrossEntropy(LossFunction):
+    def __init__(self):
+        super().__init__()
+    
+    def __call__(self, y_true, y_pred):
+        batch_size, seq_len = y_true.shape
+        y_pred = np.clip(y_pred, 1e-10, 1.0)
+        
+        y_true_one_hot = np.zeros_like(y_pred)
+        for i in range(batch_size):
+            for j in range(seq_len):
+                if y_true[i,j] < y_pred.shape[-1]:
+                    y_true_one_hot[i,j,y_true[i,j]] = 1
+        
+        loss = -np.sum(y_true_one_hot * np.log(y_pred))
+        loss = loss / (batch_size * seq_len)
+        return loss
+    
+    def derivative(self, y_true, y_pred):
+        batch_size, seq_len = y_true.shape
+        y_pred = np.clip(y_pred, 1e-10, 1.0)
+        
+        grad = np.zeros_like(y_pred)
+        for i in range(batch_size):
+            for j in range(seq_len):
+                if y_true[i,j] < y_pred.shape[-1]:
+                    grad[i,j,y_true[i,j]] = -1.0 / (y_pred[i,j,y_true[i,j]])
+        
+        grad = grad / (batch_size * seq_len)
+        return grad
