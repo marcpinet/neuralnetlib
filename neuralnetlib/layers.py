@@ -633,22 +633,21 @@ class Conv1D(Layer):
             setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple):
-        in_channels = input_shape[0]
+        _, _, in_channels = input_shape
 
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
+            
         if self.weights_init == "xavier":
             self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * in_channels)),
-                                           (self.filters, in_channels, self.kernel_size))
+                                         (self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * self.kernel_size)),
-                                           (self.filters, in_channels, self.kernel_size))
+                                         (self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(
-                0, 0.01, (self.filters, in_channels, self.kernel_size))
+            self.weights = self.rng.normal(0, 0.01, (self.kernel_size, in_channels, self.filters))
         else:
-            raise ValueError(
-                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
         if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
@@ -665,14 +664,11 @@ class Conv1D(Layer):
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
-    def __str__(self) -> str:
-        return f'Conv1D(num_filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
-
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
             assert len(
-                input_data.shape) == 3, f"Conv1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
-            self.initialize_weights(input_data.shape[1:])
+                input_data.shape) == 3, f"Conv1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
+            self.initialize_weights(input_data.shape)
 
         self.input = input_data
         output = self._convolve(self.input, self.weights,
@@ -683,6 +679,60 @@ class Conv1D(Layer):
         input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
                                                                            self.strides, self.padding)
         return input_error
+
+    @staticmethod
+    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: int,
+                  padding: str) -> np.ndarray:
+        batch_size, in_length, in_channels = input_data.shape
+        kernel_length, _, out_channels = weights.shape
+
+        assert in_channels == weights.shape[1], "Number of input channels must match"
+
+        if padding == 'same':
+            pad_length = ((in_length - 1) * strides + kernel_length - in_length) // 2
+        else:
+            pad_length = 0
+
+        out_length = (in_length + 2 * pad_length - kernel_length) // strides + 1
+
+        col = im2col_1d(input_data, kernel_length, strides, pad_length)
+        
+        col_W = weights.reshape(-1, out_channels)
+
+        output = np.dot(col, col_W) + bias
+        
+        output = output.reshape(batch_size, out_length, out_channels)
+
+        return output
+
+    @staticmethod
+    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: int,
+                           padding: str) -> tuple:
+        batch_size, in_length, in_channels = input_data.shape
+        batch_size, out_length, out_channels = output_error.shape
+        kernel_length, _, _ = weights.shape
+
+        if padding == 'same':
+            pad_length = ((in_length - 1) * strides + kernel_length - in_length) // 2
+        else:
+            pad_length = 0
+
+        col = im2col_1d(input_data, kernel_length, strides, pad_length)
+        
+        col_W = weights.reshape(-1, out_channels)
+
+        d_output = output_error.reshape(batch_size * out_length, -1)
+        
+        d_bias = np.sum(d_output, axis=0)
+        d_weights = np.dot(col.T, d_output)
+        
+        d_weights = d_weights.reshape(kernel_length, in_channels, out_channels)
+        
+        d_col = np.dot(d_output, col_W.T)
+
+        d_input = col2im_1d(d_col, input_data.shape, kernel_length, strides, pad_length)
+
+        return d_input, d_weights, d_bias
 
     def get_config(self) -> dict:
         return {
@@ -707,58 +757,6 @@ class Conv1D(Layer):
             layer.bias = np.array(config['bias'])
         return layer
 
-    @staticmethod
-    def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: int,
-                  padding: str) -> np.ndarray:
-        batch_size, in_channels, in_length = input_data.shape
-        out_channels, _, kernel_length = weights.shape
-
-        assert in_channels == _
-
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          kernel_length - in_length) // 2
-        else:
-            pad_length = 0
-
-        out_length = (in_length + 2 * pad_length - kernel_length) // strides + 1
-
-        col = im2col_1d(input_data, kernel_length, strides, pad_length)
-        col_W = weights.reshape(out_channels, -1).T
-
-        output = np.dot(col, col_W) + bias
-        output = output.reshape(batch_size, out_length, -1).transpose(0, 2, 1)
-
-        return output
-
-    @staticmethod
-    def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: int,
-                           padding: str) -> tuple:
-        batch_size, in_channels, in_length = input_data.shape
-        _, out_channels, out_length = output_error.shape
-        _, _, kernel_length = weights.shape
-
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          kernel_length - in_length) // 2
-        else:
-            pad_length = 0
-
-        col = im2col_1d(input_data, kernel_length, strides, pad_length)
-        col_W = weights.reshape(out_channels, -1).T
-
-        d_output = output_error.transpose(
-            0, 2, 1).reshape(batch_size * out_length, -1)
-        d_bias = np.sum(d_output, axis=0)
-        d_weights = np.dot(col.T, d_output)
-        d_weights = d_weights.transpose(1, 0).reshape(weights.shape)
-
-        d_col = np.dot(d_output, col_W.T)
-        d_input = col2im_1d(d_col, input_data.shape,
-                            kernel_length, strides, pad_length)
-
-        return d_input, d_weights, d_bias
-
 
 class MaxPooling1D(Layer):
     def __init__(self, pool_size: int, strides: int = None, padding: str = 'valid'):
@@ -771,10 +769,9 @@ class MaxPooling1D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
-            input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+            input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
         self.input = input_data
-        output = self._pool(self.input, self.pool_size,
-                            self.strides, self.padding)
+        output = self._pool(self.input, self.pool_size, self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -796,52 +793,230 @@ class MaxPooling1D(Layer):
 
     @staticmethod
     def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
-        batch_size, channels, in_length = input_data.shape
+        batch_size, in_length, channels = input_data.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
         else:
             pad_length = 0
 
         padded_input = np.pad(
-            input_data, ((0, 0), (0, 0), (pad_length, pad_length)), mode='constant')
+            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
 
         out_length = (in_length + 2 * pad_length - pool_size) // strides + 1
 
-        output = np.zeros((batch_size, channels, out_length))
+        output = np.zeros((batch_size, out_length, channels))
 
         for i in range(out_length):
-            input_slice = padded_input[:, :, i * strides:i * strides + pool_size]
-            output[:, :, i] = np.max(input_slice, axis=2)
+            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            output[:, i, :] = np.max(input_slice, axis=1)
 
         return output
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
                        padding: str) -> np.ndarray:
-        batch_size, channels, in_length = input_data.shape
-        _, _, out_length = output_error.shape
+        batch_size, in_length, channels = input_data.shape
+        _, out_length, _ = output_error.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
         else:
             pad_length = 0
 
         padded_input = np.pad(
-            input_data, ((0, 0), (0, 0), (pad_length, pad_length)), mode='constant')
+            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_length):
-            input_slice = padded_input[:, :, i * strides:i * strides + pool_size]
-            mask = (input_slice == np.max(input_slice, axis=2, keepdims=True))
-            d_input[:, :, i * strides:i * strides +
-                                     pool_size] += output_error[:, :, i][:, :, np.newaxis] * mask
+            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            mask = (input_slice == np.max(input_slice, axis=1, keepdims=True))
+            d_input[:, i * strides:i * strides + pool_size, :] += (
+                output_error[:, i, :][:, np.newaxis, :] * mask
+            )
 
         if padding == 'same':
-            d_input = d_input[:, :, pad_length:-pad_length]
+            d_input = d_input[:, pad_length:-pad_length, :]
+
+        return d_input
+
+
+class AveragePooling2D(Layer):
+    def __init__(self, pool_size: tuple | int, strides: tuple = None, padding: str = 'valid'):
+        if isinstance(pool_size, int):
+            self.pool_size = (pool_size, pool_size)
+        else:
+            self.pool_size = pool_size
+        self.strides = strides if strides is not None else self.pool_size
+        self.padding = padding
+
+    def __str__(self) -> str:
+        return f'AveragePooling2D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(
+            input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
+        self.input = input_data
+        output = self._pool(self.input, self.pool_size,
+                          self.strides, self.padding)
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        input_error = self._pool_backward(
+            output_error, self.input, self.pool_size, self.strides, self.padding)
+        return input_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'pool_size': self.pool_size,
+            'strides': self.strides,
+            'padding': self.padding
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return AveragePooling2D(config['pool_size'], config['strides'], config['padding'])
+
+    @staticmethod
+    def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
+        batch_size, in_height, in_width, channels = input_data.shape
+
+        if padding == 'same':
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+        else:
+            pad_height, pad_width = 0, 0
+
+        padded_input = np.pad(input_data, 
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
+
+        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
+        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
+
+        output = np.zeros((batch_size, out_height, out_width, channels))
+
+        for i in range(out_height):
+            for j in range(out_width):
+                input_slice = padded_input[:, 
+                                         i * strides[0]:i * strides[0] + pool_size[0],
+                                         j * strides[1]:j * strides[1] + pool_size[1], 
+                                         :]
+                output[:, i, j, :] = np.mean(np.mean(input_slice, axis=1), axis=1)
+
+        return output
+
+    @staticmethod
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
+                       padding: str) -> np.ndarray:
+        batch_size, in_height, in_width, channels = input_data.shape
+        _, out_height, out_width, _ = output_error.shape
+
+        if padding == 'same':
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+        else:
+            pad_height, pad_width = 0, 0
+
+        padded_input = np.pad(input_data,
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
+
+        d_input = np.zeros_like(padded_input)
+
+        for i in range(out_height):
+            for j in range(out_width):
+                d_input[:, 
+                       i * strides[0]:i * strides[0] + pool_size[0],
+                       j * strides[1]:j * strides[1] + pool_size[1], 
+                       :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
+
+        if padding == 'same':
+            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
+
+        return d_input
+
+
+class AveragePooling1D(Layer):
+    def __init__(self, pool_size: int, strides: int = None, padding: str = 'valid'):
+        self.pool_size = pool_size
+        self.strides = strides if strides is not None else pool_size
+        self.padding = padding
+
+    def __str__(self) -> str:
+        return f'AveragePooling1D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        assert len(
+            input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
+        self.input = input_data
+        output = self._pool(self.input, self.pool_size, self.strides, self.padding)
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        input_error = self._pool_backward(
+            output_error, self.input, self.pool_size, self.strides, self.padding)
+        return input_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'pool_size': self.pool_size,
+            'strides': self.strides,
+            'padding': self.padding
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        return AveragePooling1D(config['pool_size'], config['strides'], config['padding'])
+
+    @staticmethod
+    def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
+        batch_size, in_length, channels = input_data.shape
+
+        if padding == 'same':
+            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+        else:
+            pad_length = 0
+
+        padded_input = np.pad(
+            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
+
+        out_length = (in_length + 2 * pad_length - pool_size) // strides + 1
+
+        output = np.zeros((batch_size, out_length, channels))
+
+        for i in range(out_length):
+            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            output[:, i, :] = np.mean(input_slice, axis=1)
+
+        return output
+
+    @staticmethod
+    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
+                       padding: str) -> np.ndarray:
+        batch_size, in_length, channels = input_data.shape
+        _, out_length, _ = output_error.shape
+
+        if padding == 'same':
+            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+        else:
+            pad_length = 0
+
+        padded_input = np.pad(
+            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
+
+        d_input = np.zeros_like(padded_input)
+
+        for i in range(out_length):
+            d_input[:, i * strides:i * strides + pool_size, :] += (
+                output_error[:, i, :][:, np.newaxis, :] / pool_size
+            )
+
+        if padding == 'same':
+            d_input = d_input[:, pad_length:-pad_length, :]
 
         return d_input
 
@@ -1079,185 +1254,6 @@ class LayerNormalization(Layer):
         return layer
 
 
-class AveragePooling2D(Layer):
-    def __init__(self, pool_size: tuple | int, strides: tuple = None, padding: str = 'valid'):
-        if isinstance(pool_size, int):
-            self.pool_size = (pool_size, pool_size)
-        else:
-            self.pool_size = pool_size
-        self.strides = strides if strides is not None else self.pool_size
-        self.padding = padding
-
-    def __str__(self) -> str:
-        return f'AveragePooling2D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
-
-    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(
-            input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
-        self.input = input_data
-        output = self._pool(self.input, self.pool_size,
-                          self.strides, self.padding)
-        return output
-
-    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.strides, self.padding)
-        return input_error
-
-    def get_config(self) -> dict:
-        return {
-            'name': self.__class__.__name__,
-            'pool_size': self.pool_size,
-            'strides': self.strides,
-            'padding': self.padding
-        }
-
-    @staticmethod
-    def from_config(config: dict):
-        return AveragePooling2D(config['pool_size'], config['strides'], config['padding'])
-
-    @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
-
-        if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
-
-        padded_input = np.pad(input_data, 
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
-
-        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
-        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
-
-        output = np.zeros((batch_size, out_height, out_width, channels))
-
-        for i in range(out_height):
-            for j in range(out_width):
-                input_slice = padded_input[:, 
-                                         i * strides[0]:i * strides[0] + pool_size[0],
-                                         j * strides[1]:j * strides[1] + pool_size[1], 
-                                         :]
-                output[:, i, j, :] = np.mean(np.mean(input_slice, axis=1), axis=1)
-
-        return output
-
-    @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
-                       padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
-        _, out_height, out_width, _ = output_error.shape
-
-        if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
-
-        padded_input = np.pad(input_data,
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
-
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_height):
-            for j in range(out_width):
-                d_input[:, 
-                       i * strides[0]:i * strides[0] + pool_size[0],
-                       j * strides[1]:j * strides[1] + pool_size[1], 
-                       :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
-
-        if padding == 'same':
-            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
-
-        return d_input
-
-
-class AveragePooling1D(Layer):
-    def __init__(self, pool_size: int, strides: int = None, padding: str = 'valid'):
-        self.pool_size = pool_size
-        self.strides = strides if strides is not None else pool_size
-        self.padding = padding
-
-    def __str__(self) -> str:
-        return f'AveragePooling1D(pool_size={self.pool_size}, strides={self.strides}, padding={self.padding})'
-
-    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        assert len(
-            input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
-        self.input = input_data
-        output = self._pool(self.input, self.pool_size,
-                            self.strides, self.padding)
-        return output
-
-    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_error = self._pool_backward(
-            output_error, self.input, self.pool_size, self.strides, self.padding)
-        return input_error
-
-    def get_config(self) -> dict:
-        return {
-            'name': self.__class__.__name__,
-            'pool_size': self.pool_size,
-            'strides': self.strides,
-            'padding': self.padding
-        }
-
-    @staticmethod
-    def from_config(config: dict):
-        return AveragePooling1D(config['pool_size'], config['strides'], config['padding'])
-
-    @staticmethod
-    def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
-        batch_size, steps, features = input_data.shape
-
-        if padding == 'same':
-            pad_steps = ((steps - 1) * strides + pool_size - steps) // 2
-        else:
-            pad_steps = 0
-
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_steps, pad_steps), (0, 0)), mode='constant')
-
-        out_steps = (steps + 2 * pad_steps - pool_size) // strides + 1
-
-        output = np.zeros((batch_size, out_steps, features))
-
-        for i in range(out_steps):
-            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
-            output[:, i, :] = np.mean(input_slice, axis=1)
-
-        return output
-
-    @staticmethod
-    def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
-                       padding: str) -> np.ndarray:
-        batch_size, steps, features = input_data.shape
-        _, out_steps, _ = output_error.shape
-
-        if padding == 'same':
-            pad_steps = ((steps - 1) * strides + pool_size - steps) // 2
-        else:
-            pad_steps = 0
-
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_steps, pad_steps), (0, 0)), mode='constant')
-
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_steps):
-            d_input[:, i * strides:i * strides + pool_size,
-            :] += output_error[:, i, :][:, np.newaxis, :] / pool_size
-
-        if padding == 'same':
-            d_input = d_input[:, pad_steps:-pad_steps, :]
-
-        return d_input
-
-
 class GlobalAveragePooling1D(Layer):
     def __init__(self):
         self.input_shape = None
@@ -1267,12 +1263,12 @@ class GlobalAveragePooling1D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
-            input_data.shape) == 3, f"GlobalAveragePooling1D input must be 3D (batch_size, steps, features), got {input_data.shape}"
+            input_data.shape) == 3, f"GlobalAveragePooling1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
         self.input_shape = input_data.shape
         return np.mean(input_data, axis=1)
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        return np.repeat(output_error[:, np.newaxis, :], self.input_shape[1], axis=1)
+        return np.repeat(output_error[:, np.newaxis, :], self.input_shape[1], axis=1) / self.input_shape[1]
 
     def get_config(self) -> dict:
         return {'name': self.__class__.__name__}

@@ -122,63 +122,60 @@ def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h:
 
 def im2col_1d(input_data: np.ndarray, filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
     """
-    Transform 3 dimensional images to 2 dimensional array.
+    Transform 3 dimensional images to 2 dimensional array in NLC format.
 
     Args:
-        input_data (np.ndarray): 3 dimensional input images (The number of images, The number of channels, Length)
+        input_data (np.ndarray): 3 dimensional input images (N, L, C)
         filter_size (int): size of filter
         stride (int): the interval of stride
         pad (int): the interval of padding
 
     Returns:
         col (np.ndarray): 2 dimensional array
-
     """
-    N, C, L = input_data.shape
+    N, L, C = input_data.shape
 
     out_l = (L + 2 * pad - filter_size) // stride + 1
 
-    padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad, pad)), mode='constant')
+    padded_input = np.pad(input_data, ((0, 0), (pad, pad), (0, 0)), mode='constant')
 
-    col = np.zeros((N, C, filter_size, out_l))
+    col = np.zeros((N, out_l, filter_size, C))
 
     for y in range(filter_size):
         y_max = y + stride * out_l
-        col[:, :, y, :] = padded_input[:, :, y:y_max:stride]
+        col[:, :, y, :] = padded_input[:, y:y_max:stride, :]
 
-    col = col.transpose(0, 3, 1, 2).reshape(N * out_l, -1)
+    col = col.reshape(N * out_l, -1)
     return col
 
 
-def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: int, stride: int = 1,
-              pad: int = 0) -> np.ndarray:
+def col2im_1d(col: np.ndarray, input_shape: tuple[int, int, int], filter_size: int, stride: int = 1, pad: int = 0) -> np.ndarray:
     """
-    Inverse of im2col_1d.
+    Inverse of im2col_1d for NLC format.
 
     Args:
         col (np.ndarray): 2 dimensional array
-        input_shape (tuple): the shape of original input images
+        input_shape (tuple): the shape of original input images (N, L, C)
         filter_size (int): size of filter
         stride (int): the interval of stride
         pad (int): the interval of padding
 
     Returns:
-        image (np.ndarray): original images
-
+        image (np.ndarray): original images in NLC format
     """
-    N, C, L = input_shape
+    N, L, C = input_shape
 
     out_l = (L + 2 * pad - filter_size) // stride + 1
 
-    col = col.reshape(N, out_l, C, filter_size).transpose(0, 2, 3, 1)
+    col = col.reshape(N, out_l, filter_size, C)
 
-    image = np.zeros((N, C, L + 2 * pad + stride - 1))
+    image = np.zeros((N, L + 2 * pad + stride - 1, C))
 
     for y in range(filter_size):
         y_max = y + stride * out_l
-        image[:, :, y:y_max:stride] += col[:, :, y, :]
+        image[:, y:y_max:stride, :] += col[:, :, y, :]
 
-    return image[:, :, pad:L + pad]
+    return image[:, pad:L + pad, :]
 
 
 def pad_sequences(sequences: np.ndarray, max_length: int, padding: str = 'pre', truncating: str = 'pre') -> np.ndarray:
