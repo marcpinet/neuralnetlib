@@ -157,6 +157,16 @@ model = Model.load('my_model.json')
 
 **You can __of course__ use the library for any dataset you want.**
 
+## ✏️ Edit the library
+
+You can pull the repository and run:
+
+```bash
+pip install -e .
+```
+
+And test your changes on the examples.
+
 ## 🎯 TODO
 
 - [ ] Example for image generation using VAE

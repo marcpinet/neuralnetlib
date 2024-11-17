@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import incompatibility_dict, Layer, Input, Activation, Dropout, TextVectorization, LSTM, GRU, \
-    Bidirectional, Embedding, Attention, Dense
+    Bidirectional, Embedding, Attention, Dense, Reshape
 from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
@@ -670,12 +670,16 @@ class Autoencoder(BaseModel):
         self.l2_reg = l2_reg
         self.variational = variational
         self.skip_cache = {}
+        
+        self.epsilon = 1e-7
 
     def _calculate_kl_divergence(self):
         if not self.variational:
             return 0.0
-        kl_loss = -0.5 * np.sum(1 + self.latent_log_var - np.square(self.latent_mean) - np.exp(self.latent_log_var))
-        return kl_loss / len(self.latent_mean)
+        kl_loss = -0.5 * np.mean(
+            1 + self.latent_log_var - np.square(self.latent_mean) - np.exp(self.latent_log_var)
+        )
+        return kl_loss
 
     def _reparameterize(self):
         if not self.variational:
@@ -968,7 +972,8 @@ class Autoencoder(BaseModel):
             latent_l2 *= 0.1
             distribution_penalty *= 0.1
         
-        total_loss = reconstruction_loss + regularization_loss + latent_l2 + distribution_penalty + kl_loss
+        beta = 0.01
+        total_loss = reconstruction_loss + regularization_loss + latent_l2 + distribution_penalty + beta * kl_loss
         
         error = self.decoder_loss.derivative(y_batch, self.predictions)
         if error.ndim == 1:
@@ -1276,3 +1281,32 @@ class Autoencoder(BaseModel):
             print()
 
         return history
+
+    def generate_image(self, x_train: np.ndarray, n_samples: int = 10, seed: int | None = None, n_examples: int = 1000) -> np.ndarray:
+        _ = self.forward_pass(x_train[:n_examples])
+
+        latent_mean_stats = np.mean(self.latent_mean, axis=0)
+        latent_std_stats = np.exp(0.5 * np.mean(self.latent_log_var, axis=0))
+
+        latent_mean_repeated = np.tile(latent_mean_stats, (n_samples, 1))
+        latent_std_repeated = np.tile(latent_std_stats, (n_samples, 1))
+
+        rng = np.random.default_rng(seed if seed is not None else self.random_state)
+        noise = rng.standard_normal(size=(n_samples, 32))
+
+        latent_samples = np.concatenate([
+            latent_mean_repeated + noise * latent_std_repeated, np.zeros((n_samples, 32))
+        ], axis=1)
+
+        generated = latent_samples
+        for layer in self.decoder_layers:
+            if isinstance(layer, (Dropout, LSTM, Bidirectional, GRU)):
+                generated = layer.forward_pass(generated, training=False)
+            elif isinstance(layer, Reshape):
+                if isinstance(layer.target_shape, list):
+                    layer.target_shape = tuple(layer.target_shape)
+                generated = layer.forward_pass(generated)
+            else:
+                generated = layer.forward_pass(generated)
+
+        return generated

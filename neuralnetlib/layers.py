@@ -1414,13 +1414,13 @@ class TextVectorization(Layer):
 
 
 class Reshape(Layer):
-    def __init__(self, target_shape):
+    def __init__(self, target_shape: tuple, input_shape: tuple | None = None):
         super().__init__()
         self.target_shape = target_shape
         self.input_shape = None
 
     def __str__(self) -> str:
-        return f'Reshape(target_shape={self.target_shape})'
+        return f'Reshape(target_shape={self.target_shape}, input_shape={self.input_shape})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input_shape = input_data.shape
@@ -1432,12 +1432,13 @@ class Reshape(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'target_shape': self.target_shape
+            'target_shape': self.target_shape,
+            'input_shape': self.input_shape
         }
 
     @staticmethod
     def from_config(config: dict):
-        return Reshape(config['target_shape'])
+        return Reshape(config['target_shape'], config['input_shape'])
 
 
 class LSTMCell(Layer):

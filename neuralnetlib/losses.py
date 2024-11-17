@@ -25,6 +25,8 @@ class LossFunction:
             return MeanAbsoluteError()
         elif config['name'] == 'HuberLoss':
             return HuberLoss(config['delta'])
+        elif config['name'] == 'KullbackLeiblerDivergence':
+            return KullbackLeiblerDivergence()
         else:
             raise ValueError(f'Unknown loss function: {config["name"]}')
 
@@ -41,6 +43,8 @@ class LossFunction:
             return SparseCategoricalCrossentropy()
         elif name == "mae":
             return MeanAbsoluteError()
+        elif name == "kld":
+            return KullbackLeiblerDivergence()
         elif name.startswith("huber"):
             delta = float(name.split("_")[-1])
             return HuberLoss(delta)
@@ -146,3 +150,16 @@ class HuberLoss(LossFunction):
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "delta": self.delta}
+
+
+class KullbackLeiblerDivergence(LossFunction):
+    def __call__(self, mu: np.ndarray, log_var: np.ndarray) -> float:
+        return -0.5 * np.mean(1 + log_var - np.square(mu) - np.exp(log_var))
+
+    def derivative(self, mu: np.ndarray, log_var: np.ndarray) -> tuple:
+        d_mu = mu 
+        d_log_var = 0.5 * (np.exp(log_var) - 1)
+        return d_mu, d_log_var
+
+    def __str__(self):
+        return "KullbackLeiblerDivergence"
