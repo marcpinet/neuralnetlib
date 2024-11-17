@@ -2,3 +2,7 @@ scikit-learn
 matplotlib
 tensorflow
 numpy
+scipy
+pandas
+requests
+pillow

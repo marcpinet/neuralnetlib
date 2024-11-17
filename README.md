@@ -35,9 +35,16 @@ pip install neuralnetlib
 
 ## 💡 How to use
 
+## Basic usage
+
 See [this file](examples/classification-regression/mnist_multiclass.ipynb) for a simple example of how to use the library.<br>
 For a more advanced example, see [this file](examples/cnn-classification/cnn_classification_mnist.ipynb) for using CNN.<br>
 You can also check [this file](examples/classification-regression/sentiment_analysis.ipynb) for text classification using RNN.<br>
+
+## Advanced usage
+
+See [this file](examples/generation/autoencoder_vae_example.ipynb) for an example of how to use VAE to generate new images.<br>
+And [this file](examples/rnn-text-generation/dinosaur_names_generator.ipynb) for an example of how to generate new dinosaur names.<br>
 
 More examples in [this folder](examples).
 
@@ -169,7 +176,6 @@ And test your changes on the examples.
 
 ## 🎯 TODO
 
-- [ ] Example for image generation using VAE
 - [ ] Add more model architecture support (like transformers, gan, etc)
 - [ ] Add more preprocessing tools (like data augmentation, etc)
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
