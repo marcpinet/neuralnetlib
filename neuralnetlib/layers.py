@@ -332,22 +332,21 @@ class Conv2D(Layer):
             setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple):
-        in_channels, _, _ = input_shape
+        _, _, _, in_channels = input_shape
 
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
+        
         if self.weights_init == "xavier":
             self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)),
-                                           (self.filters, in_channels, *self.kernel_size))
+                                         (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))),
-                                           (self.filters, in_channels, *self.kernel_size))
+                                         (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(
-                0, 0.01, (self.filters, in_channels, *self.kernel_size))
+            self.weights = self.rng.normal(0, 0.01, (*self.kernel_size, in_channels, self.filters))
         else:
-            raise ValueError(
-                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
         if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
@@ -369,13 +368,11 @@ class Conv2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(
-                input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
-            self.initialize_weights(input_data.shape[1:])
+            assert len(input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
+            self.initialize_weights(input_data.shape)
 
         self.input = input_data
-        output = self._convolve(self.input, self.weights,
-                                self.bias, self.strides, self.padding)
+        output = self._convolve(self.input, self.weights, self.bias, self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -409,10 +406,10 @@ class Conv2D(Layer):
     @staticmethod
     def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: tuple,
                   padding: str) -> np.ndarray:
-        batch_size, in_channels, in_height, in_width = input_data.shape
-        out_channels, _, kernel_height, kernel_width = weights.shape
+        batch_size, in_height, in_width, in_channels = input_data.shape
+        kernel_height, kernel_width, _, out_channels = weights.shape
 
-        assert in_channels == _, "Number of input channels must match"
+        assert in_channels == weights.shape[2], "Number of input channels must match"
 
         if padding == 'same':
             out_height = int(np.ceil(float(in_height) / float(strides[0])))
@@ -434,10 +431,9 @@ class Conv2D(Layer):
         col = im2col_2d(input_data, kernel_height, kernel_width,
                        strides, (pad_height, pad_width))
         
-        col_W = weights.reshape(out_channels, -1).T
+        col_W = weights.reshape(-1, out_channels)
 
         output = np.dot(col, col_W)
-        
         output = output + bias
 
         expected_elements = batch_size * out_height * out_width * out_channels
@@ -449,16 +445,14 @@ class Conv2D(Layer):
                            f"but got {actual_elements} elements.")
 
         output = output.reshape(batch_size, out_height, out_width, out_channels)
-        output = output.transpose(0, 3, 1, 2)
-
         return output
 
     @staticmethod
     def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: tuple,
                            padding: str) -> tuple:
-        batch_size, in_channels, in_height, in_width = input_data.shape
-        _, out_channels, out_height, out_width = output_error.shape
-        _, _, kernel_height, kernel_width = weights.shape
+        batch_size, in_height, in_width, in_channels = input_data.shape
+        batch_size, out_height, out_width, out_channels = output_error.shape
+        kernel_height, kernel_width, _, _ = weights.shape
 
         if padding == 'same':
             out_height_temp = int(np.ceil(float(in_height) / float(strides[0])))
@@ -475,14 +469,13 @@ class Conv2D(Layer):
         col = im2col_2d(input_data, kernel_height, kernel_width,
                         strides, (pad_height, pad_width))
         
-        col_W = weights.reshape(out_channels, -1).T
+        col_W = weights.reshape(-1, out_channels)
 
-        d_output = output_error.transpose(0, 2, 3, 1).reshape(
-            batch_size * out_height * out_width, -1)
+        d_output = output_error.reshape(batch_size * out_height * out_width, -1)
         
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
-        d_weights = d_weights.transpose(1, 0).reshape(weights.shape)
+        d_weights = d_weights.reshape(kernel_height, kernel_width, in_channels, out_channels)
         d_col = np.dot(d_output, col_W.T)
 
         d_input = col2im_2d(d_col, input_data.shape, kernel_height,
@@ -528,66 +521,72 @@ class MaxPooling2D(Layer):
         return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
+    def from_config(config: dict):
+        return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
+
+    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
-        batch_size, channels, in_height, in_width = input_data.shape
+        batch_size, in_height, in_width, channels = input_data.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
-                              mode='constant')
+        padded_input = np.pad(input_data, 
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
 
-        out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // strides[0] + 1
+        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
         out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
-        output = np.zeros((batch_size, channels, out_height, out_width))
+        output = np.zeros((batch_size, out_height, out_width, channels))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
-                              j * strides[1]:j * strides[1] + pool_size[1]]
-                output[:, :, i, j] = np.max(input_slice, axis=(2, 3))
+                input_slice = padded_input[:, 
+                                         i * strides[0]:i * strides[0] + pool_size[0],
+                                         j * strides[1]:j * strides[1] + pool_size[1], 
+                                         :]
+                output[:, i, j, :] = np.max(np.max(input_slice, axis=1), axis=1)
 
         return output
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
-        batch_size, channels, in_height, in_width = input_data.shape
-        _, _, out_height, out_width = output_error.shape
+        batch_size, in_height, in_width, channels = input_data.shape
+        _, out_height, out_width, _ = output_error.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
-                              mode='constant')
+        padded_input = np.pad(input_data,
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
-                              j * strides[1]:j * strides[1] + pool_size[1]]
-                mask = (input_slice == np.max(
-                    input_slice, axis=(2, 3), keepdims=True))
-                d_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
-                j * strides[1]:j * strides[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                               np.newaxis] * mask
+                input_slice = padded_input[:, 
+                                         i * strides[0]:i * strides[0] + pool_size[0],
+                                         j * strides[1]:j * strides[1] + pool_size[1], 
+                                         :]
+                mask = (input_slice == np.max(np.max(input_slice, axis=1, keepdims=True), 
+                                            axis=2, keepdims=True))
+                
+                d_input[:, 
+                       i * strides[0]:i * strides[0] + pool_size[0],
+                       j * strides[1]:j * strides[1] + pool_size[1], 
+                       :] += output_error[:, i:i+1, j:j+1, :] * mask
 
         if padding == 'same':
-            d_input = d_input[:, :, pad_height:-
-            pad_height, pad_width:-pad_width]
+            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
 
         return d_input
 
@@ -1094,10 +1093,10 @@ class AveragePooling2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
-            input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+            input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                            self.strides, self.padding)
+                          self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -1119,61 +1118,60 @@ class AveragePooling2D(Layer):
 
     @staticmethod
     def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
-        batch_size, channels, in_height, in_width = input_data.shape
+        batch_size, in_height, in_width, channels = input_data.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
-                              mode='constant')
+        padded_input = np.pad(input_data, 
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
 
-        out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // strides[0] + 1
+        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
         out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
-        output = np.zeros((batch_size, channels, out_height, out_width))
+        output = np.zeros((batch_size, out_height, out_width, channels))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
-                              j * strides[1]:j * strides[1] + pool_size[1]]
-                output[:, :, i, j] = np.mean(input_slice, axis=(2, 3))
+                input_slice = padded_input[:, 
+                                         i * strides[0]:i * strides[0] + pool_size[0],
+                                         j * strides[1]:j * strides[1] + pool_size[1], 
+                                         :]
+                output[:, i, j, :] = np.mean(np.mean(input_slice, axis=1), axis=1)
 
         return output
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
-        batch_size, channels, in_height, in_width = input_data.shape
-        _, _, out_height, out_width = output_error.shape
+        batch_size, in_height, in_width, channels = input_data.shape
+        _, out_height, out_width, _ = output_error.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, ((0, 0), (0, 0), (pad_height, pad_height), (pad_width, pad_width)),
-                              mode='constant')
+        padded_input = np.pad(input_data,
+                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
+                             mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_height):
             for j in range(out_width):
-                d_input[:, :, i * strides[0]:i * strides[0] + pool_size[0],
-                j * strides[1]:j * strides[1] + pool_size[1]] += output_error[:, :, i, j][:, :, np.newaxis,
-                                                               np.newaxis] / np.prod(pool_size)
+                d_input[:, 
+                       i * strides[0]:i * strides[0] + pool_size[0],
+                       j * strides[1]:j * strides[1] + pool_size[1], 
+                       :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
 
         if padding == 'same':
-            d_input = d_input[:, :, pad_height:-
-            pad_height, pad_width:-pad_width]
+            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
 
         return d_input
 
@@ -1293,13 +1291,14 @@ class GlobalAveragePooling2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
-            input_data.shape) == 4, f"GlobalAveragePooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+            input_data.shape) == 4, f"GlobalAveragePooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
         self.input_shape = input_data.shape
-        return np.mean(input_data, axis=(2, 3))
+        return np.mean(input_data, axis=(1, 2))
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        return np.repeat(output_error[:, :, np.newaxis, np.newaxis], self.input_shape[2], axis=2) / self.input_shape[
-            2] / self.input_shape[3]
+        return np.expand_dims(np.expand_dims(output_error, axis=1), axis=1) * np.ones(
+            (1, self.input_shape[1], self.input_shape[2], 1)
+        ) / (self.input_shape[1] * self.input_shape[2])
 
     def get_config(self) -> dict:
         return {'name': self.__class__.__name__}
@@ -2326,10 +2325,9 @@ class Attention(Layer):
 
 
 class UpSampling2D(Layer):
-    def __init__(self, size=(2, 2), data_format="channels_first", interpolation="nearest", **kwargs):
+    def __init__(self, size=(2, 2), interpolation="nearest", **kwargs):
         super().__init__()
         self.size = tuple(size) if isinstance(size, (list, tuple)) else (size, size)
-        self.data_format = data_format
         self.interpolation = interpolation
         
         if not isinstance(self.size, tuple):
@@ -2338,10 +2336,7 @@ class UpSampling2D(Layer):
             raise ValueError('Size must have exactly 2 elements.')
         if not all(isinstance(s, (int, np.integer)) and s > 0 for s in self.size):
             raise ValueError('Size elements must be positive integers.')
-            
-        if data_format not in [None, 'channels_first', 'channels_last']:
-            raise ValueError('data_format must be None, "channels_first" or "channels_last"')
-            
+        
         if interpolation not in ['nearest', 'bilinear', 'bicubic']:
             raise ValueError('interpolation must be one of "nearest", "bilinear", or "bicubic"')
             
@@ -2349,20 +2344,16 @@ class UpSampling2D(Layer):
             setattr(self, key, value)
 
     def __str__(self) -> str:
-        return f'UpSampling2D(size={self.size}, data_format={self.data_format}, interpolation={self.interpolation})'
+        return f'UpSampling2D(size={self.size}, interpolation={self.interpolation})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input = input_data
         
-        if self.data_format == 'channels_last':
-            input_data = input_data.transpose(0, 3, 1, 2)
-        
-        batch_size, channels, height, width = input_data.shape
+        batch_size, height, width, channels = input_data.shape
         height_factor, width_factor = self.size
         
         if self.interpolation == 'nearest':
-            output = np.repeat(input_data, height_factor, axis=2)
-            output = np.repeat(output, width_factor, axis=3)
+            output = np.repeat(np.repeat(input_data, height_factor, axis=1), width_factor, axis=2)
                                 
         elif self.interpolation in ['bilinear', 'bicubic']:
             output_height = height * height_factor
@@ -2380,35 +2371,32 @@ class UpSampling2D(Layer):
             wy = y_grid - y0
             wx = x_grid - x0
             
-            wy = wy[np.newaxis, np.newaxis, :, :]
-            wx = wx[np.newaxis, np.newaxis, :, :]
+            wy = wy[:, :, np.newaxis]
+            wx = wx[:, :, np.newaxis]
             
-            output = np.zeros((batch_size, channels, output_height, output_width), dtype=input_data.dtype)
+            output = np.zeros((batch_size, output_height, output_width, channels), dtype=input_data.dtype)
+            
             for b in range(batch_size):
-                top = (1 - wx) * input_data[b, :, y0, x0] + wx * input_data[b, :, y0, x1]
-                bottom = (1 - wx) * input_data[b, :, y1, x0] + wx * input_data[b, :, y1, x1]
+                top = (1 - wx) * input_data[b, y0, x0] + wx * input_data[b, y0, x1]
+                bottom = (1 - wx) * input_data[b, y1, x0] + wx * input_data[b, y1, x1]
                 output[b] = (1 - wy) * top + wy * bottom
-
-        if self.data_format == 'channels_last':
-            output = output.transpose(0, 2, 3, 1)
 
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        if self.data_format == 'channels_last':
-            output_error = output_error.transpose(0, 3, 1, 2)
-            self.input = self.input.transpose(0, 3, 1, 2)
-        
-        batch_size, channels, height, width = self.input.shape
+        batch_size, height, width, channels = self.input.shape
         height_factor, width_factor = self.size
         
         if self.interpolation == 'nearest':
-            output_error_reshaped = output_error.reshape(batch_size, channels, 
-                                                    height, height_factor,
-                                                    width, width_factor)
-            input_error = output_error_reshaped.sum(axis=(3, 5))
+            output_error_reshaped = output_error.reshape(
+                batch_size, 
+                height, height_factor,
+                width, width_factor,
+                channels
+            )
+            input_error = output_error_reshaped.sum(axis=(2, 4))
                             
-        else:  # bilinear and bicubic
+        else:  # bilinear
             output_height = height * height_factor
             output_width = width * width_factor
             
@@ -2421,18 +2409,16 @@ class UpSampling2D(Layer):
             y1 = np.minimum(y0 + 1, height - 1)
             x1 = np.minimum(x0 + 1, width - 1)
             
-            wy = (y_grid - y0)[np.newaxis, np.newaxis, :, :]
-            wx = (x_grid - x0)[np.newaxis, np.newaxis, :, :]
+            wy = (y_grid - y0)[:, :, np.newaxis]
+            wx = (x_grid - x0)[:, :, np.newaxis]
             
             input_error = np.zeros_like(self.input)
+            
             for b in range(batch_size):
-                input_error[b, :, y0, x0] += ((1 - wy) * (1 - wx) * output_error[b]).sum(axis=(2, 3))
-                input_error[b, :, y0, x1] += ((1 - wy) * wx * output_error[b]).sum(axis=(2, 3))
-                input_error[b, :, y1, x0] += (wy * (1 - wx) * output_error[b]).sum(axis=(2, 3))
-                input_error[b, :, y1, x1] += (wy * wx * output_error[b]).sum(axis=(2, 3))
-
-        if self.data_format == 'channels_last':
-            input_error = input_error.transpose(0, 2, 3, 1)
+                input_error[b, y0, x0] += ((1 - wy) * (1 - wx) * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y0, x1] += ((1 - wy) * wx * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y1, x0] += (wy * (1 - wx) * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y1, x1] += (wy * wx * output_error[b]).sum(axis=(0, 1))
 
         return input_error
 
@@ -2440,7 +2426,6 @@ class UpSampling2D(Layer):
         return {
             'name': self.__class__.__name__,
             'size': self.size,
-            'data_format': self.data_format,
             'interpolation': self.interpolation
         }
 
@@ -2448,7 +2433,6 @@ class UpSampling2D(Layer):
     def from_config(config: dict) -> 'UpSampling2D':
         return UpSampling2D(
             size=config['size'],
-            data_format=config['data_format'],
             interpolation=config['interpolation']
         )
 
