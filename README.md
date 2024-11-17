@@ -159,7 +159,6 @@ model = Model.load('my_model.json')
 
 ## 🎯 TODO
 
-- [ ] Switch from NCHW to NHWC for better performance on CPU
 - [ ] Example for image generation using VAE
 - [ ] Add more model architecture support (like transformers, gan, etc)
 - [ ] Add more preprocessing tools (like data augmentation, etc)
