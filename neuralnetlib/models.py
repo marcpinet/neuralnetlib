@@ -857,7 +857,6 @@ class Autoencoder(BaseModel):
                 decoded = layer.forward_pass(decoded, training)
             else:
                 decoded = layer.forward_pass(decoded)
-                
             if self.skip_connections and isinstance(layer, Dense):
                 skip_connection = self.skip_cache.get(layer.units)
                 if skip_connection is not None:

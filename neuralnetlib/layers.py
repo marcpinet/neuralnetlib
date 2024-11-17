@@ -2325,8 +2325,132 @@ class Attention(Layer):
         )
 
 
-class Conv2DTranspose(Layer):
-    pass
+class UpSampling2D(Layer):
+    def __init__(self, size=(2, 2), data_format="channels_first", interpolation="nearest", **kwargs):
+        super().__init__()
+        self.size = tuple(size) if isinstance(size, (list, tuple)) else (size, size)
+        self.data_format = data_format
+        self.interpolation = interpolation
+        
+        if not isinstance(self.size, tuple):
+            raise TypeError('Size must be a tuple or list of 2 integers.')
+        if len(self.size) != 2:
+            raise ValueError('Size must have exactly 2 elements.')
+        if not all(isinstance(s, (int, np.integer)) and s > 0 for s in self.size):
+            raise ValueError('Size elements must be positive integers.')
+            
+        if data_format not in [None, 'channels_first', 'channels_last']:
+            raise ValueError('data_format must be None, "channels_first" or "channels_last"')
+            
+        if interpolation not in ['nearest', 'bilinear', 'bicubic']:
+            raise ValueError('interpolation must be one of "nearest", "bilinear", or "bicubic"')
+            
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __str__(self) -> str:
+        return f'UpSampling2D(size={self.size}, data_format={self.data_format}, interpolation={self.interpolation})'
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        self.input = input_data
+        
+        if self.data_format == 'channels_last':
+            input_data = input_data.transpose(0, 3, 1, 2)
+        
+        batch_size, channels, height, width = input_data.shape
+        height_factor, width_factor = self.size
+        
+        if self.interpolation == 'nearest':
+            output = np.repeat(input_data, height_factor, axis=2)
+            output = np.repeat(output, width_factor, axis=3)
+                                
+        elif self.interpolation in ['bilinear', 'bicubic']:
+            output_height = height * height_factor
+            output_width = width * width_factor
+            
+            y = np.linspace(0, height - 1, output_height)
+            x = np.linspace(0, width - 1, output_width)
+            x_grid, y_grid = np.meshgrid(x, y)
+            
+            y0 = np.floor(y_grid).astype(int)
+            x0 = np.floor(x_grid).astype(int)
+            y1 = np.minimum(y0 + 1, height - 1)
+            x1 = np.minimum(x0 + 1, width - 1)
+            
+            wy = y_grid - y0
+            wx = x_grid - x0
+            
+            wy = wy[np.newaxis, np.newaxis, :, :]
+            wx = wx[np.newaxis, np.newaxis, :, :]
+            
+            output = np.zeros((batch_size, channels, output_height, output_width), dtype=input_data.dtype)
+            for b in range(batch_size):
+                top = (1 - wx) * input_data[b, :, y0, x0] + wx * input_data[b, :, y0, x1]
+                bottom = (1 - wx) * input_data[b, :, y1, x0] + wx * input_data[b, :, y1, x1]
+                output[b] = (1 - wy) * top + wy * bottom
+
+        if self.data_format == 'channels_last':
+            output = output.transpose(0, 2, 3, 1)
+
+        return output
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if self.data_format == 'channels_last':
+            output_error = output_error.transpose(0, 3, 1, 2)
+            self.input = self.input.transpose(0, 3, 1, 2)
+        
+        batch_size, channels, height, width = self.input.shape
+        height_factor, width_factor = self.size
+        
+        if self.interpolation == 'nearest':
+            output_error_reshaped = output_error.reshape(batch_size, channels, 
+                                                    height, height_factor,
+                                                    width, width_factor)
+            input_error = output_error_reshaped.sum(axis=(3, 5))
+                            
+        else:  # bilinear and bicubic
+            output_height = height * height_factor
+            output_width = width * width_factor
+            
+            y = np.linspace(0, height - 1, output_height)
+            x = np.linspace(0, width - 1, output_width)
+            x_grid, y_grid = np.meshgrid(x, y)
+            
+            y0 = np.floor(y_grid).astype(int)
+            x0 = np.floor(x_grid).astype(int)
+            y1 = np.minimum(y0 + 1, height - 1)
+            x1 = np.minimum(x0 + 1, width - 1)
+            
+            wy = (y_grid - y0)[np.newaxis, np.newaxis, :, :]
+            wx = (x_grid - x0)[np.newaxis, np.newaxis, :, :]
+            
+            input_error = np.zeros_like(self.input)
+            for b in range(batch_size):
+                input_error[b, :, y0, x0] += ((1 - wy) * (1 - wx) * output_error[b]).sum(axis=(2, 3))
+                input_error[b, :, y0, x1] += ((1 - wy) * wx * output_error[b]).sum(axis=(2, 3))
+                input_error[b, :, y1, x0] += (wy * (1 - wx) * output_error[b]).sum(axis=(2, 3))
+                input_error[b, :, y1, x1] += (wy * wx * output_error[b]).sum(axis=(2, 3))
+
+        if self.data_format == 'channels_last':
+            input_error = input_error.transpose(0, 2, 3, 1)
+
+        return input_error
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'size': self.size,
+            'data_format': self.data_format,
+            'interpolation': self.interpolation
+        }
+
+    @staticmethod
+    def from_config(config: dict) -> 'UpSampling2D':
+        return UpSampling2D(
+            size=config['size'],
+            data_format=config['data_format'],
+            interpolation=config['interpolation']
+        )
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -2335,13 +2459,13 @@ class Conv2DTranspose(Layer):
 incompatibility_dict = {
     Input: [],
     
-    Dense: [Conv1D, Conv2D, Conv2DTranspose],
+    Dense: [Conv1D, Conv2D, UpSampling2D],
     
     Activation: [],
     
     Conv2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
     
-    Conv2DTranspose: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
+    UpSampling2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
     
     MaxPooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
     
@@ -2349,19 +2473,19 @@ incompatibility_dict = {
     
     GlobalAveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
     
-    Conv1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    Conv1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
     
-    MaxPooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    MaxPooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
     
-    AveragePooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    AveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
     
-    GlobalAveragePooling1D: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    GlobalAveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
     Flatten: [],
     
     Dropout: [],
     
-    Embedding: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    Embedding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
     BatchNormalization: [],
     
@@ -2369,17 +2493,17 @@ incompatibility_dict = {
     
     Permute: [],
     
-    TextVectorization: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    TextVectorization: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
     Reshape: [],
     
-    LSTM: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    LSTM: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
-    GRU: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    GRU: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
-    Bidirectional: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    Bidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
-    Unidirectional: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
+    Unidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
     
-    Attention: [Conv2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D]
+    Attention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D]
 }

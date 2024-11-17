@@ -159,11 +159,12 @@ model = Model.load('my_model.json')
 
 ## 🎯 TODO
 
-- [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
+- [ ] Switch from NCHW to NHWC for better performance on CPU
 - [ ] Add more model architecture support (like transformers, etc)
 - [ ] Add more preprocessing tools (like data augmentation, etc)
+- [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more callbacks
-- [ ] Add more layers (like Conv2dTranspose, UpSampling2D, etc)
+- [ ] Add more layers
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 
