@@ -1381,20 +1381,27 @@ class Transformer(BaseModel):
         self.loss_function = None
 
     def create_padding_mask(self, seq: np.ndarray) -> np.ndarray:
-        mask = (seq == 0)[:, np.newaxis, np.newaxis, :]
-        return mask
+        if len(seq.shape) == 1:
+            seq = seq[np.newaxis, :]
+        mask = (seq == self.PAD_IDX).astype(np.bool_)
+        return mask[:, np.newaxis, np.newaxis, :]
 
     def create_look_ahead_mask(self, size: int) -> np.ndarray:
-        mask = np.triu(np.ones((size, size)), k=1)
+        mask = np.triu(np.ones((size, size)), k=1).astype(np.bool_)
         return mask[np.newaxis, np.newaxis, :, :]
 
     def create_masks(self, inp: np.ndarray, tar: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        batch_size = inp.shape[0]
         enc_padding_mask = self.create_padding_mask(inp)
         dec_padding_mask = self.create_padding_mask(inp)
-        
         look_ahead_mask = self.create_look_ahead_mask(tar.shape[1])
         dec_target_padding_mask = self.create_padding_mask(tar)
-        combined_mask = np.maximum(dec_target_padding_mask, look_ahead_mask)
+        
+        look_ahead_mask = np.broadcast_to(
+            look_ahead_mask, 
+            (batch_size, 1, tar.shape[1], tar.shape[1])
+        )
+        combined_mask = np.logical_or(dec_target_padding_mask, look_ahead_mask)
         
         return enc_padding_mask, combined_mask, dec_padding_mask
 
@@ -1497,10 +1504,9 @@ class Transformer(BaseModel):
         self.loss_function = loss_function if isinstance(loss_function, LossFunction) else LossFunction.from_name(loss_function)
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
         
-        self.loss_function.PAD_IDX = self.PAD_IDX
-        self.loss_function.UNK_IDX = self.UNK_IDX
-        self.loss_function.SOS_IDX = self.SOS_IDX
-        self.loss_function.EOS_IDX = self.EOS_IDX
+        if isinstance(self.loss_function, SequenceCrossEntropy):
+            special_tokens = [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX, self.EOS_IDX]
+            self.loss_function.ignore_tokens = list(set(self.loss_function.ignore_tokens + special_tokens))
         
         if verbose:
             print(str(self))
@@ -1824,47 +1830,117 @@ class Transformer(BaseModel):
                 print()
 
             return history
-
-    def predict(self, inp: np.ndarray, max_length: int = 50, apply_temperature: bool = True) -> np.ndarray:
+        
+    def _get_next_token_predictions(self, sequence: np.ndarray, enc_output: np.ndarray) -> np.ndarray:
+        if len(sequence.shape) == 1:
+            sequence = sequence[np.newaxis, :]
+            
+        batch_size = sequence.shape[0]
+        seq_len = sequence.shape[1]
+        
+        dec_padding_mask = self.create_padding_mask(sequence)
+        look_ahead_mask = self.create_look_ahead_mask(seq_len)
+        
+        cross_attention_padding_mask = np.zeros((batch_size, 1, 1, enc_output.shape[1]), dtype=np.bool_)
+        
+        self_attention_mask = np.broadcast_to(look_ahead_mask, (batch_size, 1, seq_len, seq_len))
+        self_attention_mask = np.logical_or(self_attention_mask, dec_padding_mask)
+        
+        decoder_output = self.decode(
+            sequence,
+            enc_output,
+            training=False,
+            look_ahead_mask=self_attention_mask,
+            padding_mask=cross_attention_padding_mask
+        )
+        
+        predictions = decoder_output[:, -1, :]
+        
+        for token in [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX]:
+            predictions[:, token] = -np.inf
+        
+        predictions = predictions / self.temperature
+        
+        max_logits = np.max(predictions, axis=-1, keepdims=True)
+        stable_logits = predictions - max_logits
+        exp_preds = np.exp(stable_logits)
+        predictions = exp_preds / np.sum(exp_preds, axis=-1, keepdims=True)
+        
+        return predictions
+        
+    def predict(self, inp, max_length=50, beam_size=5, alpha=0.6, min_length=5):
+        def get_ngrams(sequence, n):
+            seq_list = sequence.flatten().tolist()
+            return set(tuple(seq_list[i:i+n]) for i in range(len(seq_list)-n+1))
+            
+        def compute_repetition_penalty(sequence, next_token):
+            penalty = 1.0
+            ngrams = {n: get_ngrams(sequence, n) for n in range(1, 4)}
+            for n, grams in ngrams.items():
+                next_token_int = int(next_token)
+                if any(next_token_int in gram for gram in grams):
+                    penalty *= 0.9 ** n
+            return penalty
+            
+        def length_normalize(length):
+            return ((5 + length) / 6.0) ** alpha
+            
         batch_size = inp.shape[0]
-        output = np.full((batch_size, 1), self.SOS_IDX, dtype=np.int32)
+        beams = [(np.full((batch_size, 1), self.SOS_IDX), 0)]
+        finished_beams = []
         
         enc_output = self.encode(inp, training=False)
         
-        for _ in range(max_length - 1):
-            dec_padding_mask = self.create_padding_mask(inp)
-            look_ahead_mask = self.create_look_ahead_mask(output.shape[1])
-            dec_target_padding_mask = self.create_padding_mask(output)
-            combined_mask = np.maximum(dec_target_padding_mask, look_ahead_mask)
+        for step in range(max_length - 1):
+            if not beams:
+                break
+                
+            candidates = []
+            for sequence, score in beams:
+                predictions = self._get_next_token_predictions(sequence, enc_output)
+                
+                for i in range(predictions.shape[-1]):
+                    predictions[..., i] *= compute_repetition_penalty(sequence, i)
+                    
+                if step > 0:
+                    rng = np.random.default_rng(self.random_state)
+                    noise = rng.normal(0, 0.1, predictions.shape)
+                    predictions = predictions + noise
+                    
+                k = min(20, predictions.shape[-1])
+                top_k_scores = np.partition(predictions, -k)[:, -k:]
+                top_k_tokens = np.argpartition(predictions, -k)[:, -k:]
+                
+                for token_idx in range(k):
+                    token = top_k_tokens[..., token_idx]
+                    token_score = top_k_scores[..., token_idx]
+                    
+                    new_sequence = np.concatenate([sequence, token.reshape(-1, 1)], axis=1)
+                    
+                    length_penalty = length_normalize(new_sequence.shape[1])
+                    epsilon = 1e-9  # to avoid log(x) where x <= 0
+                    new_score = (score + np.log(token_score + epsilon)) / length_penalty
+                    
+                    if token == self.EOS_IDX and new_sequence.shape[1] >= min_length:
+                        finished_beams.append((new_sequence, new_score))
+                    else:
+                        candidates.append((new_sequence, new_score))
+                        
+            beams = sorted(candidates, key=lambda x: x[1] / length_normalize(x[0].shape[1]), reverse=True)[:beam_size]
             
-            predictions = self.decode(
-                output,
-                enc_output,
-                training=False,
-                look_ahead_mask=combined_mask,
-                padding_mask=dec_padding_mask
-            )
-            
-            predictions = predictions[:, -1, :]
-            
-            predictions[:, self.PAD_IDX] = -np.inf
-            predictions[:, self.UNK_IDX] = -np.inf
-            predictions[:, self.SOS_IDX] = -np.inf
-            
-            predictions = np.exp(predictions - np.max(predictions, axis=-1, keepdims=True))
-            predictions = predictions / np.sum(predictions, axis=-1, keepdims=True)
-            
-            if apply_temperature:
-                predictions = np.power(predictions, 1.0 / self.temperature)
-                predictions = predictions / np.sum(predictions, axis=-1, keepdims=True)
-            
-            next_token = np.argmax(predictions, axis=-1, keepdims=True)
-            output = np.concatenate([output, next_token], axis=1)
-            
-            if np.all(next_token == self.EOS_IDX):
+            if len(finished_beams) >= beam_size * 2 and step >= min_length:
                 break
         
-        return output
+        finished_beams.extend(beams)
+        
+        if not finished_beams:
+            finished_beams = beams
+        
+        finished_beams = sorted(finished_beams, 
+                            key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
+                            reverse=True)
+        
+        return finished_beams[0][0]
 
     def evaluate(self, 
                 x_test: np.ndarray, 

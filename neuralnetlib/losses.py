@@ -168,36 +168,36 @@ class KullbackLeiblerDivergence(LossFunction):
     
 
 class SequenceCrossEntropy(LossFunction):
-    def __init__(self):
+    def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None):
         super().__init__()
+        self.label_smoothing = label_smoothing
         self.epsilon = 1e-10
         self.PAD_IDX = 0
-        self.UNK_IDX = None
-        self.SOS_IDX = None
-        self.EOS_IDX = None
+        self.ignore_tokens = ignore_tokens if ignore_tokens is not None else []
         
-    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    def __call__(self, y_true, y_pred):
         y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        mask = (y_true != self.PAD_IDX).astype(np.float32)
-        
+        mask = np.ones_like(y_true, dtype=np.float32)
+        for token in self.ignore_tokens:
+            mask *= (y_true != token)
+            
         n_classes = y_pred.shape[-1]
         y_true_smooth = np.zeros_like(y_pred)
-        y_true_smooth += 0.1 / (n_classes - 1)  # Label smoothing
+        
+        smooth_prob = self.label_smoothing / (n_classes - len(self.ignore_tokens) - 1)
+        y_true_smooth += smooth_prob
         
         for i in range(y_true.shape[0]):
             for j in range(y_true.shape[1]):
                 token = y_true[i, j]
-                if token not in [self.PAD_IDX, self.UNK_IDX, 
-                               self.SOS_IDX, self.EOS_IDX]:
-                    y_true_smooth[i, j, token] = 0.9
+                if token not in self.ignore_tokens:
+                    y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
                 else:
                     y_true_smooth[i, j, token] = 1.0
                     
         loss = -np.sum(y_true_smooth * np.log(y_pred) * mask[..., np.newaxis])
-        total_tokens = np.sum(mask)
-        
-        return loss / (total_tokens + self.epsilon)
+        return loss / (np.sum(mask) + self.epsilon)
     
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)

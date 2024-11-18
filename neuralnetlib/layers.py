@@ -2464,7 +2464,6 @@ class UpSampling2D(Layer):
 
 
 class MultiHeadAttention(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         num_heads: int,
@@ -2532,19 +2531,40 @@ class MultiHeadAttention(Layer):
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
-    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
+    def _scaled_dot_product_attention(self, query, key, value, mask=None, training=True):
+        # shape: (batch_size, num_heads, query_len, key_len)
         scores = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-        scale = np.sqrt(float(self.key_dim))
-        scaled_scores = scores / scale / self.temperature
 
         if mask is not None:
-            scaled_scores += (mask * -1e9)
+            if len(mask.shape) == 3:  # (batch_size, seq_len, seq_len)
+                mask = mask[:, np.newaxis, :, :]
+            elif len(mask.shape) == 4:  # already in correct shape
+                pass
+            else:  # (batch_size, seq_len) or other shapes
+                mask = mask[:, np.newaxis, np.newaxis, :]
+            
+            mask = mask.astype(np.bool_)
 
-        self.attention_weights = self._softmax(scaled_scores)
+            if mask.shape[1] == 1:
+                mask = np.broadcast_to(mask, scores.shape)
+            
+            scores = np.where(mask, -1e9, scores)
+
+        scale = np.sqrt(float(self.key_dim))
+        
+        if not training and hasattr(self, 'temperature'):
+            scaled_scores = scores / (scale * self.temperature)
+        else:
+            scaled_scores = scores / scale
+
+        scores_max = np.max(scaled_scores, axis=-1, keepdims=True)
+        exp_scores = np.exp(scaled_scores - scores_max)
+        scores_sum = np.sum(exp_scores, axis=-1, keepdims=True)
+        self.attention_weights = exp_scores / (scores_sum + 1e-9)
         
         if training and self.dropout:
             self.attention_weights = self.dropout.forward_pass(self.attention_weights)
-
+            
         output = np.matmul(self.attention_weights, value)
         return output
 
@@ -2590,27 +2610,41 @@ class MultiHeadAttention(Layer):
         query_seq_length: int = output_error.shape[1]
         key_value_seq_length: int = self.reshaped_value.shape[2]
 
-        d_concat_attention: np.ndarray = self.output_dense.backward_pass(output_error)
-
-        d_attention_output: np.ndarray = np.reshape(d_concat_attention,
-                                                (batch_size, query_seq_length, self.num_heads, self.value_dim))
+        d_attention_output: np.ndarray = np.reshape(output_error,
+                                                  (batch_size, query_seq_length, self.num_heads, self.value_dim))
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
 
-        assert self.reshaped_value.shape == (batch_size, self.num_heads, key_value_seq_length, self.value_dim), \
-            f"Shape mismatch: {self.reshaped_value.shape} vs expected {(batch_size, self.num_heads, key_value_seq_length, self.value_dim)}"
+        if len(self.attention_weights.shape) != 4:
+            raise ValueError(f"Expected 4D attention weights, got shape {self.attention_weights.shape}")
 
-        d_weights: np.ndarray = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
-        d_values: np.ndarray = np.matmul(np.transpose(self.attention_weights, (0, 1, 3, 2)), d_attention_output)
+        try:
+            d_weights: np.ndarray = np.matmul(d_attention_output, 
+                                            np.transpose(self.reshaped_value, (0, 1, 3, 2)))
+            
+            attention_weights_t = np.transpose(self.attention_weights, (0, 1, 3, 2))
+            if attention_weights_t.shape[-2:] != (key_value_seq_length, query_seq_length):
+                raise ValueError(f"Invalid attention weights shape after transpose: {attention_weights_t.shape}")
+            
+            d_values: np.ndarray = np.matmul(attention_weights_t, d_attention_output)
+
+        except ValueError as e:
+            print("Shape mismatch in attention backward pass:")
+            print(f"d_attention_output: {d_attention_output.shape}")
+            print(f"reshaped_value: {self.reshaped_value.shape}")
+            print(f"attention_weights: {self.attention_weights.shape}")
+            raise e
 
         d_scores: np.ndarray = d_weights * self.attention_weights
-        d_scores -= self.attention_weights * np.sum(d_weights * self.attention_weights, axis=-1, keepdims=True)
+        d_scores -= self.attention_weights * np.sum(d_weights * self.attention_weights, 
+                                                  axis=-1, keepdims=True)
         d_scores /= np.sqrt(self.key_dim)
 
         if self.dropout and isinstance(self.attention_weights, np.ndarray):
             d_scores = self.dropout.backward_pass(d_scores)
 
         d_query: np.ndarray = np.matmul(d_scores, self.reshaped_key)
-        d_key: np.ndarray = np.matmul(np.transpose(d_scores, (0, 1, 3, 2)), self.reshaped_query)
+        d_key: np.ndarray = np.matmul(np.transpose(d_scores, (0, 1, 3, 2)), 
+                                    self.reshaped_query)
 
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
@@ -2668,7 +2702,6 @@ class MultiHeadAttention(Layer):
 
 
 class PositionalEncoding(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         max_sequence_length: int,
@@ -2720,7 +2753,7 @@ class PositionalEncoding(Layer):
         if seq_len > self.max_sequence_length:
             raise ValueError(f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}")
             
-        encoding = self.weights[:, :seq_len, :]
+        encoding = self.weights[:, :seq_len, :] * 0.5
         
         if batch_size > 1:
             encoding = np.repeat(encoding, batch_size, axis=0)
@@ -2758,7 +2791,6 @@ class PositionalEncoding(Layer):
 
 
 class FeedForward(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         d_ff: int,
@@ -2831,7 +2863,6 @@ class FeedForward(Layer):
 
 
 class AddNorm(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         epsilon: float = 1e-6,
@@ -2874,7 +2905,6 @@ class AddNorm(Layer):
 
 
 class TransformerEncoderLayer(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         d_model: int,
@@ -2999,7 +3029,6 @@ class TransformerEncoderLayer(Layer):
 
 
 class TransformerDecoderLayer(Layer):
-    """Typing this thing as much as I can to speed up Python's interpreter"""
     def __init__(
         self,
         d_model: int,
@@ -3055,9 +3084,9 @@ class TransformerDecoderLayer(Layer):
         self.dropout2 = Dropout(dropout_rate, random_state=random_state)
         self.dropout3 = Dropout(dropout_rate, random_state=random_state)
         
-        self.norm1 = LayerNormalization()
-        self.norm2 = LayerNormalization()
-        self.norm3 = LayerNormalization()
+        self.norm1 = AddNorm(random_state=random_state)
+        self.norm2 = AddNorm(random_state=random_state)
+        self.norm3 = AddNorm(random_state=random_state)
         
         self.cache = {}
             
@@ -3079,7 +3108,7 @@ class TransformerDecoderLayer(Layer):
         attn1 = self.self_attention.forward_pass(x, mask=self_attention_mask, training=training)
         if training:
             attn1 = self.dropout1.forward_pass(attn1, training=True)
-        out1 = self.norm1.forward_pass(x + attn1)
+        out1 = self.norm1.forward_pass((attn1, x))
         self.cache['attn1'] = attn1
         self.cache['out1'] = out1
         
@@ -3091,7 +3120,7 @@ class TransformerDecoderLayer(Layer):
         )
         if training:
             attn2 = self.dropout2.forward_pass(attn2, training=True)
-        out2 = self.norm2.forward_pass(out1 + attn2)
+        out2 = self.norm2.forward_pass((attn2, out1))
         self.cache['attn2'] = attn2
         self.cache['out2'] = out2
         
@@ -3099,28 +3128,26 @@ class TransformerDecoderLayer(Layer):
         ffn_out = self.ffn.forward_pass(out2, training=training)
         if training:
             ffn_out = self.dropout3.forward_pass(ffn_out, training=True)
-        out3 = self.norm3.forward_pass(out2 + ffn_out)
+        out3 = self.norm3.forward_pass((ffn_out, out2))
         self.cache['ffn_out'] = ffn_out
         
         return out3
         
-    def backward_pass(
-        self, output_error: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        d_norm3 = self.norm3.backward_pass(output_error)
+    def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        d_norm3, d_residual3 = self.norm3.backward_pass(output_error)
         d_ffn = self.dropout3.backward_pass(d_norm3)
         d_ffn = self.ffn.backward_pass(d_ffn)
-        d_out2 = d_norm3 + d_ffn
+        d_out2 = d_residual3 + d_ffn
         
-        d_norm2 = self.norm2.backward_pass(d_out2)
+        d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
         d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
-        d_out1 = d_norm2 + d_attn2_query
+        d_out1 = d_residual2 + d_attn2_query
         
-        d_norm1 = self.norm1.backward_pass(d_out1)
+        d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
         d_attn1 = self.dropout1.backward_pass(d_norm1)
         d_x = self.self_attention.backward_pass(d_attn1)
-        d_x = d_norm1 + d_x
+        d_x = d_residual1 + d_x
         
         d_enc = d_attn2_key + d_attn2_value
         
