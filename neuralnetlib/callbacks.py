@@ -1,6 +1,127 @@
 import numpy as np
+from typing import List, Dict, Any, Union
 
 from neuralnetlib.metrics import Metric
+from neuralnetlib.layers import Layer
+
+
+class ModelWeightManager:
+    @staticmethod
+    def get_model_weights(model) -> List[np.ndarray]:
+        """Extract weights from any model type."""
+        weights = []
+        
+        if hasattr(model, 'layers'):  # Sequential model
+            weights.extend([layer.weights for layer in model.layers if hasattr(layer, 'weights')])
+            
+        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
+            weights.extend([layer.weights for layer in model.encoder_layers if hasattr(layer, 'weights')])
+            weights.extend([layer.weights for layer in model.decoder_layers if hasattr(layer, 'weights')])
+            
+        elif hasattr(model, 'embedding'):  # Transformer
+            if hasattr(model.embedding, 'weights'):
+                weights.append(model.embedding.weights)
+            
+            for encoder_layer in model.encoder_layers:
+                if hasattr(encoder_layer, 'attention'):
+                    weights.extend([
+                        encoder_layer.attention.query_dense.weights,
+                        encoder_layer.attention.key_dense.weights,
+                        encoder_layer.attention.value_dense.weights,
+                        encoder_layer.attention.output_dense.weights
+                    ])
+                if hasattr(encoder_layer, 'ffn'):
+                    weights.extend([
+                        encoder_layer.ffn.dense1.weights,
+                        encoder_layer.ffn.dense2.weights
+                    ])
+            
+            for decoder_layer in model.decoder_layers:
+                if hasattr(decoder_layer, 'self_attention'):
+                    weights.extend([
+                        decoder_layer.self_attention.query_dense.weights,
+                        decoder_layer.self_attention.key_dense.weights,
+                        decoder_layer.self_attention.value_dense.weights,
+                        decoder_layer.self_attention.output_dense.weights
+                    ])
+                if hasattr(decoder_layer, 'cross_attention'):
+                    weights.extend([
+                        decoder_layer.cross_attention.query_dense.weights,
+                        decoder_layer.cross_attention.key_dense.weights,
+                        decoder_layer.cross_attention.value_dense.weights,
+                        decoder_layer.cross_attention.output_dense.weights
+                    ])
+                if hasattr(decoder_layer, 'ffn'):
+                    weights.extend([
+                        decoder_layer.ffn.dense1.weights,
+                        decoder_layer.ffn.dense2.weights
+                    ])
+            
+            if hasattr(model.output_layer, 'weights'):
+                weights.append(model.output_layer.weights)
+        
+        return weights
+
+    @staticmethod
+    def set_model_weights(model, weights: List[np.ndarray]) -> None:
+        """Restore weights to any model type."""
+        weight_idx = 0
+        
+        if hasattr(model, 'layers'):  # Sequential model
+            for layer in model.layers:
+                if hasattr(layer, 'weights'):
+                    layer.weights = weights[weight_idx]
+                    weight_idx += 1
+                    
+        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
+            for layer in model.encoder_layers:
+                if hasattr(layer, 'weights'):
+                    layer.weights = weights[weight_idx]
+                    weight_idx += 1
+            
+            for layer in model.decoder_layers:
+                if hasattr(layer, 'weights'):
+                    layer.weights = weights[weight_idx]
+                    weight_idx += 1
+                    
+        elif hasattr(model, 'embedding'):
+            if hasattr(model.embedding, 'weights'):
+                model.embedding.weights = weights[weight_idx]
+                weight_idx += 1
+            
+            for encoder_layer in model.encoder_layers:
+                if hasattr(encoder_layer, 'attention'):
+                    encoder_layer.attention.query_dense.weights = weights[weight_idx]
+                    encoder_layer.attention.key_dense.weights = weights[weight_idx + 1]
+                    encoder_layer.attention.value_dense.weights = weights[weight_idx + 2]
+                    encoder_layer.attention.output_dense.weights = weights[weight_idx + 3]
+                    weight_idx += 4
+                if hasattr(encoder_layer, 'ffn'):
+                    encoder_layer.ffn.dense1.weights = weights[weight_idx]
+                    encoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
+                    weight_idx += 2
+            
+            for decoder_layer in model.decoder_layers:
+                if hasattr(decoder_layer, 'self_attention'):
+                    decoder_layer.self_attention.query_dense.weights = weights[weight_idx]
+                    decoder_layer.self_attention.key_dense.weights = weights[weight_idx + 1]
+                    decoder_layer.self_attention.value_dense.weights = weights[weight_idx + 2]
+                    decoder_layer.self_attention.output_dense.weights = weights[weight_idx + 3]
+                    weight_idx += 4
+                if hasattr(decoder_layer, 'cross_attention'):
+                    decoder_layer.cross_attention.query_dense.weights = weights[weight_idx]
+                    decoder_layer.cross_attention.key_dense.weights = weights[weight_idx + 1]
+                    decoder_layer.cross_attention.value_dense.weights = weights[weight_idx + 2]
+                    decoder_layer.cross_attention.output_dense.weights = weights[weight_idx + 3]
+                    weight_idx += 4
+                if hasattr(decoder_layer, 'ffn'):
+                    decoder_layer.ffn.dense1.weights = weights[weight_idx]
+                    decoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
+                    weight_idx += 2
+            
+            # Restore output layer weights
+            if hasattr(model.output_layer, 'weights'):
+                model.output_layer.weights = weights[weight_idx]
 
 
 class Callback:
@@ -32,13 +153,14 @@ class EarlyStopping(Callback):
         self.min_delta: float = min_delta
         self.restore_best_weights: bool = restore_best_weights
         self.start_from_epoch: int = start_from_epoch
-        self.monitor: Metric | str = Metric(monitor) if monitor != 'loss' else 'loss'
+        self.monitor: Union[Metric, str] = Metric(monitor) if monitor != 'loss' else 'loss'
         self.mode: str = mode
         self.baseline: float | None = baseline
-        self.best_weights: list | None = None
+        self.best_weights: List[np.ndarray] | None = None
         self.best_metric: float | None = None
         self.patience_counter: int = 0
         self.stop_training: bool = False
+        self.weight_manager = ModelWeightManager()
 
     def on_train_begin(self, logs: dict | None = None) -> None:
         self.patience_counter = 0
@@ -67,16 +189,14 @@ class EarlyStopping(Callback):
             self.best_metric = current_metric
             self.patience_counter = 0
             if self.restore_best_weights:
-                self.best_weights = [layer.weights for layer in model.layers if hasattr(layer, 'weights')]
+                self.best_weights = self.weight_manager.get_model_weights(model)
         else:
             self.patience_counter += 1
 
         if self.patience_counter >= self.patience:
             self.stop_training = True
             if self.restore_best_weights and self.best_weights is not None:
-                for layer, best_weights in zip([layer for layer in model.layers if hasattr(layer, 'weights')],
-                                               self.best_weights):
-                    layer.weights = best_weights
+                self.weight_manager.set_model_weights(model, self.best_weights)
             print(f"\nEarly stopping triggered after epoch {epoch + 1}")
             return True
 
@@ -119,6 +239,13 @@ class LearningRateScheduler(Callback):
             model.optimizer.learning_rate = new_lr
             if self.verbose > 0:
                 print(f"Epoch {epoch + 1}: Learning rate updated from {old_lr:.5f} to {new_lr:.5f}")
+        elif hasattr(model, 'encoder_optimizer') and hasattr(model, 'decoder_optimizer'):
+            old_encoder_lr = model.encoder_optimizer.learning_rate
+            old_decoder_lr = model.decoder_optimizer.learning_rate
+            model.encoder_optimizer.learning_rate = new_lr
+            model.decoder_optimizer.learning_rate = new_lr
+            if self.verbose > 0:
+                print(f"Epoch {epoch + 1}: Encoder learning rate updated from {old_encoder_lr:.5f} to {new_lr:.5f}")
+                print(f"Epoch {epoch + 1}: Decoder learning rate updated from {old_decoder_lr:.5f} to {new_lr:.5f}")
         else:
-            raise AttributeError("Model's optimizer does not have a learning rate attribute.")
-
+            raise AttributeError("Model's optimizer(s) do not have a learning rate attribute or are not properly configured.")
