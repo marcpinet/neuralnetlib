@@ -1063,16 +1063,15 @@ class Embedding(Layer):
         if self.weights is None:
             self.initialize_weights()
 
-        self.input = input_data
         if not np.issubdtype(input_data.dtype, np.integer):
             input_data = np.round(input_data).astype(int)
 
         if np.any(input_data >= self.input_dim) or np.any(input_data < 0):
-            print(
-                f"Warning: input indices out of bounds [0, {self.input_dim - 1}]")
-        self.clipped_input = np.clip(input_data, 0, self.input_dim - 1)
+            input_data = np.clip(input_data, 0, self.input_dim - 1)
+            
+        self.clipped_input = input_data.copy()
 
-        output = self.weights[self.clipped_input]
+        output = self.weights[input_data]
         output = output + self.bias
         return output
 
@@ -1081,9 +1080,11 @@ class Embedding(Layer):
             raise ValueError(
                 f"Expected 3D output_error, got shape {output_error.shape}")
 
-        batch_size, seq_length, emb_dim = output_error.shape
+        batch_size, seq_length = output_error.shape[:2]
         grad_weights = np.zeros_like(self.weights)
-
+        
+        seq_length = min(seq_length, self.clipped_input.shape[1])
+        
         for i in range(batch_size):
             for j in range(seq_length):
                 idx = self.clipped_input[i, j]
@@ -1093,7 +1094,7 @@ class Embedding(Layer):
             0, 1), keepdims=True).reshape(1, 1, -1)
         self.d_weights = grad_weights
 
-        return np.zeros_like(self.input, dtype=np.float32)
+        return np.zeros_like(self.input_dim, dtype=np.float32)
 
     def get_config(self) -> dict:
         return {
@@ -2475,6 +2476,7 @@ class MultiHeadAttention(Layer):
         attention_axes: list[int] = None,
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
+        temperature: int = 1,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2488,6 +2490,7 @@ class MultiHeadAttention(Layer):
         self.attention_axes: list[int] = attention_axes
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
+        self.temperature = temperature
         self.random_state: int = random_state
 
         self.query_dense: Dense = None
@@ -2496,6 +2499,8 @@ class MultiHeadAttention(Layer):
         self.output_dense: Dense = None
 
         self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+        
+        self.attention_weights: np.ndarray | None = None
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -2527,26 +2532,20 @@ class MultiHeadAttention(Layer):
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
-    def _scaled_dot_product_attention(
-        self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True
-    ) -> np.ndarray:
-        self.query: np.ndarray = query
-        self.key: np.ndarray = key
-        self.value: np.ndarray = value
-
-        scores: np.ndarray = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-        scale: float = np.sqrt(self.key_dim)
-        self.scaled_scores: np.ndarray = scores / scale
+    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
+        scores = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
+        scale = np.sqrt(float(self.key_dim))
+        scaled_scores = scores / scale / self.temperature
 
         if mask is not None:
-            self.scaled_scores += (mask * -1e9)
+            scaled_scores += (mask * -1e9)
 
-        self.attention_weights: np.ndarray = self._softmax(self.scaled_scores)
+        self.attention_weights = self._softmax(scaled_scores)
+        
+        if training and self.dropout:
+            self.attention_weights = self.dropout.forward_pass(self.attention_weights)
 
-        if self.dropout and training:
-            self.attention_weights = self.dropout.forward_pass(self.attention_weights, training=True)
-
-        output: np.ndarray = np.matmul(self.attention_weights, value)
+        output = np.matmul(self.attention_weights, value)
         return output
 
     def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
@@ -2588,20 +2587,23 @@ class MultiHeadAttention(Layer):
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         batch_size: int = output_error.shape[0]
-        seq_length: int = output_error.shape[1]
+        query_seq_length: int = output_error.shape[1]
+        key_value_seq_length: int = self.reshaped_value.shape[2]
 
         d_concat_attention: np.ndarray = self.output_dense.backward_pass(output_error)
 
         d_attention_output: np.ndarray = np.reshape(d_concat_attention,
-                                                     (batch_size, seq_length, self.num_heads, self.value_dim))
+                                                (batch_size, query_seq_length, self.num_heads, self.value_dim))
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
+
+        assert self.reshaped_value.shape == (batch_size, self.num_heads, key_value_seq_length, self.value_dim), \
+            f"Shape mismatch: {self.reshaped_value.shape} vs expected {(batch_size, self.num_heads, key_value_seq_length, self.value_dim)}"
 
         d_weights: np.ndarray = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
         d_values: np.ndarray = np.matmul(np.transpose(self.attention_weights, (0, 1, 3, 2)), d_attention_output)
 
         d_scores: np.ndarray = d_weights * self.attention_weights
         d_scores -= self.attention_weights * np.sum(d_weights * self.attention_weights, axis=-1, keepdims=True)
-
         d_scores /= np.sqrt(self.key_dim)
 
         if self.dropout and isinstance(self.attention_weights, np.ndarray):
@@ -2614,9 +2616,11 @@ class MultiHeadAttention(Layer):
         d_key = np.transpose(d_key, (0, 2, 1, 3))
         d_values = np.transpose(d_values, (0, 2, 1, 3))
 
-        d_query = np.reshape(d_query, (batch_size, seq_length, -1))
-        d_key = np.reshape(d_key, (batch_size, seq_length, -1))
-        d_values = np.reshape(d_values, (batch_size, seq_length, -1))
+        final_dim = self.num_heads * self.key_dim
+        
+        d_query = np.reshape(d_query, (batch_size, query_seq_length, final_dim))
+        d_key = np.reshape(d_key, (batch_size, key_value_seq_length, final_dim))
+        d_values = np.reshape(d_values, (batch_size, key_value_seq_length, final_dim))
 
         d_query = self.query_dense.backward_pass(d_query)
         d_key = self.key_dense.backward_pass(d_key)
@@ -2642,6 +2646,7 @@ class MultiHeadAttention(Layer):
             'attention_axes': self.attention_axes,
             'kernel_initializer': self.kernel_initializer,
             'bias_initializer': self.bias_initializer,
+            'temperature': self.temperature,
             'random_state': self.random_state
         }
 
@@ -2657,7 +2662,8 @@ class MultiHeadAttention(Layer):
             attention_axes=config['attention_axes'],
             kernel_initializer=config['kernel_initializer'],
             bias_initializer=config['bias_initializer'],
-            random_state=config['random_state']
+            random_state=config['random_state'],
+            temperature=config.get('temperature', 1)
         )
 
 
@@ -2678,6 +2684,7 @@ class PositionalEncoding(Layer):
         self.random_state = random_state
         self.weights = None
         self.d_weights = None
+        self.seq_length = None
 
         if trainable:
             self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
@@ -2710,6 +2717,9 @@ class PositionalEncoding(Layer):
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_len, _ = input_data.shape
         
+        if seq_len > self.max_sequence_length:
+            raise ValueError(f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}")
+            
         encoding = self.weights[:, :seq_len, :]
         
         if batch_size > 1:
@@ -2876,6 +2886,7 @@ class TransformerEncoderLayer(Layer):
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
         random_state: int = None,
+        temperature: int = 1,
         **kwargs
     ) -> None:
         super().__init__()
@@ -2895,7 +2906,8 @@ class TransformerEncoderLayer(Layer):
             dropout_rate=attention_dropout,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state
+            random_state=random_state,
+            temperature=temperature
         )
         
         self.ffn: FeedForward = FeedForward(
@@ -2998,21 +3010,20 @@ class TransformerDecoderLayer(Layer):
         activation: str = 'relu',
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
-        random_state: int | None = None,
-        **kwargs
+        random_state: int | None = None
     ) -> None:
         super().__init__()
-        self.d_model: int = d_model
-        self.num_heads: int = num_heads
-        self.d_ff: int = d_ff
-        self.dropout_rate: float = dropout_rate
-        self.attention_dropout: float = attention_dropout
-        self.activation_name: str = activation
-        self.kernel_initializer: str = kernel_initializer
-        self.bias_initializer: str = bias_initializer
-        self.random_state: int | None = random_state
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.dropout_rate = dropout_rate
+        self.attention_dropout = attention_dropout
+        self.activation_name = activation
+        self.kernel_initializer = kernel_initializer
+        self.bias_initializer = bias_initializer
+        self.random_state = random_state
         
-        self.self_attention: MultiHeadAttention = MultiHeadAttention(
+        self.self_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=d_model // num_heads,
             dropout_rate=attention_dropout,
@@ -3021,7 +3032,7 @@ class TransformerDecoderLayer(Layer):
             random_state=random_state
         )
         
-        self.cross_attention: MultiHeadAttention = MultiHeadAttention(
+        self.cross_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=d_model // num_heads,
             dropout_rate=attention_dropout,
@@ -3030,7 +3041,7 @@ class TransformerDecoderLayer(Layer):
             random_state=random_state
         )
         
-        self.ffn: FeedForward = FeedForward(
+        self.ffn = FeedForward(
             d_ff=d_ff,
             d_model=d_model,
             dropout_rate=dropout_rate,
@@ -3040,94 +3051,82 @@ class TransformerDecoderLayer(Layer):
             random_state=random_state
         )
         
-        self.self_attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
-        self.cross_attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
-        self.ffn_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        self.dropout1 = Dropout(dropout_rate, random_state=random_state)
+        self.dropout2 = Dropout(dropout_rate, random_state=random_state)
+        self.dropout3 = Dropout(dropout_rate, random_state=random_state)
         
-        self.self_attention_norm: AddNorm = AddNorm(random_state=random_state)
-        self.cross_attention_norm: AddNorm = AddNorm(random_state=random_state)
-        self.ffn_norm: AddNorm = AddNorm(random_state=random_state)
+        self.norm1 = LayerNormalization()
+        self.norm2 = LayerNormalization()
+        self.norm3 = LayerNormalization()
         
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+        self.cache = {}
             
     def __str__(self) -> str:
         return f'TransformerDecoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
         
     def forward_pass(
         self,
-        inputs: np.ndarray,
-        memory: np.ndarray,
+        x: np.ndarray,
+        enc_output: np.ndarray,
+        training: bool = True,
         self_attention_mask: np.ndarray | None = None,
-        cross_attention_mask: np.ndarray | None = None,
-        training: bool = True
+        cross_attention_mask: np.ndarray | None = None
     ) -> np.ndarray:
-        self.x: np.ndarray = inputs
-        self.memory: np.ndarray = memory
+        self.cache['x'] = x
+        self.cache['enc_output'] = enc_output
         
         # Self attention
-        self_attn_output: np.ndarray = self.self_attention.forward_pass(
-            self.x, mask=self_attention_mask, training=training
-        )
+        attn1 = self.self_attention.forward_pass(x, mask=self_attention_mask, training=training)
         if training:
-            self_attn_output = self.self_attention_dropout.forward_pass(self_attn_output, training=True)
-        self.self_attn_output: np.ndarray = self.self_attention_norm.forward_pass((self_attn_output, self.x))
+            attn1 = self.dropout1.forward_pass(attn1, training=True)
+        out1 = self.norm1.forward_pass(x + attn1)
+        self.cache['attn1'] = attn1
+        self.cache['out1'] = out1
         
         # Cross attention
-        cross_attn_inputs: tuple[np.ndarray, np.ndarray, np.ndarray] = (
-            self.self_attn_output, self.memory, self.memory
-        )
-        cross_attn_output: np.ndarray = self.cross_attention.forward_pass(
-            cross_attn_inputs, mask=cross_attention_mask, training=training
+        attn2 = self.cross_attention.forward_pass(
+            (out1, enc_output, enc_output),
+            mask=cross_attention_mask,
+            training=training
         )
         if training:
-            cross_attn_output = self.cross_attention_dropout.forward_pass(cross_attn_output, training=True)
-        self.cross_attn_output: np.ndarray = self.cross_attention_norm.forward_pass(
-            (cross_attn_output, self.self_attn_output)
-        )
+            attn2 = self.dropout2.forward_pass(attn2, training=True)
+        out2 = self.norm2.forward_pass(out1 + attn2)
+        self.cache['attn2'] = attn2
+        self.cache['out2'] = out2
         
         # Feed forward
-        ffn_output: np.ndarray = self.ffn.forward_pass(self.cross_attn_output, training=training)
+        ffn_out = self.ffn.forward_pass(out2, training=training)
         if training:
-            ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
-        output: np.ndarray = self.ffn_norm.forward_pass((ffn_output, self.cross_attn_output))
+            ffn_out = self.dropout3.forward_pass(ffn_out, training=True)
+        out3 = self.norm3.forward_pass(out2 + ffn_out)
+        self.cache['ffn_out'] = ffn_out
         
-        return output
+        return out3
         
     def backward_pass(
         self, output_error: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        # Feed forward backward
-        ffn_norm_dx: np.ndarray
-        ffn_norm_dresidual: np.ndarray
-        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
-        ffn_dx: np.ndarray = self.ffn_dropout.backward_pass(ffn_norm_dx)
-        ffn_dx = self.ffn.backward_pass(ffn_dx)
-        ffn_dx = ffn_dx + ffn_norm_dresidual
+        d_norm3 = self.norm3.backward_pass(output_error)
+        d_ffn = self.dropout3.backward_pass(d_norm3)
+        d_ffn = self.ffn.backward_pass(d_ffn)
+        d_out2 = d_norm3 + d_ffn
         
-        # Cross attention backward
-        cross_norm_dx: np.ndarray
-        cross_norm_dresidual: np.ndarray
-        cross_norm_dx, cross_norm_dresidual = self.cross_attention_norm.backward_pass(ffn_dx)
-        cross_dx: np.ndarray = self.cross_attention_dropout.backward_pass(cross_norm_dx)
-        cross_dx_query: np.ndarray
-        cross_dx_key: np.ndarray
-        cross_dx_value: np.ndarray
-        cross_dx_query, cross_dx_key, cross_dx_value = self.cross_attention.backward_pass(cross_dx)
-        cross_dx = cross_dx_query + cross_norm_dresidual
+        d_norm2 = self.norm2.backward_pass(d_out2)
+        d_attn2 = self.dropout2.backward_pass(d_norm2)
+        d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
+        d_out1 = d_norm2 + d_attn2_query
         
-        # Self attention backward
-        self_norm_dx: np.ndarray
-        self_norm_dresidual: np.ndarray
-        self_norm_dx, self_norm_dresidual = self.self_attention_norm.backward_pass(cross_dx)
-        self_dx: np.ndarray = self.self_attention_dropout.backward_pass(self_norm_dx)
-        self_dx = self.self_attention.backward_pass(self_dx)
-        dx: np.ndarray = self_dx + self_norm_dresidual
+        d_norm1 = self.norm1.backward_pass(d_out1)
+        d_attn1 = self.dropout1.backward_pass(d_norm1)
+        d_x = self.self_attention.backward_pass(d_attn1)
+        d_x = d_norm1 + d_x
         
-        # Memory gradients for cross attention
-        d_memory: np.ndarray = cross_dx_key + cross_dx_value
+        d_enc = d_attn2_key + d_attn2_value
         
-        return dx, d_memory
+        self.cache.clear()
+        
+        return d_x, d_enc
         
     def get_config(self) -> dict:
         return {

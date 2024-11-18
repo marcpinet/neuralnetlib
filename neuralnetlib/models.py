@@ -11,10 +11,10 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import *
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, SparseCategoricalCrossentropy, BinaryCrossentropy
+from neuralnetlib.losses import *
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
-from neuralnetlib.preprocessing import PCA
+from neuralnetlib.preprocessing import PCA, pad_sequences
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
 
 
@@ -1327,10 +1327,12 @@ class Transformer(BaseModel):
                  padding_size: int = 32,
                  random_state: int | None = None) -> None:
                  
-        self.PAD_IDX: int = vocab_size
-        self.SOS_IDX: int = vocab_size + 1
-        self.EOS_IDX: int = vocab_size + 2
-        vocab_size = vocab_size + 3
+        original_vocab_size = vocab_size
+        self.PAD_IDX: int = 0
+        self.UNK_IDX: int = original_vocab_size + 1
+        self.SOS_IDX: int = original_vocab_size + 2
+        self.EOS_IDX: int = original_vocab_size + 3
+        vocab_size = original_vocab_size + 4  # PAD, UNK, SOS, EOS
         super().__init__(temperature, gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
@@ -1343,7 +1345,7 @@ class Transformer(BaseModel):
         self.dropout_rate: float = dropout_rate
         self.max_sequence_length: int = max_sequence_length
         
-        self.embedding = Embedding(vocab_size, d_model, random_state=random_state)
+        self.embedding = Embedding(vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
         self.positional_encoding = PositionalEncoding(max_sequence_length, d_model)
         
         self.encoder_dropout = Dropout(dropout_rate, random_state=random_state)
@@ -1355,7 +1357,8 @@ class Transformer(BaseModel):
                 d_ff=d_ff,
                 dropout_rate=dropout_rate,
                 attention_dropout=dropout_rate,
-                random_state=random_state
+                random_state=random_state,
+                temperature=self.temperature
             )
             self.encoder_layers.append(encoder_layer)
             
@@ -1372,7 +1375,7 @@ class Transformer(BaseModel):
             )
             self.decoder_layers.append(decoder_layer)
             
-        self.output_layer = Dense(vocab_size)
+        self.output_layer = Dense(vocab_size, random_state=random_state)
         
         self.optimizer = None
         self.loss_function = None
@@ -1397,12 +1400,12 @@ class Transformer(BaseModel):
 
     def encode(self, inp: np.ndarray, training: bool = True, mask: np.ndarray | None = None) -> np.ndarray:
         x = self.embedding.forward_pass(inp)
-        x = x * np.sqrt(self.d_model)  # Scale embeddings
+        x = x * np.sqrt(self.d_model)
         x = self.positional_encoding.forward_pass(x)
         
         x = self.encoder_dropout.forward_pass(x, training=training)
         
-        for encoder_layer in self.encoder_layers:
+        for _, encoder_layer in enumerate(self.encoder_layers):
             x = encoder_layer.forward_pass(x, mask=mask, training=training)
             
         return x
@@ -1413,19 +1416,25 @@ class Transformer(BaseModel):
                training: bool = True, 
                look_ahead_mask: np.ndarray | None = None, 
                padding_mask: np.ndarray | None = None) -> np.ndarray:
+        
         x = self.embedding.forward_pass(tar)
+        
         x = x * np.sqrt(self.d_model)
         x = self.positional_encoding.forward_pass(x)
         
         x = self.decoder_dropout.forward_pass(x, training=training)
         
-        for decoder_layer in self.decoder_layers:
-            x = decoder_layer.forward_pass(x, enc_output,
-                                         self_attention_mask=look_ahead_mask,
-                                         cross_attention_mask=padding_mask,
-                                         training=training)
+        for i, decoder_layer in enumerate(self.decoder_layers):
+            x = decoder_layer.forward_pass(
+                x, enc_output,
+                self_attention_mask=look_ahead_mask,
+                cross_attention_mask=padding_mask,
+                training=training
+            )
             
+        
         output = self.output_layer.forward_pass(x)
+        
         return output
 
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray], training: bool = True) -> np.ndarray:
@@ -1445,11 +1454,8 @@ class Transformer(BaseModel):
         d_enc_output = None
         for decoder_layer in reversed(self.decoder_layers):
             dx, d_enc = decoder_layer.backward_pass(dx)
-            if d_enc_output is None:
-                d_enc_output = d_enc
-            else:
-                d_enc_output += d_enc
-                
+            d_enc_output = d_enc if d_enc_output is None else d_enc_output + d_enc
+                    
         dx = self.decoder_dropout.backward_pass(dx)
         dx = dx * np.sqrt(self.d_model)
         dx = self.embedding.backward_pass(dx)
@@ -1457,10 +1463,32 @@ class Transformer(BaseModel):
         dx_enc = d_enc_output
         for encoder_layer in reversed(self.encoder_layers):
             dx_enc = encoder_layer.backward_pass(dx_enc)
-            
+        
         dx_enc = self.encoder_dropout.backward_pass(dx_enc)
         dx_enc = dx_enc * np.sqrt(self.d_model)
+        
         dx_enc = self.embedding.backward_pass(dx_enc)
+
+    def prepare_data(self, x_train, y_train):
+        max_seq_len = self.max_sequence_length
+        
+        x_train_with_tokens = [
+            [self.SOS_IDX] + seq + [self.EOS_IDX] for seq in x_train
+        ]
+        x_train_padded = pad_sequences(x_train_with_tokens, 
+                                    max_length=max_seq_len,
+                                    padding='post', 
+                                    pad_value=self.PAD_IDX)
+        
+        y_train_with_tokens = [
+            [self.SOS_IDX] + seq + [self.EOS_IDX] for seq in y_train
+        ]
+        y_train_padded = pad_sequences(y_train_with_tokens, 
+                                    max_length=max_seq_len,
+                                    padding='post', 
+                                    pad_value=self.PAD_IDX)
+        
+        return x_train_padded, y_train_padded
 
     def compile(self, 
                 loss_function: LossFunction | str, 
@@ -1468,17 +1496,204 @@ class Transformer(BaseModel):
                 verbose: bool = False) -> None:
         self.loss_function = loss_function if isinstance(loss_function, LossFunction) else LossFunction.from_name(loss_function)
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
+        
+        self.loss_function.PAD_IDX = self.PAD_IDX
+        self.loss_function.UNK_IDX = self.UNK_IDX
+        self.loss_function.SOS_IDX = self.SOS_IDX
+        self.loss_function.EOS_IDX = self.EOS_IDX
+        
         if verbose:
             print(str(self))
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
+        
         decoder_input = y_batch[:, :-1]
         targets = y_batch[:, 1:]
         
+        self.enc_seq_length = x_batch.shape[1]  
+        self.dec_seq_length = decoder_input.shape[1]
+        
         self.predictions = self.forward_pass((x_batch, decoder_input), training=True)
+        
         loss = self.loss_function(targets, self.predictions)
+        
         error = self.loss_function.derivative(targets, self.predictions)
+        
         self.backward_pass(error)
+        
+        layer_index = 0
+        
+        # Update embedding layer
+        self.optimizer.update(
+            layer_index,
+            self.embedding.weights,
+            self.embedding.d_weights,
+            self.embedding.bias,
+            self.embedding.d_bias
+        )
+        layer_index += 1
+        
+        # Update encoder layers
+        for encoder_layer in self.encoder_layers:
+            # Update self attention
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.attention.query_dense.weights,
+                encoder_layer.attention.query_dense.d_weights,
+                encoder_layer.attention.query_dense.bias,
+                encoder_layer.attention.query_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.attention.key_dense.weights,
+                encoder_layer.attention.key_dense.d_weights,
+                encoder_layer.attention.key_dense.bias,
+                encoder_layer.attention.key_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.attention.value_dense.weights,
+                encoder_layer.attention.value_dense.d_weights,
+                encoder_layer.attention.value_dense.bias,
+                encoder_layer.attention.value_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.attention.output_dense.weights,
+                encoder_layer.attention.output_dense.d_weights,
+                encoder_layer.attention.output_dense.bias,
+                encoder_layer.attention.output_dense.d_bias
+            )
+            layer_index += 1
+            
+            # Update feed forward
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.ffn.dense1.weights,
+                encoder_layer.ffn.dense1.d_weights,
+                encoder_layer.ffn.dense1.bias,
+                encoder_layer.ffn.dense1.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                encoder_layer.ffn.dense2.weights,
+                encoder_layer.ffn.dense2.d_weights,
+                encoder_layer.ffn.dense2.bias,
+                encoder_layer.ffn.dense2.d_bias
+            )
+            layer_index += 1
+        
+        # Update decoder layers
+        for decoder_layer in self.decoder_layers:
+            # Update self attention
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.self_attention.query_dense.weights,
+                decoder_layer.self_attention.query_dense.d_weights,
+                decoder_layer.self_attention.query_dense.bias,
+                decoder_layer.self_attention.query_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.self_attention.key_dense.weights,
+                decoder_layer.self_attention.key_dense.d_weights,
+                decoder_layer.self_attention.key_dense.bias,
+                decoder_layer.self_attention.key_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.self_attention.value_dense.weights,
+                decoder_layer.self_attention.value_dense.d_weights,
+                decoder_layer.self_attention.value_dense.bias,
+                decoder_layer.self_attention.value_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.self_attention.output_dense.weights,
+                decoder_layer.self_attention.output_dense.d_weights,
+                decoder_layer.self_attention.output_dense.bias,
+                decoder_layer.self_attention.output_dense.d_bias
+            )
+            layer_index += 1
+            
+            # Update cross attention
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.cross_attention.query_dense.weights,
+                decoder_layer.cross_attention.query_dense.d_weights,
+                decoder_layer.cross_attention.query_dense.bias,
+                decoder_layer.cross_attention.query_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.cross_attention.key_dense.weights,
+                decoder_layer.cross_attention.key_dense.d_weights,
+                decoder_layer.cross_attention.key_dense.bias,
+                decoder_layer.cross_attention.key_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.cross_attention.value_dense.weights,
+                decoder_layer.cross_attention.value_dense.d_weights,
+                decoder_layer.cross_attention.value_dense.bias,
+                decoder_layer.cross_attention.value_dense.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.cross_attention.output_dense.weights,
+                decoder_layer.cross_attention.output_dense.d_weights,
+                decoder_layer.cross_attention.output_dense.bias,
+                decoder_layer.cross_attention.output_dense.d_bias
+            )
+            layer_index += 1
+            
+            # Update feed forward
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.ffn.dense1.weights,
+                decoder_layer.ffn.dense1.d_weights,
+                decoder_layer.ffn.dense1.bias,
+                decoder_layer.ffn.dense1.d_bias
+            )
+            layer_index += 1
+            
+            self.optimizer.update(
+                layer_index,
+                decoder_layer.ffn.dense2.weights,
+                decoder_layer.ffn.dense2.d_weights,
+                decoder_layer.ffn.dense2.bias,
+                decoder_layer.ffn.dense2.d_bias
+            )
+            layer_index += 1
+        
+        # Update output layer
+        self.optimizer.update(
+            layer_index,
+            self.output_layer.weights,
+            self.output_layer.d_weights,
+            self.output_layer.bias,
+            self.output_layer.d_bias
+        )
         
         return loss
 
@@ -1612,14 +1827,12 @@ class Transformer(BaseModel):
 
     def predict(self, inp: np.ndarray, max_length: int = 50, apply_temperature: bool = True) -> np.ndarray:
         batch_size = inp.shape[0]
-        output = np.zeros((batch_size, 1), dtype=np.int32)
-        output.fill(self.SOS_IDX)
+        output = np.full((batch_size, 1), self.SOS_IDX, dtype=np.int32)
         
         enc_output = self.encode(inp, training=False)
         
         for _ in range(max_length - 1):
             dec_padding_mask = self.create_padding_mask(inp)
-            
             look_ahead_mask = self.create_look_ahead_mask(output.shape[1])
             dec_target_padding_mask = self.create_padding_mask(output)
             combined_mask = np.maximum(dec_target_padding_mask, look_ahead_mask)
@@ -1634,15 +1847,18 @@ class Transformer(BaseModel):
             
             predictions = predictions[:, -1, :]
             
-            if apply_temperature and not np.isclose(self.temperature, 1.0):
-                predictions = np.clip(predictions, 1e-7, 1.0)
-                log_probs = np.log(predictions)
-                scaled_log_probs = log_probs / self.temperature
-                predictions = np.exp(scaled_log_probs)
-                predictions /= np.sum(predictions, axis=-1, keepdims=True)
+            predictions[:, self.PAD_IDX] = -np.inf
+            predictions[:, self.UNK_IDX] = -np.inf
+            predictions[:, self.SOS_IDX] = -np.inf
+            
+            predictions = np.exp(predictions - np.max(predictions, axis=-1, keepdims=True))
+            predictions = predictions / np.sum(predictions, axis=-1, keepdims=True)
+            
+            if apply_temperature:
+                predictions = np.power(predictions, 1.0 / self.temperature)
+                predictions = predictions / np.sum(predictions, axis=-1, keepdims=True)
             
             next_token = np.argmax(predictions, axis=-1, keepdims=True)
-            
             output = np.concatenate([output, next_token], axis=1)
             
             if np.all(next_token == self.EOS_IDX):

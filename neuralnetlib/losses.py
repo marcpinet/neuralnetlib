@@ -170,30 +170,53 @@ class KullbackLeiblerDivergence(LossFunction):
 class SequenceCrossEntropy(LossFunction):
     def __init__(self):
         super().__init__()
+        self.epsilon = 1e-10
+        self.PAD_IDX = 0
+        self.UNK_IDX = None
+        self.SOS_IDX = None
+        self.EOS_IDX = None
+        
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+        
+        mask = (y_true != self.PAD_IDX).astype(np.float32)
+        
+        n_classes = y_pred.shape[-1]
+        y_true_smooth = np.zeros_like(y_pred)
+        y_true_smooth += 0.1 / (n_classes - 1)  # Label smoothing
+        
+        for i in range(y_true.shape[0]):
+            for j in range(y_true.shape[1]):
+                token = y_true[i, j]
+                if token not in [self.PAD_IDX, self.UNK_IDX, 
+                               self.SOS_IDX, self.EOS_IDX]:
+                    y_true_smooth[i, j, token] = 0.9
+                else:
+                    y_true_smooth[i, j, token] = 1.0
+                    
+        loss = -np.sum(y_true_smooth * np.log(y_pred) * mask[..., np.newaxis])
+        total_tokens = np.sum(mask)
+        
+        return loss / (total_tokens + self.epsilon)
     
-    def __call__(self, y_true, y_pred):
-        batch_size, seq_len = y_true.shape
-        y_pred = np.clip(y_pred, 1e-10, 1.0)
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        y_true_one_hot = np.zeros_like(y_pred)
-        for i in range(batch_size):
-            for j in range(seq_len):
-                if y_true[i,j] < y_pred.shape[-1]:
-                    y_true_one_hot[i,j,y_true[i,j]] = 1
+        mask = (y_true != 0).astype(np.float32)
+        n_classes = y_pred.shape[-1]
+        y_true_smooth = np.zeros_like(y_pred)
+        y_true_smooth += 0.1 / (n_classes - 1)
+        for i in range(y_true.shape[0]):
+            for j in range(y_true.shape[1]):
+                if y_true[i, j] > 0:
+                    y_true_smooth[i, j, y_true[i, j]] = 0.9
         
-        loss = -np.sum(y_true_one_hot * np.log(y_pred))
-        loss = loss / (batch_size * seq_len)
-        return loss
-    
-    def derivative(self, y_true, y_pred):
-        batch_size, seq_len = y_true.shape
-        y_pred = np.clip(y_pred, 1e-10, 1.0)
+        grad = -(y_true_smooth / y_pred)
+        grad *= mask[..., np.newaxis]
         
-        grad = np.zeros_like(y_pred)
-        for i in range(batch_size):
-            for j in range(seq_len):
-                if y_true[i,j] < y_pred.shape[-1]:
-                    grad[i,j,y_true[i,j]] = -1.0 / (y_pred[i,j,y_true[i,j]])
+        total_tokens = np.sum(mask)
+        grad /= (total_tokens + self.epsilon)
         
-        grad = grad / (batch_size * seq_len)
+        grad = np.clip(grad, -1.0, 1.0)
+        
         return grad

@@ -411,6 +411,8 @@ class Tokenizer:
             else:
                 seq = text.split(self.split) if isinstance(text, str) else text
             for w in seq:
+                if w in self.filters:
+                    continue
                 if self.lower:
                     w = w.lower()
                 if w in self.filters:
