@@ -15,7 +15,7 @@ from neuralnetlib.losses import *
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, History
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, History
 
 
 class BaseModel(ABC):
@@ -333,9 +333,9 @@ class Sequential(BaseModel):
                         if metrics is not None:
                             for metric in metrics:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
-                                metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                                metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                     message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                     message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error / (j / batch_size + 1))} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
             else:
@@ -349,9 +349,9 @@ class Sequential(BaseModel):
                         for metric in metrics:
                             metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                             history[metric.name].append(metric_value)
-                            metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                            metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                     progress_bar(1, 1,
-                                 message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                 message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error)} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             history['loss'].append(error)
 
@@ -376,7 +376,7 @@ class Sequential(BaseModel):
                         val_metrics.append(val_metric)
                     if verbose:
                         val_metrics_str = ' - '.join(
-                            f'val_{metric.name}: {val_metric:.4f}'
+                            f'val_{metric.name}: {format_number(val_metric)}'
                             for metric, val_metric in zip(metrics, val_metrics)
                         )
                         print(f' - {val_metrics_str}', end='')
@@ -1180,9 +1180,9 @@ class Autoencoder(BaseModel):
                         if metrics is not None:
                             for metric in metrics:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(inputs_list))
-                                metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                                metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                         progress_bar(j / batch_size + 1, num_batches,
-                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error / (j / batch_size + 1))} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 error /= num_batches
                 
@@ -1197,9 +1197,9 @@ class Autoencoder(BaseModel):
                         for metric in metrics:
                             metric_value = metric(np.vstack(predictions_list), np.vstack(inputs_list))
                             history[metric.name].append(metric_value)
-                            metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                            metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                     progress_bar(1, 1,
-                                message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error)} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
             history['loss'].append(error)
 
@@ -1223,7 +1223,7 @@ class Autoencoder(BaseModel):
                         val_metrics.append(val_metric)
                     if verbose:
                         val_metrics_str = ' - '.join(
-                            f'val_{metric.name}: {val_metric:.4f}'
+                            f'val_{metric.name}: {format_number(val_metric)}'
                             for metric, val_metric in zip(metrics, val_metrics)
                         )
                         print(f' - {val_metrics_str}', end='')
@@ -1729,9 +1729,9 @@ class Transformer(BaseModel):
                             if metrics is not None:
                                 for metric in metrics:
                                     metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
-                                    metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                                    metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                             progress_bar(j / batch_size + 1, num_batches,
-                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {error / (j / batch_size + 1):.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                    message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error / (j / batch_size + 1))} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                     error /= num_batches
                 else:
@@ -1745,9 +1745,9 @@ class Transformer(BaseModel):
                             for metric in metrics:
                                 metric_value = metric(np.vstack(predictions_list), np.vstack(y_true_list))
                                 history[metric.name].append(metric_value)
-                                metrics_str += f'{metric.name}: {metric_value:.4f} - '
+                                metrics_str += f'{metric.name}: {format_number(metric_value)} - '
                         progress_bar(1, 1,
-                                message=f'Epoch {epoch + 1}/{epochs} - loss: {error:.4f} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
+                                message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error)} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s')
 
                 history['loss'].append(error)
 
@@ -1772,7 +1772,7 @@ class Transformer(BaseModel):
                             val_metrics.append(val_metric)
                         if verbose:
                             val_metrics_str = ' - '.join(
-                                f'val_{metric.name}: {val_metric:.4f}'
+                                f'val_{metric.name}: {format_number(val_metric)}'
                                 for metric, val_metric in zip(metrics, val_metrics)
                             )
                             print(f' - {val_metrics_str}', end='')

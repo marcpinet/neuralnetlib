@@ -181,6 +181,7 @@ And test your changes on the examples.
 - [ ] Add more callbacks
 - [ ] Add more layers
 - [ ] Add more preprocessing tools
+- [ ] Add BPE (Byte Pair Encoding) tokenizer
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 

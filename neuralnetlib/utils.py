@@ -82,6 +82,18 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, rando
     return x_train, x_test, y_train, y_test
 
 
+def format_number(number):
+    if number == 0:  # Handle the case for 0 directly
+        return "0.0"
+    
+    if abs(number) < 1e-3:
+        exponent = int(f"{number:.1e}".split("e")[1])
+        significant_digits = max(0, abs(exponent)) + 1
+        return f"{number:.{significant_digits}e}"
+    else:
+        return f"{number:.4f}"
+
+
 def is_interactive():
     try:
         import __main__ as main
