@@ -1080,21 +1080,22 @@ class Embedding(Layer):
             raise ValueError(
                 f"Expected 3D output_error, got shape {output_error.shape}")
 
-        batch_size, seq_length = output_error.shape[:2]
+        batch_size, seq_length, _ = output_error.shape
         grad_weights = np.zeros_like(self.weights)
         
         seq_length = min(seq_length, self.clipped_input.shape[1])
         
-        for i in range(batch_size):
-            for j in range(seq_length):
-                idx = self.clipped_input[i, j]
-                grad_weights[idx] += output_error[i, j]
-
-        self.d_bias = np.sum(output_error, axis=(
-            0, 1), keepdims=True).reshape(1, 1, -1)
+        input_indices = self.clipped_input[:batch_size, :seq_length]
+        
+        flattened_output = output_error[:batch_size, :seq_length]
+        
+        for b in range(batch_size):
+            np.add.at(grad_weights, input_indices[b], flattened_output[b])
+        
+        self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
         self.d_weights = grad_weights
-
-        return np.zeros_like(self.input_dim, dtype=np.float32)
+        
+        return np.zeros((batch_size, seq_length))
 
     def get_config(self) -> dict:
         return {
@@ -2475,7 +2476,6 @@ class MultiHeadAttention(Layer):
         attention_axes: list[int] = None,
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
-        temperature: int = 1,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2489,7 +2489,6 @@ class MultiHeadAttention(Layer):
         self.attention_axes: list[int] = attention_axes
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
-        self.temperature = temperature
         self.random_state: int = random_state
 
         self.query_dense: Dense = None
@@ -2551,11 +2550,7 @@ class MultiHeadAttention(Layer):
             scores = np.where(mask, -1e9, scores)
 
         scale = np.sqrt(float(self.key_dim))
-        
-        if not training and hasattr(self, 'temperature'):
-            scaled_scores = scores / (scale * self.temperature)
-        else:
-            scaled_scores = scores / scale
+        scaled_scores = scores / scale
 
         scores_max = np.max(scaled_scores, axis=-1, keepdims=True)
         exp_scores = np.exp(scaled_scores - scores_max)
@@ -2680,7 +2675,6 @@ class MultiHeadAttention(Layer):
             'attention_axes': self.attention_axes,
             'kernel_initializer': self.kernel_initializer,
             'bias_initializer': self.bias_initializer,
-            'temperature': self.temperature,
             'random_state': self.random_state
         }
 
@@ -2697,7 +2691,6 @@ class MultiHeadAttention(Layer):
             kernel_initializer=config['kernel_initializer'],
             bias_initializer=config['bias_initializer'],
             random_state=config['random_state'],
-            temperature=config.get('temperature', 1)
         )
 
 
@@ -2742,13 +2735,16 @@ class PositionalEncoding(Layer):
         self.d_weights = np.zeros_like(self.weights)
     
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
-        if self.trainable and self.weights is None:
-            limit: float = np.sqrt(6 / (self.seq_length + self.embedding_dim))
-            self.weights = self.rng.uniform(-limit, limit, (1, self.seq_length, self.embedding_dim))
-            self.d_weights = np.zeros_like(self.weights)
+        limit: float = np.sqrt(6 / (self.seq_length + self.embedding_dim))
+        self.weights = self.rng.uniform(-limit, limit, (1, self.seq_length, self.embedding_dim))
+        self.d_weights = np.zeros_like(self.weights)
     
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_len, _ = input_data.shape
+        
+        if self.trainable and self.weights is None:
+            self.seq_length = seq_len
+            self.initialize_weights(input_data.shape)
         
         if seq_len > self.max_sequence_length:
             raise ValueError(f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}")
@@ -2916,7 +2912,6 @@ class TransformerEncoderLayer(Layer):
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
         random_state: int = None,
-        temperature: int = 1,
         **kwargs
     ) -> None:
         super().__init__()
@@ -2937,7 +2932,6 @@ class TransformerEncoderLayer(Layer):
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
             random_state=random_state,
-            temperature=temperature
         )
         
         self.ffn: FeedForward = FeedForward(
@@ -3039,7 +3033,7 @@ class TransformerDecoderLayer(Layer):
         activation: str = 'relu',
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
-        random_state: int | None = None
+        random_state: int | None = None,
     ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -3058,7 +3052,7 @@ class TransformerDecoderLayer(Layer):
             dropout_rate=attention_dropout,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state
+            random_state=random_state,
         )
         
         self.cross_attention = MultiHeadAttention(
@@ -3067,7 +3061,7 @@ class TransformerDecoderLayer(Layer):
             dropout_rate=attention_dropout,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state
+            random_state=random_state,
         )
         
         self.ffn = FeedForward(

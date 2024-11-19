@@ -19,13 +19,11 @@ from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display
 
 
 class BaseModel(ABC):
-    def __init__(self, temperature: float = 1.0,
-                 gradient_clip_threshold: float = 5.0,
+    def __init__(self, gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = False,
                  padding_size: int = 32,
                  random_state: int | None = None):
         
-        self.temperature = temperature
         self.gradient_clip_threshold = gradient_clip_threshold
         self.enable_padding = enable_padding
         self.padding_size = padding_size
@@ -48,7 +46,7 @@ class BaseModel(ABC):
         pass
 
     @abstractmethod
-    def predict(self, X: np.ndarray, apply_temperature: bool = True) -> np.ndarray:
+    def predict(self, X: np.ndarray, temperature: float = 1.0) -> np.ndarray:
         pass
 
     @abstractmethod
@@ -64,19 +62,12 @@ class BaseModel(ABC):
     def load(cls, filename: str) -> 'BaseModel':
         pass
 
-    def set_temperature(self, temperature: float):
-        if not 0.1 <= temperature <= 2.0:
-            raise ValueError("Temperature must be between 0.1 and 2.0")
-        self.temperature = temperature
-
-
 class Sequential(BaseModel):
-    def __init__(self, temperature: float = 1.0,
-                 gradient_clip_threshold: float = 5.0,
+    def __init__(self, gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = False,
                  padding_size: int = 32,
                  random_state: int | None = None):
-        super().__init__(temperature, gradient_clip_threshold, 
+        super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         self.layers = []
         self.loss_function = None
@@ -85,7 +76,7 @@ class Sequential(BaseModel):
         self.predictions = None
 
     def __str__(self) -> str:
-        model_summary = f'Sequential(temperature={self.temperature}, gradient_clip_threshold={self.gradient_clip_threshold}, enable_padding={self.enable_padding}, padding_size={self.padding_size}, random_state={self.random_state})\n'
+        model_summary = f'Sequential(gradient_clip_threshold={self.gradient_clip_threshold}, enable_padding={self.enable_padding}, padding_size={self.padding_size}, random_state={self.random_state})\n'
         model_summary += '-------------------------------------------------\n'
         for i, layer in enumerate(self.layers):
             model_summary += f'Layer {i + 1}: {str(layer)}\n'
@@ -461,15 +452,15 @@ class Sequential(BaseModel):
 
         return avg_loss, all_predictions
 
-    def predict(self, X: np.ndarray, apply_temperature: bool = True) -> np.ndarray:
+    def predict(self, X: np.ndarray, temperature: float = 1.0) -> np.ndarray:
         X = np.array(X)
         predictions = self.forward_pass(X, training=False)
 
-        if apply_temperature and not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
+        if not np.isclose(temperature, 1.0, rtol=1e-09, atol=1e-09):
             if isinstance(predictions, np.ndarray):
                 predictions = np.clip(predictions, 1e-7, 1.0)
                 log_preds = np.log(predictions)
-                scaled_log_preds = log_preds / self.temperature
+                scaled_log_preds = log_preds / temperature
                 predictions = np.exp(scaled_log_preds)
                 predictions /= np.sum(predictions, axis=-1, keepdims=True)
 
@@ -479,24 +470,23 @@ class Sequential(BaseModel):
                           sequence_start: np.ndarray,
                           max_length: int,
                           stop_token: int | None = None,
-                          min_length: int | None = None) -> np.ndarray:
+                          min_length: int | None = None,
+                          temperature: float = 1.0) -> np.ndarray:
 
         current_sequence = sequence_start.copy()
-        batch_size = current_sequence.shape[0]
 
         for _ in range(max_length - sequence_start.shape[1]):
-            predictions = self.predict(current_sequence,
-                                       apply_temperature=False)  # cuz we already apply temperature in this method
+            predictions = self.predict(current_sequence)  # cuz we already apply temperature in this method
 
             if predictions.ndim == 3:
                 next_token_probs = predictions[:, -1, :]
             else:
                 next_token_probs = predictions
 
-            if not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
+            if not np.isclose(temperature, 1.0, rtol=1e-09, atol=1e-09):
                 next_token_probs = np.clip(next_token_probs, 1e-7, 1.0)
                 log_probs = np.log(next_token_probs)
-                scaled_log_probs = log_probs / self.temperature
+                scaled_log_probs = log_probs / temperature
                 next_token_probs = np.exp(scaled_log_probs)
                 next_token_probs /= np.sum(next_token_probs, axis=-1, keepdims=True)
 
@@ -529,16 +519,10 @@ class Sequential(BaseModel):
 
         return current_sequence
 
-    def set_temperature(self, temperature: float):
-        if not 0.1 <= temperature <= 2.0:
-            raise ValueError("Temperature must be between 0.1 and 2.0")
-        self.temperature = temperature
-
     def save(self, filename: str):
         model_state = {
             'type': 'Sequential',
             'layers': [],
-            'temperature': self.temperature,
             'gradient_clip_threshold': self.gradient_clip_threshold,
             'enable_padding': self.enable_padding,
             'padding_size': self.padding_size,
@@ -637,7 +621,6 @@ class Autoencoder(BaseModel):
     def __init__(self, 
                  encoder_layers: list = None,
                  decoder_layers: list = None,
-                 temperature: float = 1.0,
                  gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = False,
                  padding_size: int = 32,
@@ -646,7 +629,7 @@ class Autoencoder(BaseModel):
                  l1_reg: float = 0.0,
                  l2_reg: float = 0.0,
                  variational: bool = False):
-        super().__init__(temperature, gradient_clip_threshold, 
+        super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
         self.encoder_layers = encoder_layers if encoder_layers is not None else []
@@ -982,7 +965,7 @@ class Autoencoder(BaseModel):
         self.backward_pass(error)
         return total_loss
     
-    def predict(self, X: np.ndarray, output_latent: bool = False, apply_temperature: bool = True) -> np.ndarray:
+    def predict(self, X: np.ndarray, output_latent: bool = False, temperature: float = 1.0) -> np.ndarray:
         X = np.array(X)
         encoded = X
         for layer in self.encoder_layers:
@@ -995,11 +978,11 @@ class Autoencoder(BaseModel):
         for layer in self.decoder_layers:
             decoded = layer.forward_pass(decoded)
             
-        if apply_temperature and not np.isclose(self.temperature, 1.0, rtol=1e-09, atol=1e-09):
+        if not np.isclose(temperature, 1.0, rtol=1e-09, atol=1e-09):
             if isinstance(decoded, np.ndarray):
                 decoded = np.clip(decoded, 1e-7, 1.0)
                 log_preds = np.log(decoded)
-                scaled_log_preds = log_preds / self.temperature
+                scaled_log_preds = log_preds / temperature
                 decoded = np.exp(scaled_log_preds)
                 decoded /= np.sum(decoded, axis=-1, keepdims=True)
                 
@@ -1066,7 +1049,6 @@ class Autoencoder(BaseModel):
             'type': 'Autoencoder',
             'encoder_layers': [],
             'decoder_layers': [],
-            'temperature': self.temperature,
             'gradient_clip_threshold': self.gradient_clip_threshold,
             'enable_padding': self.enable_padding,
             'padding_size': self.padding_size,
@@ -1094,7 +1076,7 @@ class Autoencoder(BaseModel):
             json.dump(model_state, f, indent=4)
 
     def __str__(self) -> str:
-        model_summary = f'Autoencoder(temperature={self.temperature}, gradient_clip_threshold={self.gradient_clip_threshold}, ' \
+        model_summary = f'Autoencoder(gradient_clip_threshold={self.gradient_clip_threshold}, ' \
                        f'enable_padding={self.enable_padding}, padding_size={self.padding_size}, random_state={self.random_state}, ' \
                        f'skip_connections={self.skip_connections}, l1_reg={self.l1_reg}, l2_reg={self.l2_reg})\n'
         model_summary += '-------------------------------------------------\n'
@@ -1311,7 +1293,6 @@ class Transformer(BaseModel):
                  d_ff: int = 2048,
                  dropout_rate: float = 0.1,
                  max_sequence_length: int = 512,
-                 temperature: float = 1.0,
                  gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = True,
                  padding_size: int = 32,
@@ -1323,7 +1304,7 @@ class Transformer(BaseModel):
         self.SOS_IDX: int = original_vocab_size + 2
         self.EOS_IDX: int = original_vocab_size + 3
         vocab_size = original_vocab_size + 4  # PAD, UNK, SOS, EOS
-        super().__init__(temperature, gradient_clip_threshold, 
+        super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
         self.vocab_size: int = vocab_size
@@ -1348,7 +1329,6 @@ class Transformer(BaseModel):
                 dropout_rate=dropout_rate,
                 attention_dropout=dropout_rate,
                 random_state=random_state,
-                temperature=self.temperature
             )
             self.encoder_layers.append(encoder_layer)
             
@@ -1456,6 +1436,7 @@ class Transformer(BaseModel):
         dx = self.decoder_dropout.backward_pass(dx)
         dx = dx * np.sqrt(self.d_model)
         dx = self.embedding.backward_pass(dx)
+        dx = self.positional_encoding.backward_pass(dx)
         
         dx_enc = d_enc_output
         for encoder_layer in reversed(self.encoder_layers):
@@ -1821,7 +1802,7 @@ class Transformer(BaseModel):
 
             return history
         
-    def _get_next_token_predictions(self, sequence: np.ndarray, enc_output: np.ndarray) -> np.ndarray:
+    def _get_next_token_predictions(self, sequence: np.ndarray, enc_output: np.ndarray, temperature: float = 1.0) -> np.ndarray:
         if len(sequence.shape) == 1:
             sequence = sequence[np.newaxis, :]
             
@@ -1849,7 +1830,7 @@ class Transformer(BaseModel):
         for token in [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX]:
             predictions[:, token] = -np.inf
         
-        predictions = predictions / self.temperature
+        predictions = predictions / temperature
         
         max_logits = np.max(predictions, axis=-1, keepdims=True)
         stable_logits = predictions - max_logits
@@ -1858,78 +1839,96 @@ class Transformer(BaseModel):
         
         return predictions
         
-    def predict(self, inp, max_length=50, beam_size=5, alpha=0.6, min_length=5):
+    def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
         def get_ngrams(sequence, n):
-            seq_list = sequence.flatten().tolist()
-            return set(tuple(seq_list[i:i+n]) for i in range(len(seq_list)-n+1))
+            batch_ngrams = []
+            for seq in sequence:
+                seq_list = seq.flatten().tolist()
+                ngrams = set(tuple(seq_list[i:i+n]) for i in range(len(seq_list)-n+1))
+                batch_ngrams.append(ngrams)
+            return batch_ngrams
+                
+        def compute_repetition_penalty(sequence, next_tokens):
+            batch_size, num_tokens = next_tokens.shape
+            penalties = np.ones((batch_size, num_tokens))
             
-        def compute_repetition_penalty(sequence, next_token):
-            penalty = 1.0
-            ngrams = {n: get_ngrams(sequence, n) for n in range(1, 4)}
-            for n, grams in ngrams.items():
-                next_token_int = int(next_token)
-                if any(next_token_int in gram for gram in grams):
-                    penalty *= 0.9 ** n
-            return penalty
+            batch_ngrams = {n: get_ngrams(sequence, n) for n in range(1, 4)}
             
+            for batch_idx in range(batch_size):
+                for token_idx in range(num_tokens):
+                    token = next_tokens[batch_idx, token_idx]
+                    penalty = 1.0
+                    
+                    for n, ngrams_list in batch_ngrams.items():
+                        sequence_ngrams = ngrams_list[batch_idx]
+                        if any(int(token) in gram for gram in sequence_ngrams):
+                            penalty *= 0.9 ** n
+                    
+                    penalties[batch_idx, token_idx] = penalty
+                    
+            return penalties
+                
         def length_normalize(length):
             return ((5 + length) / 6.0) ** alpha
-            
+                
         batch_size = inp.shape[0]
         beams = [(np.full((batch_size, 1), self.SOS_IDX), 0)]
         finished_beams = []
-        
+            
         enc_output = self.encode(inp, training=False)
-        
+            
         for step in range(max_length - 1):
             if not beams:
                 break
-                
+                    
             candidates = []
             for sequence, score in beams:
-                predictions = self._get_next_token_predictions(sequence, enc_output)
-                
-                for i in range(predictions.shape[-1]):
-                    predictions[..., i] *= compute_repetition_penalty(sequence, i)
+                predictions = self._get_next_token_predictions(sequence, enc_output, temperature=temperature)
                     
+                penalties = compute_repetition_penalty(sequence, 
+                                                    np.arange(predictions.shape[-1]).reshape(1, -1))
+                predictions *= penalties
+                        
                 if step > 0:
                     rng = np.random.default_rng(self.random_state)
                     noise = rng.normal(0, 0.1, predictions.shape)
                     predictions = predictions + noise
-                    
+                        
                 k = min(20, predictions.shape[-1])
                 top_k_scores = np.partition(predictions, -k)[:, -k:]
                 top_k_tokens = np.argpartition(predictions, -k)[:, -k:]
-                
+                    
                 for token_idx in range(k):
                     token = top_k_tokens[..., token_idx]
                     token_score = top_k_scores[..., token_idx]
-                    
+                        
                     new_sequence = np.concatenate([sequence, token.reshape(-1, 1)], axis=1)
-                    
+                        
                     length_penalty = length_normalize(new_sequence.shape[1])
                     epsilon = 1e-9  # to avoid log(x) where x <= 0
                     new_score = (score + np.log(token_score + epsilon)) / length_penalty
-                    
+                        
                     if token == self.EOS_IDX and new_sequence.shape[1] >= min_length:
                         finished_beams.append((new_sequence, new_score))
                     else:
                         candidates.append((new_sequence, new_score))
-                        
-            beams = sorted(candidates, key=lambda x: x[1] / length_normalize(x[0].shape[1]), reverse=True)[:beam_size]
+                            
+            beams = sorted(candidates, 
+                        key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
+                        reverse=True)[:beam_size]
             
             if len(finished_beams) >= beam_size * 2 and step >= min_length:
                 break
-        
-        finished_beams.extend(beams)
-        
-        if not finished_beams:
-            finished_beams = beams
-        
-        finished_beams = sorted(finished_beams, 
-                            key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
-                            reverse=True)
-        
+            
+            finished_beams.extend(beams)
+            
+            if not finished_beams:
+                finished_beams = beams
+            
+            finished_beams = sorted(finished_beams, 
+                                key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
+                                reverse=True)
+            
         return finished_beams[0][0]
 
     def evaluate(self, 
@@ -1965,7 +1964,6 @@ class Transformer(BaseModel):
             'd_ff': self.d_ff,
             'dropout_rate': self.dropout_rate,
             'max_sequence_length': self.max_sequence_length,
-            'temperature': self.temperature,
             'gradient_clip_threshold': self.gradient_clip_threshold,
             'enable_padding': self.enable_padding,
             'padding_size': self.padding_size,

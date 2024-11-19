@@ -181,35 +181,52 @@ class SequenceCrossEntropy(LossFunction):
         mask = np.ones_like(y_true, dtype=np.float32)
         for token in self.ignore_tokens:
             mask *= (y_true != token)
-            
+                
         n_classes = y_pred.shape[-1]
         y_true_smooth = np.zeros_like(y_pred)
-        
-        smooth_prob = self.label_smoothing / (n_classes - len(self.ignore_tokens) - 1)
-        y_true_smooth += smooth_prob
         
         for i in range(y_true.shape[0]):
             for j in range(y_true.shape[1]):
                 token = y_true[i, j]
                 if token not in self.ignore_tokens:
+                    valid_tokens = [t for t in range(n_classes) if t not in self.ignore_tokens]
+                    n_valid_classes = len(valid_tokens)
+                    smooth_prob = self.label_smoothing / (n_valid_classes - 1)
+                    
+                    for t in valid_tokens:
+                        if t != token:
+                            y_true_smooth[i, j, t] = smooth_prob
                     y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
                 else:
                     y_true_smooth[i, j, token] = 1.0
-                    
+                        
         loss = -np.sum(y_true_smooth * np.log(y_pred) * mask[..., np.newaxis])
         return loss / (np.sum(mask) + self.epsilon)
     
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        mask = (y_true != 0).astype(np.float32)
+        mask = np.ones_like(y_true, dtype=np.float32)
+        for token in self.ignore_tokens:
+            mask *= (y_true != token)
+        
         n_classes = y_pred.shape[-1]
         y_true_smooth = np.zeros_like(y_pred)
-        y_true_smooth += 0.1 / (n_classes - 1)
+        
         for i in range(y_true.shape[0]):
             for j in range(y_true.shape[1]):
-                if y_true[i, j] > 0:
-                    y_true_smooth[i, j, y_true[i, j]] = 0.9
+                token = y_true[i, j]
+                if token not in self.ignore_tokens:
+                    valid_tokens = [t for t in range(n_classes) if t not in self.ignore_tokens]
+                    n_valid_classes = len(valid_tokens)
+                    smooth_prob = self.label_smoothing / (n_valid_classes - 1)
+                    
+                    for t in valid_tokens:
+                        if t != token:
+                            y_true_smooth[i, j, t] = smooth_prob
+                    y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
+                else:
+                    y_true_smooth[i, j, token] = 1.0
         
         grad = -(y_true_smooth / y_pred)
         grad *= mask[..., np.newaxis]
@@ -217,6 +234,4 @@ class SequenceCrossEntropy(LossFunction):
         total_tokens = np.sum(mask)
         grad /= (total_tokens + self.epsilon)
         
-        grad = np.clip(grad, -1.0, 1.0)
-        
-        return grad
+        return np.clip(grad, -1.0, 1.0)

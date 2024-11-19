@@ -382,14 +382,24 @@ class TSNE:
 
 
 class Tokenizer:
-    def __init__(self, num_words: int | None = None, filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
-                 lower: bool = True, split: str = ' ', char_level: bool = False, oov_token: str | None = None) -> None:
+    def __init__(self, num_words: int | None = None, 
+                 filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
+                 lower: bool = True, split: str = ' ', 
+                 char_level: bool = False, 
+                 unk_token: str = "<UNK>",
+                 sos_token: str = "<SOS>",
+                 eos_token: str = "<EOS>") -> None:
         self.num_words = num_words
         self.filters = filters
         self.lower = lower
         self.split = split
         self.char_level = char_level
-        self.oov_token = oov_token
+        
+        self.pad_token = "<PAD>"
+        self.unk_token = unk_token
+        self.sos_token = sos_token
+        self.eos_token = eos_token
+        
         self.word_counts = {}
         self.word_index = {}
         self.index_word = {}
@@ -403,13 +413,18 @@ class Tokenizer:
         return text.strip()
 
     def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
+        self.word_index[self.pad_token] = 0  # Padding token always at index 0
+        next_index = 1
+        
         for text in texts:
             text = self.preprocess_text(text) if preprocess_ponctuation else text
             self.document_count += 1
+            
             if self.char_level:
                 seq = text
             else:
                 seq = text.split(self.split) if isinstance(text, str) else text
+                
             for w in seq:
                 if self.lower:
                     w = w.lower()
@@ -428,23 +443,28 @@ class Tokenizer:
         wcounts.sort(key=lambda x: x[1], reverse=True)
         sorted_voc = [wc[0] for wc in wcounts]
 
-        # Note that index 0 is reserved, never assigned to an existing word
-        self.word_index = dict(list(zip(sorted_voc, list(range(1, len(sorted_voc) + 1)))))
+        for w in sorted_voc:
+            if w not in self.word_index:
+                self.word_index[w] = next_index
+                next_index += 1
 
-        if self.oov_token is not None:
-            i = self.word_index.get(self.oov_token)
-            if i is None:
-                self.word_index[self.oov_token] = len(self.word_index) + 1
+        vocab_size = len(self.word_index)
+        self.word_index[self.unk_token] = vocab_size + 1
+        self.word_index[self.sos_token] = vocab_size + 2
+        self.word_index[self.eos_token] = vocab_size + 3
 
         if self.num_words is not None:
-            self.word_index = dict(list(self.word_index.items())[:self.num_words])
+            special_tokens = {self.pad_token, self.unk_token, self.sos_token, self.eos_token}
+            keep_tokens = {w: i for w, i in self.word_index.items() 
+                         if i < self.num_words or w in special_tokens}
+            self.word_index = keep_tokens
 
-        self.index_word = dict((c, w) for w, c in self.word_index.items())
+        self.index_word = {i: w for w, i in self.word_index.items()}
 
     def texts_to_sequences(self, texts: list[str], preprocess_ponctuation: bool = False) -> list[list[int]]:
         if preprocess_ponctuation:
             texts = [self.preprocess_text(text) for text in texts]
-        return list(self.texts_to_sequences_generator(texts)) 
+        return list(self.texts_to_sequences_generator(texts))
 
     def texts_to_sequences_generator(self, texts: list[str]) -> Generator[list[int], None, None]:
         for text in texts:
@@ -459,12 +479,14 @@ class Tokenizer:
                 i = self.word_index.get(w)
                 if i is not None:
                     if self.num_words and i >= self.num_words:
-                        if self.oov_token is not None:
-                            vect.append(self.word_index.get(self.oov_token))
+                        if w in {self.pad_token, self.unk_token, self.sos_token, self.eos_token}:
+                            vect.append(i)
+                        else:
+                            vect.append(self.word_index[self.unk_token])
                     else:
                         vect.append(i)
-                elif self.oov_token is not None:
-                    vect.append(self.word_index.get(self.oov_token))
+                else:
+                    vect.append(self.word_index[self.unk_token])
             yield vect
 
     def sequences_to_texts(self, sequences: list[list[int]]) -> list[str]:
@@ -476,13 +498,38 @@ class Tokenizer:
             for num in seq:
                 word = self.index_word.get(num)
                 if word is not None:
-                    vect.append(word)
-                elif self.oov_token is not None:
-                    vect.append(self.oov_token)
+                    if word not in {self.pad_token}:
+                        vect.append(word)
+                else:
+                    vect.append(self.unk_token)
+            
             if self.char_level:
                 yield ''.join(vect)
             else:
                 yield ' '.join(vect)
+
+    def get_vocab_size(self) -> int:
+        if self.num_words is not None:
+            return min(len(self.word_index), self.num_words)
+        return len(self.word_index)
+
+    def encode_special_tokens(self, sequences: list[list[int]], 
+                            add_sos: bool = True, 
+                            add_eos: bool = True) -> list[list[int]]:
+        result = []
+        sos_id = self.word_index[self.sos_token]
+        eos_id = self.word_index[self.eos_token]
+        
+        for seq in sequences:
+            new_seq = []
+            if add_sos:
+                new_seq.append(sos_id)
+            new_seq.extend(seq)
+            if add_eos:
+                new_seq.append(eos_id)
+            result.append(new_seq)
+        
+        return result
 
     def get_config(self) -> dict:
         return {
@@ -491,7 +538,7 @@ class Tokenizer:
             'lower': self.lower,
             'split': self.split,
             'char_level': self.char_level,
-            'oov_token': self.oov_token,
+            'unk_token': self.unk_token,
             'document_count': self.document_count,
         }
 
