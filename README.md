@@ -8,7 +8,7 @@ I made it to challenge myself and to learn more about deep neural networks, how 
 
 The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in a week.
 
-I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder) and [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder).
+I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder), [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder) and [Transformers](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)) (WIP).
 
 This project will be maintained as long as I have ideas to improve it, and as long as I have time to work on it.
 
