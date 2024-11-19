@@ -2531,73 +2531,69 @@ class MultiHeadAttention(Layer):
         return np.transpose(x, (0, 2, 1, 3))
 
     def _scaled_dot_product_attention(self, query, key, value, mask=None, training=True):
-        # shape: (batch_size, num_heads, query_len, key_len)
-        scores = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-
-        if mask is not None:
-            if len(mask.shape) == 3:  # (batch_size, seq_len, seq_len)
-                mask = mask[:, np.newaxis, :, :]
-            elif len(mask.shape) == 4:  # already in correct shape
-                pass
-            else:  # (batch_size, seq_len) or other shapes
-                mask = mask[:, np.newaxis, np.newaxis, :]
+        if query.shape[-1] != key.shape[-1]:
+            raise ValueError(f"Query depth {query.shape[-1]} != Key depth {key.shape[-1]}")
             
-            mask = mask.astype(np.bool_)
-
-            if mask.shape[1] == 1:
-                mask = np.broadcast_to(mask, scores.shape)
-            
-            scores = np.where(mask, -1e9, scores)
-
-        scale = np.sqrt(float(self.key_dim))
-        scaled_scores = scores / scale
-
-        scores_max = np.max(scaled_scores, axis=-1, keepdims=True)
-        exp_scores = np.exp(scaled_scores - scores_max)
-        scores_sum = np.sum(exp_scores, axis=-1, keepdims=True)
-        self.attention_weights = exp_scores / (scores_sum + 1e-9)
+        matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
         
-        if training and self.dropout:
-            self.attention_weights = self.dropout.forward_pass(self.attention_weights)
-            
-        output = np.matmul(self.attention_weights, value)
-        return output
+        dk = np.float32(key.shape[-1])
+        scaled_attention_logits = matmul_qk / np.sqrt(dk)
+        
+        if mask is not None:
+            while len(mask.shape) < len(scaled_attention_logits.shape):
+                mask = np.expand_dims(mask, axis=1)
+            scaled_attention_logits = np.where(mask, -1e9, scaled_attention_logits)
+        
+        attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
+        exp_attention = np.exp(scaled_attention_logits - attention_max)
+        attention_weights = exp_attention / (np.sum(exp_attention, axis=-1, keepdims=True) + 1e-9)
+        
+        if training and self.dropout is not None:
+            attention_weights = self.dropout.forward_pass(attention_weights)
+        
+        attention_output = np.matmul(attention_weights, value)
+        
+        self.attention_weights = attention_weights
+        return attention_output
 
     def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         if isinstance(inputs, tuple):
             query, key, value = inputs
-            self.is_cross_attention: bool = True
+            self.is_cross_attention = True
         else:
             query = key = value = inputs
-            self.is_cross_attention: bool = False
+            self.is_cross_attention = False
 
-        batch_size: int = query.shape[0]
-        query_seq_length: int = query.shape[1]
-        value_seq_length: int = value.shape[1]
-
+        batch_size = query.shape[0]
+        
+        self.query_input = query
+        self.key_input = key
+        self.value_input = value
+        
         if self.query_dense is None:
             self.initialize_weights(query.shape)
-
-        self.query_input: np.ndarray = query
-        self.key_input: np.ndarray = key
-        self.value_input: np.ndarray = value
-
-        query = self.query_dense.forward_pass(query)
-        key = self.key_dense.forward_pass(key)
-        value = self.value_dense.forward_pass(value)
-
-        self.reshaped_query: np.ndarray = self._reshape_for_attention(query, batch_size, query_seq_length)
-        self.reshaped_key: np.ndarray = self._reshape_for_attention(key, batch_size, value_seq_length)
-        self.reshaped_value: np.ndarray = self._reshape_for_attention(value, batch_size, value_seq_length)
-
-        attention_output: np.ndarray = self._scaled_dot_product_attention(
-            self.reshaped_query, self.reshaped_key, self.reshaped_value, mask, training)
-
-        attention_output = np.transpose(attention_output, (0, 2, 1, 3))
-        self.concat_attention: np.ndarray = np.reshape(attention_output,
-                                                        (batch_size, query_seq_length, self.num_heads * self.value_dim))
-
-        output: np.ndarray = self.output_dense.forward_pass(self.concat_attention)
+            
+        Q = self.query_dense.forward_pass(query)
+        K = self.key_dense.forward_pass(key)
+        V = self.value_dense.forward_pass(value)
+        
+        self.reshaped_query = self._reshape_for_attention(Q, batch_size, query.shape[1])
+        self.reshaped_key = self._reshape_for_attention(K, batch_size, key.shape[1])
+        self.reshaped_value = self._reshape_for_attention(V, batch_size, value.shape[1])
+        
+        scaled_attention = self._scaled_dot_product_attention(
+            self.reshaped_query, 
+            self.reshaped_key, 
+            self.reshaped_value, 
+            mask, 
+            training
+        )
+        
+        scaled_attention = np.transpose(scaled_attention, (0, 2, 1, 3))
+        concat_attention = np.reshape(scaled_attention, 
+                                    (batch_size, -1, self.num_heads * self.value_dim))
+        
+        output = self.output_dense.forward_pass(concat_attention)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -2725,41 +2721,49 @@ class PositionalEncoding(Layer):
     
     def _build_sinusoidal_encoding(self) -> None:
         position = np.arange(self.max_sequence_length)[:, np.newaxis]
-        div_term = np.exp(np.arange(0, self.embedding_dim, 2) * (-np.log(10000.0) / self.embedding_dim))
+
+        div_term = np.power(
+            10000.0,
+            np.arange(0, self.embedding_dim, 2, dtype=np.float32) / self.embedding_dim
+        )
         
-        pe = np.zeros((self.max_sequence_length, self.embedding_dim))
+        pe = np.zeros((self.max_sequence_length, self.embedding_dim), dtype=np.float32)
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
         
         self.weights = pe[np.newaxis, :, :]
+        self.weights = self.weights / np.sqrt(self.embedding_dim)
         self.d_weights = np.zeros_like(self.weights)
     
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
-        limit: float = np.sqrt(6 / (self.seq_length + self.embedding_dim))
-        self.weights = self.rng.uniform(-limit, limit, (1, self.seq_length, self.embedding_dim))
-        self.d_weights = np.zeros_like(self.weights)
+        if self.trainable:
+            limit = np.sqrt(6 / (self.max_sequence_length + self.embedding_dim))
+            self.weights = self.rng.uniform(
+                -limit, limit,
+                (1, self.max_sequence_length, self.embedding_dim)
+            )
+            self.d_weights = np.zeros_like(self.weights)
     
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_len, _ = input_data.shape
         
-        if self.trainable and self.weights is None:
-            self.seq_length = seq_len
-            self.initialize_weights(input_data.shape)
-        
         if seq_len > self.max_sequence_length:
-            raise ValueError(f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}")
-            
-        encoding = self.weights[:, :seq_len, :] * 0.5
+            raise ValueError(
+                f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}"
+            )
+        
+        pos_encoding = self.weights[:, :seq_len, :]
         
         if batch_size > 1:
-            encoding = np.repeat(encoding, batch_size, axis=0)
+            pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
             
-        return input_data + encoding
+        return input_data + pos_encoding
     
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.trainable:
-            batch_size, seq_len, _ = output_error.shape
+            _, seq_len, _ = output_error.shape
             self.d_weights[:, :seq_len, :] += np.sum(output_error, axis=0, keepdims=True)
+            
         return output_error
     
     def get_config(self) -> dict:
@@ -2807,11 +2811,23 @@ class FeedForward(Layer):
         self.bias_initializer: str = bias_initializer
         self.random_state: int = random_state
 
-        self.dense1: Dense = Dense(d_ff, kernel_initializer, bias_initializer, random_state=random_state)
-        self.dense2: Dense = Dense(d_model, kernel_initializer, bias_initializer, random_state=random_state)
-        self.activation: Activation = Activation.from_name(activation)
-        self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
-
+        self.dense1 = Dense(
+            units=d_ff,
+            weights_init=kernel_initializer,
+            bias_init=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.dense2 = Dense(
+            units=d_model,
+            weights_init=kernel_initializer,
+            bias_init=bias_initializer,
+            random_state=random_state
+        )
+        
+        self.activation = Activation.from_name(activation)
+        self.dropout = Dropout(dropout_rate, random_state=random_state)
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
             
@@ -2819,15 +2835,17 @@ class FeedForward(Layer):
         return f'FeedForward(d_ff={self.d_ff}, d_model={self.d_model})'
         
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
-        x: np.ndarray = self.dense1.forward_pass(input_data)
+        x = self.dense1.forward_pass(input_data)
         x = self.activation.forward_pass(x)
+        
         if training:
             x = self.dropout.forward_pass(x, training=True)
+            
         x = self.dense2.forward_pass(x)
         return x
         
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        dx: np.ndarray = self.dense2.backward_pass(output_error)
+        dx = self.dense2.backward_pass(output_error)
         dx = self.dropout.backward_pass(dx)
         dx = self.activation.backward_pass(dx)
         dx = self.dense1.backward_pass(dx)
@@ -2866,29 +2884,63 @@ class AddNorm(Layer):
         **kwargs
     ) -> None:
         super().__init__()
-        self.layernorm: LayerNormalization = LayerNormalization(epsilon)
-        self.random_state: int = random_state
-
+        self.epsilon = epsilon
+        self.gamma = None
+        self.beta = None
+        self.d_gamma = None
+        self.d_beta = None
+        self.random_state = random_state
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
-            
+
+    def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
+        feature_shape = input_shape[-1]
+        self.gamma = np.ones((1, 1, feature_shape))
+        self.beta = np.zeros((1, 1, feature_shape))
+        self.d_gamma = np.zeros_like(self.gamma)
+        self.d_beta = np.zeros_like(self.beta)
+
     def __str__(self) -> str:
-        return f'AddNorm(epsilon={self.layernorm.epsilon}, random_state={self.random_state})'
+        return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
         
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
         x, residual = inputs
-        x = x + residual
-        x = self.layernorm.forward_pass(x)
-        return x
+        self.residual = residual
+        
+        combined = x + residual
+        
+        if self.gamma is None:
+            self.initialize_weights(combined.shape)
+        
+        self.mean = np.mean(combined, axis=-1, keepdims=True)
+        self.var = np.var(combined, axis=-1, keepdims=True)
+        
+        self.normalized = (combined - self.mean) / np.sqrt(self.var + self.epsilon)
+        
+        return self.gamma * self.normalized + self.beta
         
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        dx: np.ndarray = self.layernorm.backward_pass(output_error)
-        return dx, dx
+        self.d_gamma = np.sum(output_error * self.normalized, axis=(0, 1), keepdims=True)
+        self.d_beta = np.sum(output_error, axis=(0, 1), keepdims=True)
+        
+        d_normalized = output_error * self.gamma
+        
+        d_var = -0.5 * np.sum(d_normalized * (self.normalized - self.mean), 
+                             axis=-1, keepdims=True) / (self.var + self.epsilon)
+        
+        d_mean = -np.sum(d_normalized, axis=-1, keepdims=True) / np.sqrt(self.var + self.epsilon)
+        
+        d_input = (d_normalized / np.sqrt(self.var + self.epsilon) + 
+                  2 * d_var * (self.normalized - self.mean) / self.normalized.shape[-1] +
+                  d_mean / self.normalized.shape[-1])
+        
+        return d_input, d_input
         
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'epsilon': self.layernorm.epsilon,
+            'epsilon': self.epsilon,
             'random_state': self.random_state
         }
         

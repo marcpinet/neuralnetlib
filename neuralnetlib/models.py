@@ -1399,32 +1399,34 @@ class Transformer(BaseModel):
             
         return x
 
-    def decode(self, 
-               tar: np.ndarray, 
-               enc_output: np.ndarray, 
-               training: bool = True, 
-               look_ahead_mask: np.ndarray | None = None, 
-               padding_mask: np.ndarray | None = None) -> np.ndarray:
+    def decode(self, tar: np.ndarray, enc_output: np.ndarray, training: bool = True, 
+            look_ahead_mask: np.ndarray | None = None, 
+            padding_mask: np.ndarray | None = None) -> np.ndarray:
         
         x = self.embedding.forward_pass(tar)
-        
-        x = x * np.sqrt(self.d_model)
+        x = x * np.sqrt(self.d_model)  # Scale embeddings
         x = self.positional_encoding.forward_pass(x)
         
-        x = self.decoder_dropout.forward_pass(x, training=training)
+        if training:
+            x = self.decoder_dropout.forward_pass(x, training=True)
         
-        for i, decoder_layer in enumerate(self.decoder_layers):
+        attention_weights = []
+        for decoder_layer in self.decoder_layers:
             x = decoder_layer.forward_pass(
                 x, enc_output,
                 self_attention_mask=look_ahead_mask,
                 cross_attention_mask=padding_mask,
                 training=training
             )
-            
+            attention_weights.append(decoder_layer.self_attention.attention_weights)
         
-        output = self.output_layer.forward_pass(x)
+        self.last_attention_weights = attention_weights
         
-        return output
+        x_mean = np.mean(x, axis=-1, keepdims=True)
+        x_std = np.std(x, axis=-1, keepdims=True) + 1e-6
+        x = (x - x_mean) / x_std
+        
+        return x
 
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray], training: bool = True) -> np.ndarray:
         inp, tar = inputs
@@ -1432,10 +1434,16 @@ class Transformer(BaseModel):
         enc_padding_mask, look_ahead_mask, dec_padding_mask = self.create_masks(inp, tar)
         
         enc_output = self.encode(inp, training, enc_padding_mask)
-        dec_output = self.decode(tar, enc_output, training, 
-                               look_ahead_mask, dec_padding_mask)
         
-        return dec_output
+        dec_output = self.decode(tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        
+        output = self.output_layer.forward_pass(dec_output)
+        
+        output_mean = np.mean(output, axis=-1, keepdims=True)
+        output_std = np.std(output, axis=-1, keepdims=True) + 1e-6
+        output = (output - output_mean) / output_std
+        
+        return output
 
     def backward_pass(self, error: np.ndarray) -> None:
         dx = self.output_layer.backward_pass(error)
@@ -1814,134 +1822,92 @@ class Transformer(BaseModel):
 
             return history
         
-    def _get_next_token_predictions(self, sequence: np.ndarray, enc_output: np.ndarray, temperature: float = 1.0) -> np.ndarray:
-        if len(sequence.shape) == 1:
-            sequence = sequence[np.newaxis, :]
+    def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, 
+            alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
+        def get_next_token_predictions(sequence: np.ndarray, enc_output: np.ndarray) -> np.ndarray:
+            decoder_output = self.decode(sequence, enc_output, training=False)
+            predictions = self.output_layer.forward_pass(decoder_output)[:, -1, :]
             
-        batch_size = sequence.shape[0]
-        seq_len = sequence.shape[1]
-        
-        dec_padding_mask = self.create_padding_mask(sequence)
-        look_ahead_mask = self.create_look_ahead_mask(seq_len)
-        
-        cross_attention_padding_mask = np.zeros((batch_size, 1, 1, enc_output.shape[1]), dtype=np.bool_)
-        
-        self_attention_mask = np.broadcast_to(look_ahead_mask, (batch_size, 1, seq_len, seq_len))
-        self_attention_mask = np.logical_or(self_attention_mask, dec_padding_mask)
-        
-        decoder_output = self.decode(
-            sequence,
-            enc_output,
-            training=False,
-            look_ahead_mask=self_attention_mask,
-            padding_mask=cross_attention_padding_mask
-        )
-        
-        predictions = decoder_output[:, -1, :]
-        
-        for token in [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX]:
-            predictions[:, token] = -np.inf
-        
-        predictions = predictions / temperature
-        
-        max_logits = np.max(predictions, axis=-1, keepdims=True)
-        stable_logits = predictions - max_logits
-        exp_preds = np.exp(stable_logits)
-        predictions = exp_preds / np.sum(exp_preds, axis=-1, keepdims=True)
-        
-        return predictions
-        
-    def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
-        def get_ngrams(sequence, n):
-            batch_ngrams = []
-            for seq in sequence:
-                seq_list = seq.flatten().tolist()
-                ngrams = set(tuple(seq_list[i:i+n]) for i in range(len(seq_list)-n+1))
-                batch_ngrams.append(ngrams)
-            return batch_ngrams
-                
-        def compute_repetition_penalty(sequence, next_tokens):
-            batch_size, num_tokens = next_tokens.shape
-            penalties = np.ones((batch_size, num_tokens))
+            predictions_mean = np.mean(predictions, axis=-1, keepdims=True)
+            predictions_std = np.std(predictions, axis=-1, keepdims=True) + 1e-6
+            predictions = (predictions - predictions_mean) / predictions_std
             
-            batch_ngrams = {n: get_ngrams(sequence, n) for n in range(1, 4)}
+            predictions = predictions / temperature
             
-            for batch_idx in range(batch_size):
-                for token_idx in range(num_tokens):
-                    token = next_tokens[batch_idx, token_idx]
-                    penalty = 1.0
-                    
-                    for n, ngrams_list in batch_ngrams.items():
-                        sequence_ngrams = ngrams_list[batch_idx]
-                        if any(int(token) in gram for gram in sequence_ngrams):
-                            penalty *= 0.9 ** n
-                    
-                    penalties[batch_idx, token_idx] = penalty
-                    
-            return penalties
-                
-        def length_normalize(length):
-            return ((5 + length) / 6.0) ** alpha
-                
+            max_logits = np.max(predictions, axis=-1, keepdims=True)
+            exp_preds = np.exp(predictions - max_logits)
+            probabilities = exp_preds / np.sum(exp_preds, axis=-1, keepdims=True)
+            
+            probabilities[:, self.PAD_IDX] = 0.0
+            
+            probabilities = probabilities / (np.sum(probabilities, axis=-1, keepdims=True) + 1e-9)
+            
+            return probabilities
+        
         batch_size = inp.shape[0]
-        beams = [(np.full((batch_size, 1), self.SOS_IDX), 0)]
-        finished_beams = []
-            
         enc_output = self.encode(inp, training=False)
-            
+        
+        beams = [(np.full((batch_size, 1), self.SOS_IDX), 0.0)]
+        finished_beams = []
+        
         for step in range(max_length - 1):
             if not beams:
                 break
-                    
-            candidates = []
-            for sequence, score in beams:
-                predictions = self._get_next_token_predictions(sequence, enc_output, temperature=temperature)
-
-                penalties = compute_repetition_penalty(sequence, 
-                                                    np.arange(predictions.shape[-1]).reshape(1, -1))
-                predictions *= penalties
-                        
-                if step > 0:
-                    rng = np.random.default_rng(self.random_state)
-                    noise = rng.normal(0, 0.1, predictions.shape)
-                    predictions = predictions + noise
-                        
-                k = min(20, predictions.shape[-1])
-                top_k_scores = np.partition(predictions, -k)[:, -k:]
-                top_k_tokens = np.argpartition(predictions, -k)[:, -k:]
-                    
-                for token_idx in range(k):
-                    token = top_k_tokens[..., token_idx]
-                    token_score = top_k_scores[..., token_idx]
-                        
-                    new_sequence = np.concatenate([sequence, token.reshape(-1, 1)], axis=1)
-                        
-                    length_penalty = length_normalize(new_sequence.shape[1])
-                    epsilon = 1e-9  # to avoid log(x) where x <= 0
-                    new_score = (score + np.log(token_score + epsilon)) / length_penalty
-                        
-                    if token == self.EOS_IDX and new_sequence.shape[1] >= min_length:
-                        finished_beams.append((new_sequence, new_score))
-                    else:
-                        candidates.append((new_sequence, new_score))
-                            
-            beams = sorted(candidates, 
-                        key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
-                        reverse=True)[:beam_size]
+                
+            all_candidates = []
             
-            if len(finished_beams) >= beam_size * 2 and step >= min_length:
+            for sequence, accumulated_log_prob in beams:
+                predictions = get_next_token_predictions(sequence, enc_output)
+                
+                k = predictions.shape[-1]
+                top_k_probs = predictions[..., :k]
+                top_k_tokens = np.arange(k)
+                
+                for token_idx in range(k):
+                    token = top_k_tokens[token_idx]
+                    token_prob = top_k_probs[..., token_idx]
+                    token_log_prob = np.log(token_prob + 1e-10)
+                    
+                    if token != self.PAD_IDX:
+                        new_sequence = np.concatenate([sequence, token.reshape(-1, 1)], axis=1)
+                        new_log_prob = accumulated_log_prob + token_log_prob
+                        
+                        if token == self.EOS_IDX and new_sequence.shape[1] >= min_length:
+                            finished_beams.append((new_sequence, new_log_prob))
+                        elif token != self.EOS_IDX:
+                            all_candidates.append((new_sequence, new_log_prob))
+            
+            if not all_candidates:
                 break
             
-            finished_beams.extend(beams)
+            scored_candidates = [
+                (seq, score / (seq.shape[1] ** alpha)) 
+                for seq, score in all_candidates
+            ]
             
-            if not finished_beams:
-                finished_beams = beams
+            sorted_candidates = sorted(
+                zip(scored_candidates, all_candidates),
+                key=lambda x: float(x[0][1]),
+                reverse=True
+            )
             
-            finished_beams = sorted(finished_beams, 
-                                key=lambda x: x[1] / length_normalize(x[0].shape[1]), 
-                                reverse=True)
+            beams = [original for _, original in sorted_candidates[:beam_size]]
             
-        return finished_beams[0][0]
+            if len(finished_beams) >= beam_size:
+                break
+        
+        finished_beams.extend(beams)
+        
+        if not finished_beams:
+            finished_beams = beams
+        
+        scored_finished = [
+            (seq, score / (seq.shape[1] ** alpha)) 
+            for seq, score in finished_beams
+        ]
+        
+        best_seq = max(scored_finished, key=lambda x: float(x[1]))[0]
+        return best_seq
 
     def evaluate(self, 
                 x_test: np.ndarray, 
