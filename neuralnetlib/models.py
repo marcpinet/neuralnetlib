@@ -1296,17 +1296,29 @@ class Transformer(BaseModel):
                  gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = True,
                  padding_size: int = 32,
-                 random_state: int | None = None) -> None:
+                 random_state: int | None = None,
+                 pad_idx: int = 0,
+                 unk_idx: int | None = None,
+                 sos_idx: int | None = None,
+                 eos_idx: int | None = None,
+                 ) -> None:
                  
-        original_vocab_size = vocab_size
-        self.PAD_IDX: int = 0
-        self.UNK_IDX: int = original_vocab_size + 1
-        self.SOS_IDX: int = original_vocab_size + 2
-        self.EOS_IDX: int = original_vocab_size + 3
-        vocab_size = original_vocab_size + 4  # PAD, UNK, SOS, EOS
+        self.PAD_IDX = pad_idx
+        self.UNK_IDX = unk_idx
+        self.SOS_IDX = sos_idx
+        self.EOS_IDX = eos_idx
+        
+        if self.UNK_IDX is None:
+            self.UNK_IDX = vocab_size - 3
+        if self.SOS_IDX is None:
+            self.SOS_IDX = vocab_size - 2
+        if self.EOS_IDX is None:
+            self.EOS_IDX = vocab_size - 1
+        
         super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
+        vocab_size += 1
         self.vocab_size: int = vocab_size
         self.d_model: int = d_model
         self.n_heads: int = n_heads
@@ -1884,7 +1896,7 @@ class Transformer(BaseModel):
             candidates = []
             for sequence, score in beams:
                 predictions = self._get_next_token_predictions(sequence, enc_output, temperature=temperature)
-                    
+
                 penalties = compute_repetition_penalty(sequence, 
                                                     np.arange(predictions.shape[-1]).reshape(1, -1))
                 predictions *= penalties
