@@ -278,7 +278,6 @@ class Sequential(BaseModel):
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
 
-        # Set the random_state for every layer that has a random_state attribute
         for layer in self.layers:
             if hasattr(layer, 'random_state'):
                 layer.random_state = random_state if random_state is not None else self.random_state
@@ -1133,7 +1132,6 @@ class Autoencoder(BaseModel):
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
 
-        # Set the random_state for layers
         for layer in self.encoder_layers + self.decoder_layers:
             if hasattr(layer, 'random_state'):
                 layer.random_state = random_state if random_state is not None else self.random_state
@@ -1143,7 +1141,6 @@ class Autoencoder(BaseModel):
         has_embedding = any(isinstance(layer, Embedding) 
                         for layer in self.encoder_layers + self.decoder_layers)
 
-        # Validate input shape for RNN layers
         if has_lstm_or_gru and not has_embedding:
             if len(x_train.shape) != 3:
                 raise ValueError(
@@ -1152,33 +1149,28 @@ class Autoencoder(BaseModel):
             if len(x_train.shape) != 2:
                 raise ValueError("Input data must be 2D (batch_size, sequence_length) when using Embedding layer")
 
-        # Handle validation data
         if validation_data is not None:
             x_val, y_val = validation_data if len(validation_data) == 2 else (validation_data[0], validation_data[0])
             x_val = np.array(x_val)
             y_val = np.array(y_val)
 
-        # Initialize metrics
         if metrics is not None:
             metrics: list[Metric] = [Metric(m) for m in metrics]
             for metric in metrics:
                 history[metric.name] = []
                 history[f'val_{metric.name}'] = []
 
-        # Initialize text vectorization if present
         for layer in self.encoder_layers + self.decoder_layers:
             if isinstance(layer, TextVectorization):
                 layer.adapt(x_train)
                 break
 
-        # Initialize callbacks
         if callbacks is None:
             callbacks = []
 
         for callback in callbacks:
             callback.on_train_begin()
 
-        # Training loop
         for epoch in range(epochs):
             for callback in callbacks:
                 callback.on_epoch_begin(epoch)
@@ -1235,7 +1227,6 @@ class Autoencoder(BaseModel):
                     metric_value = metric(np.vstack(predictions_list), np.vstack(inputs_list))
                     logs[metric.name] = metric_value
 
-            # Validation phase
             if validation_data is not None:
                 val_loss, val_predictions = self.evaluate(x_val, y_val, batch_size)
                 history['val_loss'].append(val_loss)
@@ -1257,7 +1248,6 @@ class Autoencoder(BaseModel):
 
                 val_predictions = None
 
-            # Handle callbacks
             stop_training = False
             for callback in callbacks:
                 if isinstance(callback, EarlyStopping):
