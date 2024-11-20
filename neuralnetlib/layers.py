@@ -2537,9 +2537,9 @@ class MultiHeadAttention(Layer):
                                     training: bool = True) -> np.ndarray:
         matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
         
-        # Optimized scaling
         dk = np.float32(key.shape[-1])
-        scaled_attention_logits = matmul_qk / (np.sqrt(dk) * 0.5)  # Keep higher temperature
+        
+        scaled_attention_logits = matmul_qk / np.sqrt(dk)
         
         if mask is not None:
             scaled_attention_logits = np.where(mask, float('-inf'), scaled_attention_logits)
@@ -2547,8 +2547,8 @@ class MultiHeadAttention(Layer):
         attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
         self.attention_weights = attention_weights
         
-        # Balanced output scaling
-        output = np.matmul(attention_weights, value) * 1.8  # Slightly reduced
+        output = np.matmul(attention_weights, value)
+        
         return output
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:

@@ -1,7 +1,7 @@
 import inspect
 import json
 import time
-
+import logging
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1322,6 +1322,7 @@ class Transformer(BaseModel):
         self.d_ff = d_ff
         self.dropout_rate = dropout_rate
         self.max_sequence_length = max_sequence_length
+        self.gradient_norms = {}
         
         self.src_embedding = Embedding(self.src_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
         self.tgt_embedding = Embedding(self.tgt_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
@@ -1436,15 +1437,13 @@ class Transformer(BaseModel):
         return output
 
     def backward_pass(self, error: np.ndarray) -> None:
-        error = np.clip(error, -1.0, 1.0)
+        error = np.clip(error, -self.gradient_clip_threshold, self.gradient_clip_threshold)
         
         dx = self.output_layer.backward_pass(error)
         d_enc_output = None
         
         for decoder_layer in reversed(self.decoder_layers):
             dx, d_enc = decoder_layer.backward_pass(dx)
-            dx = np.clip(dx, -1.0, 1.0)
-            d_enc = np.clip(d_enc, -1.0, 1.0)
             d_enc_output = d_enc if d_enc_output is None else d_enc_output + d_enc
                     
         dx = self.decoder_dropout.backward_pass(dx)
@@ -1458,7 +1457,6 @@ class Transformer(BaseModel):
         
         dx_enc = self.encoder_dropout.backward_pass(dx_enc)
         dx_enc = dx_enc * np.sqrt(self.d_model)
-        
         dx_enc = self.src_embedding.backward_pass(dx_enc)
 
     def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
@@ -1507,7 +1505,8 @@ class Transformer(BaseModel):
         if verbose:
             print(str(self))
 
-    def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
+    def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray, print_logging: bool = False) -> float:
+        self.gradient_norms = {}
         
         decoder_input = y_batch[:, :-1]
         targets = y_batch[:, 1:]
@@ -1520,187 +1519,187 @@ class Transformer(BaseModel):
         loss = self.loss_function(targets, self.predictions)
         
         error = self.loss_function.derivative(targets, self.predictions)
-        
         self.backward_pass(error)
         
-        layer_index = 0
+        def update_with_monitoring(name: str, layer_idx: int, weights: np.ndarray, 
+                                 d_weights: np.ndarray, bias: np.ndarray, d_bias: np.ndarray) -> None:
+            weight_norm = np.linalg.norm(d_weights)
+            bias_norm = np.linalg.norm(d_bias) if d_bias is not None else 0
+            
+            self.gradient_norms[name] = {
+                'weights': float(weight_norm),
+                'bias': float(bias_norm)
+            }
+            
+            if print_logging and weight_norm > self.gradient_clip_threshold:
+                logging.warning(f"Large gradient norm in {name}: {weight_norm:.4f}")
+            
+            self.optimizer.update(layer_idx, weights, d_weights, bias, d_bias)
         
-        # Update source embedding layer
-        self.optimizer.update(
-            layer_index,
-            self.src_embedding.weights,
-            self.src_embedding.d_weights,
-            self.src_embedding.bias,
-            self.src_embedding.d_bias
+        layer_idx = 0
+        
+        update_with_monitoring(
+            'src_embedding', layer_idx,
+            self.src_embedding.weights, self.src_embedding.d_weights,
+            self.src_embedding.bias, self.src_embedding.d_bias
         )
-        layer_index += 1
+        layer_idx += 1
         
-        # Update target embedding layer 
-        self.optimizer.update(
-            layer_index,
-            self.tgt_embedding.weights,
-            self.tgt_embedding.d_weights,
-            self.tgt_embedding.bias,
-            self.tgt_embedding.d_bias
+        update_with_monitoring(
+            'tgt_embedding', layer_idx,
+            self.tgt_embedding.weights, self.tgt_embedding.d_weights,
+            self.tgt_embedding.bias, self.tgt_embedding.d_bias
         )
-        layer_index += 1
+        layer_idx += 1
         
-        # Update encoder layers
-        for encoder_layer in self.encoder_layers:
-            # Update self attention
-            self.optimizer.update(
-                layer_index,
+        for i, encoder_layer in enumerate(self.encoder_layers):
+            update_with_monitoring(
+                f'encoder_{i}_self_attn_Q', layer_idx,
                 encoder_layer.attention.query_dense.weights,
                 encoder_layer.attention.query_dense.d_weights,
                 encoder_layer.attention.query_dense.bias,
                 encoder_layer.attention.query_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'encoder_{i}_self_attn_K', layer_idx,
                 encoder_layer.attention.key_dense.weights,
                 encoder_layer.attention.key_dense.d_weights,
                 encoder_layer.attention.key_dense.bias,
                 encoder_layer.attention.key_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'encoder_{i}_self_attn_V', layer_idx,
                 encoder_layer.attention.value_dense.weights,
                 encoder_layer.attention.value_dense.d_weights,
                 encoder_layer.attention.value_dense.bias,
                 encoder_layer.attention.value_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'encoder_{i}_self_attn_O', layer_idx,
                 encoder_layer.attention.output_dense.weights,
                 encoder_layer.attention.output_dense.d_weights,
                 encoder_layer.attention.output_dense.bias,
                 encoder_layer.attention.output_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            # Update feed forward
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'encoder_{i}_ffn_1', layer_idx,
                 encoder_layer.ffn.dense1.weights,
                 encoder_layer.ffn.dense1.d_weights,
                 encoder_layer.ffn.dense1.bias,
                 encoder_layer.ffn.dense1.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'encoder_{i}_ffn_2', layer_idx,
                 encoder_layer.ffn.dense2.weights,
                 encoder_layer.ffn.dense2.d_weights,
                 encoder_layer.ffn.dense2.bias,
                 encoder_layer.ffn.dense2.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
         
-        # Update decoder layers
-        for decoder_layer in self.decoder_layers:
-            # Update self attention
-            self.optimizer.update(
-                layer_index,
+        for i, decoder_layer in enumerate(self.decoder_layers):
+            update_with_monitoring(
+                f'decoder_{i}_self_attn_Q', layer_idx,
                 decoder_layer.self_attention.query_dense.weights,
                 decoder_layer.self_attention.query_dense.d_weights,
                 decoder_layer.self_attention.query_dense.bias,
                 decoder_layer.self_attention.query_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_self_attn_K', layer_idx,
                 decoder_layer.self_attention.key_dense.weights,
                 decoder_layer.self_attention.key_dense.d_weights,
                 decoder_layer.self_attention.key_dense.bias,
                 decoder_layer.self_attention.key_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_self_attn_V', layer_idx,
                 decoder_layer.self_attention.value_dense.weights,
                 decoder_layer.self_attention.value_dense.d_weights,
                 decoder_layer.self_attention.value_dense.bias,
                 decoder_layer.self_attention.value_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_self_attn_O', layer_idx,
                 decoder_layer.self_attention.output_dense.weights,
                 decoder_layer.self_attention.output_dense.d_weights,
                 decoder_layer.self_attention.output_dense.bias,
                 decoder_layer.self_attention.output_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            # Update cross attention
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_cross_attn_Q', layer_idx,
                 decoder_layer.cross_attention.query_dense.weights,
                 decoder_layer.cross_attention.query_dense.d_weights,
                 decoder_layer.cross_attention.query_dense.bias,
                 decoder_layer.cross_attention.query_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_cross_attn_K', layer_idx,
                 decoder_layer.cross_attention.key_dense.weights,
                 decoder_layer.cross_attention.key_dense.d_weights,
                 decoder_layer.cross_attention.key_dense.bias,
                 decoder_layer.cross_attention.key_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_cross_attn_V', layer_idx,
                 decoder_layer.cross_attention.value_dense.weights,
                 decoder_layer.cross_attention.value_dense.d_weights,
                 decoder_layer.cross_attention.value_dense.bias,
                 decoder_layer.cross_attention.value_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_cross_attn_O', layer_idx,
                 decoder_layer.cross_attention.output_dense.weights,
                 decoder_layer.cross_attention.output_dense.d_weights,
                 decoder_layer.cross_attention.output_dense.bias,
                 decoder_layer.cross_attention.output_dense.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            # Update feed forward
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_ffn_1', layer_idx,
                 decoder_layer.ffn.dense1.weights,
                 decoder_layer.ffn.dense1.d_weights,
                 decoder_layer.ffn.dense1.bias,
                 decoder_layer.ffn.dense1.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
             
-            self.optimizer.update(
-                layer_index,
+            update_with_monitoring(
+                f'decoder_{i}_ffn_2', layer_idx,
                 decoder_layer.ffn.dense2.weights,
                 decoder_layer.ffn.dense2.d_weights,
                 decoder_layer.ffn.dense2.bias,
                 decoder_layer.ffn.dense2.d_bias
             )
-            layer_index += 1
+            layer_idx += 1
         
-        # Update output layer
-        self.optimizer.update(
-            layer_index,
+        update_with_monitoring(
+            'output', layer_idx,
             self.output_layer.weights,
             self.output_layer.d_weights,
             self.output_layer.bias,
@@ -1939,3 +1938,174 @@ class Transformer(BaseModel):
                 f"  dropout_rate={self.dropout_rate},\n"
                 f"  max_sequence_length={self.max_sequence_length}\n"
                 f")")
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Dict, List, Tuple
+# mute matplotlib loggin
+import logging
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+
+from neuralnetlib.optimizers import Adam
+from neuralnetlib.losses import SequenceCrossEntropy
+from neuralnetlib.preprocessing import Tokenizer
+
+def test_transformer_gradients():
+    """Test gradient behavior in the Transformer"""
+    print("\nTesting Transformer Gradient Behavior")
+    print("=" * 50)
+    
+    # Initialize small test data
+    batch_size = 4
+    seq_length = 10
+    vocab_size = 100
+    d_model = 64  # Smaller for testing
+    
+    # Create tokenizer and transformer
+    tokenizer = Tokenizer(num_words=vocab_size)
+    tokenizer.fit_on_texts(["This is a test sentence"])
+    
+    transformer = Transformer(
+        src_vocab_size=vocab_size,
+        tgt_vocab_size=vocab_size,
+        d_model=d_model,
+        n_heads=2,
+        n_encoder_layers=2,
+        n_decoder_layers=2,
+        d_ff=128,
+        gradient_clip_threshold=1.0
+    )
+    
+    loss_function = SequenceCrossEntropy(label_smoothing=0.1)
+    optimizer = Adam(learning_rate=0.001)
+    transformer.compile(loss_function=loss_function, optimizer=optimizer)
+    
+    def create_test_batch(extreme_values: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """Create a test batch, optionally with extreme values"""
+        rng = np.random.default_rng(42)
+        x = rng.integers(4, vocab_size, (batch_size, seq_length))  # Start at 4 to avoid special tokens
+        y = rng.integers(4, vocab_size, (batch_size, seq_length))
+        
+        if extreme_values:
+            # Add some extreme patterns
+            x[0] = vocab_size - 1  # All same token
+            y[0] = 4  # All same target
+        
+        return x, y
+    
+    def collect_gradient_stats(grad_norms: Dict) -> Dict:
+        """Collect statistics about gradients"""
+        if not grad_norms:
+            return {}
+            
+        stats = {
+            'max_norm': max(info['weights'] for info in grad_norms.values()),
+            'min_norm': min(info['weights'] for info in grad_norms.values()),
+            'mean_norm': np.mean([info['weights'] for info in grad_norms.values()]),
+            'std_norm': np.std([info['weights'] for info in grad_norms.values()]),
+            'clipped_layers': sum(1 for info in grad_norms.values() 
+                                if info['weights'] > transformer.gradient_clip_threshold)
+        }
+        return stats
+    
+    print("\nTest 1: Normal Batch")
+    print("-" * 30)
+    x_normal, y_normal = create_test_batch(extreme_values=False)
+    loss_normal = transformer.train_on_batch(x_normal, y_normal, print_logging=True)
+    normal_stats = collect_gradient_stats(transformer.gradient_norms)
+    print(f"Loss: {loss_normal:.4f}")
+    print("Gradient Statistics:")
+    for key, value in normal_stats.items():
+        print(f"  {key}: {value:.4f}")
+    
+    print("\nTest 2: Extreme Batch")
+    print("-" * 30)
+    x_extreme, y_extreme = create_test_batch(extreme_values=True)
+    loss_extreme = transformer.train_on_batch(x_extreme, y_extreme, print_logging=True)
+    extreme_stats = collect_gradient_stats(transformer.gradient_norms)
+    print(f"Loss: {loss_extreme:.4f}")
+    print("Gradient Statistics:")
+    for key, value in extreme_stats.items():
+        print(f"  {key}: {value:.4f}")
+    
+    # Visualize gradient norms distribution
+    plt.figure(figsize=(15, 5))
+    
+    # Plot 1: Normal batch gradient distribution
+    plt.subplot(131)
+    normal_norms = [info['weights'] for info in transformer.gradient_norms.values()]
+    plt.hist(normal_norms, bins=30, alpha=0.7, label='Normal')
+    plt.axvline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
+    plt.title('Normal Batch Gradient Norms')
+    plt.xlabel('Gradient Norm')
+    plt.ylabel('Count')
+    plt.legend()
+    
+    # Plot 2: Extreme batch gradient distribution
+    plt.subplot(132)
+    extreme_norms = [info['weights'] for info in transformer.gradient_norms.values()]
+    plt.hist(extreme_norms, bins=30, alpha=0.7, label='Extreme')
+    plt.axvline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
+    plt.title('Extreme Batch Gradient Norms')
+    plt.xlabel('Gradient Norm')
+    plt.ylabel('Count')
+    plt.legend()
+    
+    # Plot 3: Layer-wise comparison
+    plt.subplot(133)
+    layer_names = list(transformer.gradient_norms.keys())
+    normal_values = [transformer.gradient_norms[name]['weights'] for name in layer_names]
+    extreme_values = [transformer.gradient_norms[name]['weights'] for name in layer_names]
+    
+    # Select a few interesting layers to plot
+    interesting_layers = ['src_embedding', 'tgt_embedding', 'output'] + \
+                        [name for name in layer_names if 'attn' in name][:3]
+    indices = [layer_names.index(name) for name in interesting_layers]
+    
+    plt.bar(np.arange(len(indices)) - 0.2, 
+           [normal_values[i] for i in indices], 
+           width=0.4, label='Normal', alpha=0.7)
+    plt.bar(np.arange(len(indices)) + 0.2, 
+           [extreme_values[i] for i in indices], 
+           width=0.4, label='Extreme', alpha=0.7)
+    plt.axhline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
+    plt.xticks(range(len(indices)), [interesting_layers[i] for i in range(len(indices))], rotation=45)
+    plt.title('Layer-wise Gradient Comparison')
+    plt.xlabel('Layer')
+    plt.ylabel('Gradient Norm')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("\nTest 3: Multiple Batches Stability")
+    print("-" * 30)
+    n_batches = 5
+    grad_evolution = {layer: [] for layer in ['src_embedding', 'tgt_embedding', 'output']}
+    
+    print("Training on multiple batches...")
+    for i in range(n_batches):
+        x_batch, y_batch = create_test_batch(extreme_values=False)
+        loss = transformer.train_on_batch(x_batch, y_batch, print_logging=True)
+        
+        for layer in grad_evolution:
+            grad_evolution[layer].append(transformer.gradient_norms[layer]['weights'])
+        
+        print(f"Batch {i+1}/{n_batches} - Loss: {loss:.4f}")
+    
+    plt.figure(figsize=(10, 5))
+    for layer, values in grad_evolution.items():
+        plt.plot(range(n_batches), values, 'o-', label=layer)
+    plt.axhline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
+    plt.title('Gradient Evolution Over Batches')
+    plt.xlabel('Batch')
+    plt.ylabel('Gradient Norm')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+    return transformer
+
+if __name__ == "__main__":
+    transformer = test_transformer_gradients()
