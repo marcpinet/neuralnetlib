@@ -393,25 +393,50 @@ class Tokenizer:
                  filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
                  lower: bool = True, split: str = ' ', 
                  char_level: bool = False, 
+                 pad_token: str = "<PAD>",
                  unk_token: str = "<UNK>",
                  sos_token: str = "<SOS>",
                  eos_token: str = "<EOS>") -> None:
+        """
+        Initialize Tokenizer with special tokens at fixed positions:
+        - PAD_TOKEN: Always at index 0
+        - UNK_TOKEN: Always at index 1
+        - SOS_TOKEN: Always at index 2
+        - EOS_TOKEN: Always at index 3
+        Regular vocabulary starts at index 4
+        """
         self.num_words = num_words
         self.filters = filters
         self.lower = lower
         self.split = split
         self.char_level = char_level
         
-        self.pad_token = "<PAD>"
-        self.unk_token = unk_token
-        self.sos_token = sos_token
-        self.eos_token = eos_token
+        self.SPECIAL_TOKENS = {
+            'PAD': (pad_token, 0),
+            'UNK': (unk_token, 1),
+            'SOS': (sos_token, 2),
+            'EOS': (eos_token, 3)
+        }
+        
+        self.pad_token = self.SPECIAL_TOKENS['PAD'][0]
+        self.unk_token = self.SPECIAL_TOKENS['UNK'][0]
+        self.sos_token = self.SPECIAL_TOKENS['SOS'][0]
+        self.eos_token = self.SPECIAL_TOKENS['EOS'][0]
+        
+        self.PAD_IDX = self.SPECIAL_TOKENS['PAD'][1]
+        self.UNK_IDX = self.SPECIAL_TOKENS['UNK'][1]
+        self.SOS_IDX = self.SPECIAL_TOKENS['SOS'][1]
+        self.EOS_IDX = self.SPECIAL_TOKENS['EOS'][1]
         
         self.word_counts = {}
         self.word_index = {}
         self.index_word = {}
         self.word_docs = {}
         self.document_count = 0
+        
+        for token, (text, idx) in self.SPECIAL_TOKENS.items():
+            self.word_index[text] = idx
+            self.index_word[idx] = text
 
     def preprocess_text(self, text):
         text = re.sub(r"([!\"#$%&()*+,-./:;<=>?@\[\]^_`{|}~])", r" \1 ", text)
@@ -420,8 +445,11 @@ class Tokenizer:
         return text.strip()
 
     def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
-        self.word_index[self.pad_token] = 0  # Padding token always at index 0
-        next_index = 1
+        """
+        Fit tokenizer on texts, keeping special tokens at their fixed positions.
+        Regular vocabulary starts at index FIRST_REGULAR_IDX (4).
+        """
+        FIRST_REGULAR_IDX = len(self.SPECIAL_TOKENS)
         
         for text in texts:
             text = self.preprocess_text(text) if preprocess_ponctuation else text
@@ -437,33 +465,36 @@ class Tokenizer:
                     w = w.lower()
                 if w in self.filters:
                     continue
+                    
+                if w in [token for token, _ in self.SPECIAL_TOKENS.values()]:
+                    continue
+                    
                 if w in self.word_counts:
                     self.word_counts[w] += 1
                 else:
                     self.word_counts[w] = 1
+                    
                 if w in self.word_docs:
                     self.word_docs[w] += 1
                 else:
                     self.word_docs[w] = 1
 
-        wcounts = list(self.word_counts.items())
+        wcounts = [(w, c) for w, c in self.word_counts.items()]
         wcounts.sort(key=lambda x: x[1], reverse=True)
         sorted_voc = [wc[0] for wc in wcounts]
 
+        next_index = FIRST_REGULAR_IDX
         for w in sorted_voc:
             if w not in self.word_index:
                 self.word_index[w] = next_index
                 next_index += 1
 
-        vocab_size = len(self.word_index)
-        self.word_index[self.unk_token] = vocab_size + 1
-        self.word_index[self.sos_token] = vocab_size + 2
-        self.word_index[self.eos_token] = vocab_size + 3
-
         if self.num_words is not None:
-            special_tokens = {self.pad_token, self.unk_token, self.sos_token, self.eos_token}
-            keep_tokens = {w: i for w, i in self.word_index.items() 
-                         if i < self.num_words or w in special_tokens}
+            keep_tokens = {
+                w: i for w, i in self.word_index.items() 
+                if (i < self.num_words or 
+                    w in [token for token, _ in self.SPECIAL_TOKENS.values()])
+            }
             self.word_index = keep_tokens
 
         self.index_word = {i: w for w, i in self.word_index.items()}

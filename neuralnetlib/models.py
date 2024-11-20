@@ -1299,62 +1299,29 @@ class Transformer(BaseModel):
                  padding_size: int = 32,
                  scale_embeddings: bool = True,
                  random_state: int | None = None,
-                 pad_idx: int = 0,
-                 src_unk_idx: int | None = None,
-                 src_sos_idx: int | None = None,
-                 src_eos_idx: int | None = None,
-                 tgt_unk_idx: int | None = None,
-                 tgt_sos_idx: int | None = None,
-                 tgt_eos_idx: int | None = None,
-                 ) -> None:
-        
-        # Source special tokens
-        self.PAD_IDX = pad_idx
-        if src_unk_idx is None:
-            regular_token_end = src_vocab_size - 4
-            self.SRC_UNK_IDX = regular_token_end + 2
-        else:
-            self.SRC_UNK_IDX = src_unk_idx
-            
-        if src_sos_idx is None:
-            self.SRC_SOS_IDX = self.SRC_UNK_IDX + 1
-        else:
-            self.SRC_SOS_IDX = src_sos_idx
-            
-        if src_eos_idx is None:
-            self.SRC_EOS_IDX = self.SRC_UNK_IDX + 2
-        else:
-            self.SRC_EOS_IDX = src_eos_idx
-            
-        # Target special tokens
-        if tgt_unk_idx is None:
-            regular_token_end = tgt_vocab_size - 4
-            self.TGT_UNK_IDX = regular_token_end + 2
-        else:
-            self.TGT_UNK_IDX = tgt_unk_idx
-            
-        if tgt_sos_idx is None:
-            self.TGT_SOS_IDX = self.TGT_UNK_IDX + 1
-        else:
-            self.TGT_SOS_IDX = tgt_sos_idx
-            
-        if tgt_eos_idx is None:
-            self.TGT_EOS_IDX = self.TGT_UNK_IDX + 2
-        else:
-            self.TGT_EOS_IDX = tgt_eos_idx
+                ) -> None:
         
         super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
-        self.src_vocab_size: int = src_vocab_size
-        self.tgt_vocab_size: int = tgt_vocab_size
-        self.d_model: int = d_model
-        self.n_heads: int = n_heads
-        self.n_encoder_layers: int = n_encoder_layers
-        self.n_decoder_layers: int = n_decoder_layers
-        self.d_ff: int = d_ff
-        self.dropout_rate: float = dropout_rate
-        self.max_sequence_length: int = max_sequence_length
+        self.PAD_IDX = 0
+        self.SRC_UNK_IDX = 1
+        self.SRC_SOS_IDX = 2
+        self.SRC_EOS_IDX = 3
+        
+        self.TGT_UNK_IDX = 1
+        self.TGT_SOS_IDX = 2
+        self.TGT_EOS_IDX = 3
+        
+        self.src_vocab_size = src_vocab_size
+        self.tgt_vocab_size = tgt_vocab_size
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.n_encoder_layers = n_encoder_layers
+        self.n_decoder_layers = n_decoder_layers
+        self.d_ff = d_ff
+        self.dropout_rate = dropout_rate
+        self.max_sequence_length = max_sequence_length
         
         self.src_embedding = Embedding(self.src_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
         self.tgt_embedding = Embedding(self.tgt_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
