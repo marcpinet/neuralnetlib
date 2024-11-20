@@ -199,8 +199,9 @@ class SequenceCrossEntropy(LossFunction):
                     y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
                 else:
                     y_true_smooth[i, j, token] = 1.0
-                        
-        loss = -np.sum(y_true_smooth * np.log(y_pred) * mask[..., np.newaxis])
+        
+        log_probs = np.log(y_pred + self.epsilon)
+        loss = -np.sum(y_true_smooth * log_probs * mask[..., np.newaxis])
         return loss / (np.sum(mask) + self.epsilon)
     
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
@@ -228,10 +229,28 @@ class SequenceCrossEntropy(LossFunction):
                 else:
                     y_true_smooth[i, j, token] = 1.0
         
-        grad = -(y_true_smooth / y_pred)
+        total_tokens = np.sum(mask) + self.epsilon
+        
+        grad = y_pred - y_true_smooth
+        
         grad *= mask[..., np.newaxis]
+        grad /= total_tokens
         
-        total_tokens = np.sum(mask)
-        grad /= (total_tokens + self.epsilon)
+        stabilizer = self.epsilon * np.sign(grad)
+        grad += stabilizer
         
-        return np.clip(grad, -1.0, 1.0)
+        grad = np.clip(grad, -1.0, 1.0)
+        
+        return grad
+    
+    def hessian(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+        
+        mask = np.ones_like(y_true, dtype=np.float32)
+        for token in self.ignore_tokens:
+            mask *= (y_true != token)
+            
+        hessian = y_pred * (1 - y_pred)
+        hessian *= mask[..., np.newaxis]
+        
+        return hessian / (np.sum(mask) + self.epsilon)

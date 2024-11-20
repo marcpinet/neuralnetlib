@@ -2539,21 +2539,54 @@ class MultiHeadAttention(Layer):
         dk = np.float32(key.shape[-1])
         scaled_attention_logits = matmul_qk / np.sqrt(dk)
         
+        logits_std = np.std(scaled_attention_logits, axis=-1, keepdims=True) + 1e-12
+        scaled_attention_logits = scaled_attention_logits / logits_std
+        
         if mask is not None:
             while len(mask.shape) < len(scaled_attention_logits.shape):
                 mask = np.expand_dims(mask, axis=1)
-            scaled_attention_logits = np.where(mask, -1e9, scaled_attention_logits)
+            
+            LOG_MASK_VALUE = -1e4
+            masked_logits = np.where(mask, LOG_MASK_VALUE, scaled_attention_logits)
+            
+            attention_max = np.max(masked_logits, axis=-1, keepdims=True)
+            
+            log_attention = scaled_attention_logits - attention_max
+            
+            exp_attention = np.exp(log_attention, dtype=np.float64)
+            
+            exp_attention = np.where(mask, 0.0, exp_attention)
+        else:
+            attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
+            log_attention = scaled_attention_logits - attention_max
+            exp_attention = np.exp(log_attention, dtype=np.float64)
         
-        attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
-        exp_attention = np.exp(scaled_attention_logits - attention_max)
-        attention_weights = exp_attention / (np.sum(exp_attention, axis=-1, keepdims=True) + 1e-9)
+        attention_sum = np.sum(exp_attention, axis=-1, keepdims=True, dtype=np.float64)
+        
+        eps = np.finfo(np.float64).tiny
+        attention_weights = exp_attention / (attention_sum + eps)
+        
+        attention_weights = attention_weights.astype(np.float32)
+        
+        attention_weights = np.where(
+            attention_weights < np.finfo(np.float32).tiny,
+            0.0,
+            attention_weights
+        )
         
         if training and self.dropout is not None:
             attention_weights = self.dropout.forward_pass(attention_weights)
         
-        attention_output = np.matmul(attention_weights, value)
+        attention_output = np.matmul(
+            attention_weights.astype(np.float64), 
+            value.astype(np.float64)
+        ).astype(np.float32)
         
         self.attention_weights = attention_weights
+        
+        if np.any(np.isnan(attention_output)) or np.any(np.isinf(attention_output)):
+            raise ValueError("Attention output contains NaN or Inf values")
+            
         return attention_output
 
     def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
@@ -2597,52 +2630,47 @@ class MultiHeadAttention(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
-        batch_size: int = output_error.shape[0]
-        query_seq_length: int = output_error.shape[1]
-        key_value_seq_length: int = self.reshaped_value.shape[2]
+        batch_size = output_error.shape[0]
+        query_seq_length = output_error.shape[1]
+        key_value_seq_length = self.reshaped_value.shape[2]
 
-        d_attention_output: np.ndarray = np.reshape(output_error,
-                                                  (batch_size, query_seq_length, self.num_heads, self.value_dim))
+        d_attention_output = np.reshape(output_error, 
+            (batch_size, query_seq_length, self.num_heads, -1))
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
 
-        if len(self.attention_weights.shape) != 4:
-            raise ValueError(f"Expected 4D attention weights, got shape {self.attention_weights.shape}")
+        epsilon = 1e-10
+        
+        d_values = np.matmul(
+            np.transpose(self.attention_weights, (0, 1, 3, 2)),
+            d_attention_output
+        )
 
-        try:
-            d_weights: np.ndarray = np.matmul(d_attention_output, 
-                                            np.transpose(self.reshaped_value, (0, 1, 3, 2)))
-            
-            attention_weights_t = np.transpose(self.attention_weights, (0, 1, 3, 2))
-            if attention_weights_t.shape[-2:] != (key_value_seq_length, query_seq_length):
-                raise ValueError(f"Invalid attention weights shape after transpose: {attention_weights_t.shape}")
-            
-            d_values: np.ndarray = np.matmul(attention_weights_t, d_attention_output)
+        d_weights = np.matmul(
+            d_attention_output,
+            np.transpose(self.reshaped_value, (0, 1, 3, 2))
+        )
 
-        except ValueError as e:
-            print("Shape mismatch in attention backward pass:")
-            print(f"d_attention_output: {d_attention_output.shape}")
-            print(f"reshaped_value: {self.reshaped_value.shape}")
-            print(f"attention_weights: {self.attention_weights.shape}")
-            raise e
-
-        d_scores: np.ndarray = d_weights * self.attention_weights
-        d_scores -= self.attention_weights * np.sum(d_weights * self.attention_weights, 
-                                                  axis=-1, keepdims=True)
+        attention_weights = np.clip(self.attention_weights, epsilon, 1.0 - epsilon)
+        d_scores = d_weights * attention_weights
+        sum_d_scores = np.sum(d_weights * attention_weights, axis=-1, keepdims=True)
+        d_scores -= attention_weights * sum_d_scores
+        
         d_scores /= np.sqrt(self.key_dim)
 
         if self.dropout and isinstance(self.attention_weights, np.ndarray):
             d_scores = self.dropout.backward_pass(d_scores)
 
-        d_query: np.ndarray = np.matmul(d_scores, self.reshaped_key)
-        d_key: np.ndarray = np.matmul(np.transpose(d_scores, (0, 1, 3, 2)), 
-                                    self.reshaped_query)
+        d_query = np.matmul(d_scores, self.reshaped_key)
+        d_key = np.matmul(
+            np.transpose(d_scores, (0, 1, 3, 2)),
+            self.reshaped_query
+        )
 
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
         d_values = np.transpose(d_values, (0, 2, 1, 3))
 
         final_dim = self.num_heads * self.key_dim
-        
         d_query = np.reshape(d_query, (batch_size, query_seq_length, final_dim))
         d_key = np.reshape(d_key, (batch_size, key_value_seq_length, final_dim))
         d_values = np.reshape(d_values, (batch_size, key_value_seq_length, final_dim))
@@ -2695,6 +2723,7 @@ class PositionalEncoding(Layer):
         self,
         max_sequence_length: int,
         embedding_dim: int,
+        scale_embeddings: bool = True,
         trainable: bool = False,
         random_state: int = None,
         **kwargs
@@ -2702,14 +2731,17 @@ class PositionalEncoding(Layer):
         super().__init__()
         self.max_sequence_length = max_sequence_length
         self.embedding_dim = embedding_dim
+        self.scale_embeddings = scale_embeddings
         self.trainable = trainable
         self.random_state = random_state
         self.weights = None
         self.d_weights = None
         self.seq_length = None
+        self.scale_factor = np.sqrt(embedding_dim) if scale_embeddings else 1.0
 
         if trainable:
             self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
+            self.initialize_weights()
         else:
             self._build_sinusoidal_encoding()
 
@@ -2717,27 +2749,30 @@ class PositionalEncoding(Layer):
             setattr(self, key, value)
             
     def __str__(self) -> str:
-        return f'PositionalEncoding(seq_length={self.seq_length}, embedding_dim={self.embedding_dim}, trainable={self.trainable})'
+        return (f'PositionalEncoding(seq_length={self.seq_length}, '
+                f'embedding_dim={self.embedding_dim}, trainable={self.trainable}, '
+                f'scale_embeddings={self.scale_embeddings})')
     
     def _build_sinusoidal_encoding(self) -> None:
         position = np.arange(self.max_sequence_length)[:, np.newaxis]
-
+        
         div_term = np.power(
             10000.0,
             np.arange(0, self.embedding_dim, 2, dtype=np.float32) / self.embedding_dim
         )
         
         pe = np.zeros((self.max_sequence_length, self.embedding_dim), dtype=np.float32)
+        
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
         
         self.weights = pe[np.newaxis, :, :]
-        self.weights = self.weights / np.sqrt(self.embedding_dim)
+        
         self.d_weights = np.zeros_like(self.weights)
     
-    def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
+    def initialize_weights(self) -> None:
         if self.trainable:
-            limit = np.sqrt(6 / (self.max_sequence_length + self.embedding_dim))
+            limit = 1.0 / np.sqrt(self.embedding_dim)
             self.weights = self.rng.uniform(
                 -limit, limit,
                 (1, self.max_sequence_length, self.embedding_dim)
@@ -2757,11 +2792,19 @@ class PositionalEncoding(Layer):
         if batch_size > 1:
             pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
             
-        return input_data + pos_encoding
+        if self.scale_embeddings:
+            scaled_input = input_data * self.scale_factor
+            return scaled_input + pos_encoding
+        else:
+            return input_data + pos_encoding
     
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.trainable:
             _, seq_len, _ = output_error.shape
+            
+            if self.scale_embeddings:
+                output_error = output_error * self.scale_factor
+                
             self.d_weights[:, :seq_len, :] += np.sum(output_error, axis=0, keepdims=True)
             
         return output_error
@@ -2914,7 +2957,7 @@ class AddNorm(Layer):
             self.initialize_weights(combined.shape)
         
         self.mean = np.mean(combined, axis=-1, keepdims=True)
-        self.var = np.var(combined, axis=-1, keepdims=True)
+        self.var = np.var(combined, axis=-1, keepdims=True, ddof=1)
         
         self.normalized = (combined - self.mean) / np.sqrt(self.var + self.epsilon)
         
@@ -3187,7 +3230,9 @@ class TransformerDecoderLayer(Layer):
         
         d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
+        
         d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
+        
         d_out1 = d_residual2 + d_attn2_query
         
         d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
@@ -3195,11 +3240,31 @@ class TransformerDecoderLayer(Layer):
         d_x = self.self_attention.backward_pass(d_attn1)
         d_x = d_residual1 + d_x
         
-        d_enc = d_attn2_key + d_attn2_value
+        batch_size, seq_len, hidden_dim = d_attn2_key.shape
+        attention_weights = self.cross_attention.attention_weights
+        num_heads = self.cross_attention.num_heads
+        
+        head_importance = np.mean(attention_weights, axis=(2, 3))
+        
+        head_importance = head_importance.reshape(batch_size, num_heads, 1, 1)
+        
+        d_key_heads = d_attn2_key.reshape(batch_size, seq_len, num_heads, -1)
+        d_key_heads = np.transpose(d_key_heads, (0, 2, 1, 3))
+        
+        d_value_heads = d_attn2_value.reshape(batch_size, seq_len, num_heads, -1)
+        d_value_heads = np.transpose(d_value_heads, (0, 2, 1, 3))
+        
+        d_key_weighted = head_importance * d_key_heads
+        d_value_weighted = (1.0 - head_importance) * d_value_heads
+        
+        d_combined_heads = d_key_weighted + d_value_weighted
+        
+        d_combined = np.transpose(d_combined_heads, (0, 2, 1, 3))
+        d_combined = d_combined.reshape(batch_size, seq_len, hidden_dim)
         
         self.cache.clear()
         
-        return d_x, d_enc
+        return d_x, d_combined
         
     def get_config(self) -> dict:
         return {

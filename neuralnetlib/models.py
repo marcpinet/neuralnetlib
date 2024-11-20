@@ -1296,6 +1296,7 @@ class Transformer(BaseModel):
                  gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = True,
                  padding_size: int = 32,
+                 scale_embeddings: bool = True,
                  random_state: int | None = None,
                  pad_idx: int = 0,
                  unk_idx: int | None = None,
@@ -1329,7 +1330,11 @@ class Transformer(BaseModel):
         self.max_sequence_length: int = max_sequence_length
         
         self.embedding = Embedding(vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
-        self.positional_encoding = PositionalEncoding(max_sequence_length, d_model)
+        self.positional_encoding = PositionalEncoding(
+            max_sequence_length=max_sequence_length,
+            embedding_dim=d_model,
+            scale_embeddings=scale_embeddings
+        )
         
         self.encoder_dropout = Dropout(dropout_rate, random_state=random_state)
         self.encoder_layers: list = []
@@ -1389,12 +1394,10 @@ class Transformer(BaseModel):
 
     def encode(self, inp: np.ndarray, training: bool = True, mask: np.ndarray | None = None) -> np.ndarray:
         x = self.embedding.forward_pass(inp)
-        x = x * np.sqrt(self.d_model)
         x = self.positional_encoding.forward_pass(x)
-        
         x = self.encoder_dropout.forward_pass(x, training=training)
         
-        for _, encoder_layer in enumerate(self.encoder_layers):
+        for encoder_layer in self.encoder_layers:
             x = encoder_layer.forward_pass(x, mask=mask, training=training)
             
         return x
@@ -1404,7 +1407,6 @@ class Transformer(BaseModel):
             padding_mask: np.ndarray | None = None) -> np.ndarray:
         
         x = self.embedding.forward_pass(tar)
-        x = x * np.sqrt(self.d_model)  # Scale embeddings
         x = self.positional_encoding.forward_pass(x)
         
         if training:
