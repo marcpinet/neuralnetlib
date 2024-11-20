@@ -222,11 +222,12 @@ class EarlyStopping(Callback):
 
 class LearningRateScheduler(Callback):
     def __init__(self, 
-                 schedule: (str | callable),
+                 schedule,
                  initial_learning_rate: float = 0.01,
                  min_learning_rate: float = 1e-6,
                  schedule_params: dict = None,
                  verbose: bool = False) -> None:
+        """Schedule can be a string or a callable function."""
         super().__init__()
         self.initial_learning_rate = initial_learning_rate
         self.min_learning_rate = min_learning_rate
