@@ -2714,7 +2714,7 @@ class PositionalEncoding(Layer):
         self.weights = None
         self.d_weights = None
         self.seq_length = None
-        self.scale_factor = np.sqrt(embedding_dim) if scale_embeddings else 1.0
+        self.scale_factor = 1.0 if not scale_embeddings else 1.0 / np.sqrt(embedding_dim)
 
         if trainable:
             self.rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
@@ -2749,7 +2749,7 @@ class PositionalEncoding(Layer):
     
     def initialize_weights(self) -> None:
         if self.trainable:
-            limit = 1.0 / np.sqrt(self.embedding_dim)
+            limit = 0.02
             self.weights = self.rng.uniform(
                 -limit, limit,
                 (1, self.max_sequence_length, self.embedding_dim)
@@ -2771,9 +2771,10 @@ class PositionalEncoding(Layer):
             
         if self.scale_embeddings:
             scaled_input = input_data * self.scale_factor
-            return scaled_input + pos_encoding
+            scaled_pos_encoding = pos_encoding * self.scale_factor
+            return scaled_input + scaled_pos_encoding
         else:
-            return input_data + pos_encoding
+            return input_data + (pos_encoding * 0.1)
     
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.trainable:
