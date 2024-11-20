@@ -2547,6 +2547,7 @@ class MultiHeadAttention(Layer):
             )
         
         attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
+        self.attention_weights = attention_weights 
         output = np.matmul(attention_weights, value)
         
         return output
@@ -2616,9 +2617,6 @@ class MultiHeadAttention(Layer):
             (batch_size, query_seq_length, self.num_heads, -1))
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
         d_attention_output = clip_gradients(d_attention_output, self.gradient_threshold)
-        
-        if self.attention_weights is None:
-            self.attention_weights = np.ones((batch_size, self.num_heads, query_seq_length, key_value_seq_length))
         
         if self.attention_weights.shape != (batch_size, self.num_heads, query_seq_length, key_value_seq_length):
             raise ValueError(f"Attention weights shape {self.attention_weights.shape} doesn't match expected shape {(batch_size, self.num_heads, query_seq_length, key_value_seq_length)}")
