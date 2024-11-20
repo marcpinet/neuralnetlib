@@ -33,6 +33,8 @@ class ActivationFunction:
             return ELU()
         elif name == 'SELU':
             return SELU(alpha=config['alpha'], scale=config['scale'])
+        elif name == 'GELU':
+            return GELU()
         else:
             raise ValueError(f'Unknown activation function: {name}')
 
@@ -118,3 +120,17 @@ class SELU(ActivationFunction):
             'alpha': self.alpha,
             'scale': self.scale
         }
+        
+        
+class GELU(ActivationFunction):
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        return 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)))
+
+    def derivative(self, x: np.ndarray) -> np.ndarray:
+        z = np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)
+        tanh_z = np.tanh(z)
+        g = np.sqrt(2 / np.pi) * (1 + 3 * 0.044715 * x**2)
+        return 0.5 * (1 + tanh_z + x * (1 - tanh_z**2) * g)
+
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}

@@ -2532,24 +2532,23 @@ class MultiHeadAttention(Layer):
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
-    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
+    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, 
+                                    value: np.ndarray, mask: np.ndarray = None,
+                                    training: bool = True) -> np.ndarray:
         matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
         
+        # Optimized scaling
         dk = np.float32(key.shape[-1])
-        scaled_attention_logits = matmul_qk / np.sqrt(dk)
+        scaled_attention_logits = matmul_qk / (np.sqrt(dk) * 0.5)  # Keep higher temperature
         
         if mask is not None:
-            if len(mask.shape) == 3:  # [batch_size, seq_len_q, seq_len_k]
-                mask = mask[:, np.newaxis, :, :]  # [batch_size, 1, seq_len_q, seq_len_k]
-            
-            scaled_attention_logits = np.where(
-                mask, float('-inf'), scaled_attention_logits
-            )
+            scaled_attention_logits = np.where(mask, float('-inf'), scaled_attention_logits)
         
         attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
-        self.attention_weights = attention_weights 
-        output = np.matmul(attention_weights, value)
+        self.attention_weights = attention_weights
         
+        # Balanced output scaling
+        output = np.matmul(attention_weights, value) * 1.8  # Slightly reduced
         return output
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
@@ -3040,98 +3039,123 @@ class TransformerEncoderLayer(Layer):
         num_heads: int,
         d_ff: int,
         dropout_rate: float = 0.1,
-        attention_dropout: float = 0.0,
-        activation: str = 'relu',
-        kernel_initializer: str = "glorot_uniform",
+        attention_dropout: float = 0.1,
+        activation: str = 'gelu',
+        kernel_initializer: str = "glorot_normal",
         bias_initializer: str = "zeros",
         gradient_threshold: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
         super().__init__()
-        self.d_model: int = d_model
-        self.num_heads: int = num_heads
-        self.d_ff: int = d_ff
-        self.dropout_rate: float = dropout_rate
-        self.attention_dropout: float = attention_dropout
-        self.activation_name: str = activation
-        self.kernel_initializer: str = kernel_initializer
-        self.bias_initializer: str = bias_initializer
-        self.gradient_threshold: float = gradient_threshold
-        self.random_state: int | None = random_state
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.dropout_rate = dropout_rate
+        self.gradient_threshold = gradient_threshold
+        self.random_state = random_state
 
-        self.attention: MultiHeadAttention = MultiHeadAttention(
+        key_dim = d_model // num_heads
+        self.attention_key_scale = np.sqrt(key_dim) * 0.6
+        self.attention_output_scale = 1.6
+
+        self.attention = MultiHeadAttention(
             num_heads=num_heads,
-            key_dim=d_model // num_heads,
-            dropout_rate=attention_dropout,
+            key_dim=key_dim,
+            dropout_rate=attention_dropout * 0.6,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state,
+            random_state=random_state
         )
         
-        self.ffn: FeedForward = FeedForward(
-            d_ff=d_ff,
+        self.ffn = FeedForward(
+            d_ff=int(d_ff * 1.8),
             d_model=d_model,
-            dropout_rate=dropout_rate,
+            dropout_rate=dropout_rate * 0.6,
             activation=activation,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
             random_state=random_state
         )
         
-        self.attention_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
-        self.ffn_dropout: Dropout = Dropout(dropout_rate, random_state=random_state)
+        self.attention_dropout = Dropout(dropout_rate * 0.6, random_state=random_state)
+        self.ffn_dropout = Dropout(dropout_rate * 0.6, random_state=random_state)
         
-        self.attention_norm: AddNorm = AddNorm(random_state=random_state)
-        self.ffn_norm: AddNorm = AddNorm(random_state=random_state)
+        norm_config = {
+            'epsilon': 1e-5,
+            'gamma_init_std': 0.02,
+            'beta_init_std': 0.01,
+            'grad_clip': 2.0,
+            'random_state': random_state
+        }
+        
+        self.attention_norm = AddNorm(**norm_config)
+        self.ffn_norm = AddNorm(**norm_config)
+        
+        rng = np.random.default_rng(random_state)
+        self.attention_gate = 0.7 + 0.05 * rng.normal()
+        self.ffn_gate = 0.85 + 0.05 * rng.normal()
         
         for key, value in kwargs.items():
             setattr(self, key, value)
             
-    def __str__(self) -> str:
-        return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
-
     def forward_pass(
-        self, inputs: np.ndarray, mask: np.ndarray | None = None, training: bool = True
+        self, inputs: np.ndarray, mask: np.ndarray = None, training: bool = True
     ) -> np.ndarray:
-        self.x: np.ndarray = inputs
+        self.x = inputs
         
-        attn_output: np.ndarray = self.attention.forward_pass(self.x, mask=mask, training=training)
+        attn_output = self.attention.forward_pass(self.x, mask=mask, training=training)
+        attn_output = attn_output * self.attention_output_scale
+        
         if training:
             attn_output = self.attention_dropout.forward_pass(attn_output, training=True)
-        self.attn_output: np.ndarray = self.attention_norm.forward_pass((attn_output, self.x))
+            
+        gated_residual = self.x * self.attention_gate
+        self.attn_output = self.attention_norm.forward_pass((attn_output, gated_residual))
         
-        ffn_output: np.ndarray = self.ffn.forward_pass(self.attn_output, training=training)
+        ffn_output = self.ffn.forward_pass(self.attn_output, training=training)
+        ffn_output = ffn_output * 1.2
+        
         if training:
             ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
-        output: np.ndarray = self.ffn_norm.forward_pass((ffn_output, self.attn_output))
+            
+        gated_attn = self.attn_output * self.ffn_gate
+        output = self.ffn_norm.forward_pass((ffn_output, gated_attn))
         
         return output
         
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        output_error = output_error / np.sqrt(2.0)
         output_error = clip_gradients(output_error, self.gradient_threshold)
         
         ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
         ffn_dx = self.ffn_dropout.backward_pass(ffn_norm_dx)
+        ffn_dx = ffn_dx * 1.2
         ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         ffn_dx = self.ffn.backward_pass(ffn_dx)
         ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
+        ffn_norm_dresidual = ffn_norm_dresidual * self.ffn_gate
         ffn_dx = ffn_dx + ffn_norm_dresidual
         ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
         attn_dx = self.attention_dropout.backward_pass(attn_norm_dx)
+        attn_dx = attn_dx * self.attention_output_scale
         attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
         attn_dx = self.attention.backward_pass(attn_dx)
         attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
+        attn_norm_dresidual = attn_norm_dresidual * self.attention_gate
         dx = attn_dx + attn_norm_dresidual
         dx = clip_gradients(dx, self.gradient_threshold)
         
         return dx
+        
+    def __str__(self) -> str:
+        return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
         
     def get_config(self) -> dict:
         return {
