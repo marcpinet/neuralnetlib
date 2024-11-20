@@ -173,74 +173,87 @@ class SequenceCrossEntropy(LossFunction):
         super().__init__()
         self.label_smoothing = label_smoothing
         self.epsilon = 1e-10
-        self.ignore_tokens = ignore_tokens if ignore_tokens is not None else []
+        self.ignore_tokens = list(ignore_tokens) if ignore_tokens is not None else []
         self.repetition_penalty = repetition_penalty
         
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        y_true = y_true.astype(np.int32)
+        y_true = np.asarray(y_true, dtype=np.int32)
+        y_pred = np.asarray(y_pred, dtype=np.float32)
         
-        mask = np.ones_like(y_true, dtype=np.float32)
-        for token in self.ignore_tokens:
-            mask *= (y_true != token)
+        if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
+            raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
             
-        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+        ignore_tokens = np.array(self.ignore_tokens)
+        if ignore_tokens.size > 0:
+            is_ignored = np.isin(y_true, ignore_tokens)
+            mask = np.logical_not(is_ignored).astype(np.float32)
+        else:
+            mask = np.ones_like(y_true, dtype=np.float32)
+            
+        if np.sum(mask) <= self.epsilon:
+            return 0.0
+            
+        y_pred_clipped = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        smoothed = np.zeros_like(y_pred)
         n_classes = y_pred.shape[-1]
         smooth_value = self.label_smoothing / (n_classes - 1)
+        smoothed = np.full_like(y_pred, smooth_value, dtype=np.float32)
         
-        smoothed.fill(smooth_value)
+        valid_mask = ((y_true >= 0) & (y_true < n_classes) & mask.astype(bool))
+        rows, cols = np.nonzero(valid_mask)
+        smoothed[rows, cols] = smooth_value
+        smoothed[rows, cols, y_true[valid_mask]] = 1.0 - self.label_smoothing
         
-        for i in range(y_true.shape[0]):
-            for j in range(y_true.shape[1]):
-                if mask[i, j]:
-                    true_class = int(y_true[i, j])
-                    smoothed[i, j] = smooth_value
-                    if 0 <= true_class < n_classes:
-                        smoothed[i, j, true_class] = 1.0 - self.label_smoothing
+        if not np.isclose(self.repetition_penalty, 1.0, rtol=1e-09, atol=1e-09):
+            is_repeated = (y_true[:, 1:] == y_true[:, :-1])
+            repeat_mask = mask[:, 1:].astype(bool) & mask[:, :-1].astype(bool) & is_repeated
+            if np.any(repeat_mask):
+                rows, cols = np.nonzero(repeat_mask)
+                smoothed[rows, cols+1] *= self.repetition_penalty
         
-        for i in range(y_true.shape[0]):
-            for j in range(1, y_true.shape[1]):
-                if mask[i, j] and mask[i, j-1]:
-                    if y_true[i, j] == y_true[i, j-1]:
-                        smoothed[i, j] *= self.repetition_penalty
+        element_loss = -smoothed * np.log(y_pred_clipped + self.epsilon)
+        masked_loss = element_loss * mask[..., np.newaxis]
         
-        loss = -np.sum(smoothed * np.log(y_pred + self.epsilon) * mask[..., np.newaxis])
         normalizer = np.sum(mask) + self.epsilon
-        return loss / normalizer
+        return np.sum(masked_loss) / normalizer
     
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        y_true = y_true.astype(np.int32)
+        y_true = np.asarray(y_true, dtype=np.int32)
+        y_pred = np.asarray(y_pred, dtype=np.float32)
         
-        mask = np.ones_like(y_true, dtype=np.float32)
-        for token in self.ignore_tokens:
-            mask *= (y_true != token)
+        if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
+            raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
             
-        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+        ignore_tokens = np.array(self.ignore_tokens)
+        if ignore_tokens.size > 0:
+            is_ignored = np.isin(y_true, ignore_tokens)
+            mask = np.logical_not(is_ignored).astype(np.float32)
+        else:
+            mask = np.ones_like(y_true, dtype=np.float32)
+            
+        if np.sum(mask) <= self.epsilon:
+            return np.zeros_like(y_pred)
+            
+        y_pred_clipped = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        smoothed = np.zeros_like(y_pred)
         n_classes = y_pred.shape[-1]
         smooth_value = self.label_smoothing / (n_classes - 1)
+        smoothed = np.full_like(y_pred, smooth_value, dtype=np.float32)
         
-        smoothed.fill(smooth_value)
+        valid_mask = ((y_true >= 0) & (y_true < n_classes) & mask.astype(bool))
+        rows, cols = np.nonzero(valid_mask)
+        smoothed[rows, cols] = smooth_value
+        smoothed[rows, cols, y_true[valid_mask]] = 1.0 - self.label_smoothing
         
-        for i in range(y_true.shape[0]):
-            for j in range(y_true.shape[1]):
-                if mask[i, j]:
-                    true_class = int(y_true[i, j])
-                    if 0 <= true_class < n_classes:
-                        smoothed[i, j, true_class] = 1.0 - self.label_smoothing
+        if not np.isclose(self.repetition_penalty, 1.0, rtol=1e-09, atol=1e-09):
+            is_repeated = (y_true[:, 1:] == y_true[:, :-1])
+            repeat_mask = mask[:, 1:].astype(bool) & mask[:, :-1].astype(bool) & is_repeated
+            if np.any(repeat_mask):
+                rows, cols = np.nonzero(repeat_mask)
+                smoothed[rows, cols+1] *= self.repetition_penalty
         
-        for i in range(y_true.shape[0]):
-            for j in range(1, y_true.shape[1]):
-                if mask[i, j] and mask[i, j-1]:
-                    if y_true[i, j] == y_true[i, j-1]:
-                        smoothed[i, j] *= self.repetition_penalty
-        
-        grad = -(smoothed / (y_pred + self.epsilon))
-        grad *= mask[..., np.newaxis]
+        grad = -(smoothed / (y_pred_clipped + self.epsilon))
+        masked_grad = grad * mask[..., np.newaxis]
         
         normalizer = np.sum(mask) + self.epsilon
-        grad /= normalizer
-        
-        return grad
+        return masked_grad / normalizer
