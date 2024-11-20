@@ -1429,10 +1429,6 @@ class Transformer(BaseModel):
         
         self.last_attention_weights = attention_weights
         
-        x_mean = np.mean(x, axis=-1, keepdims=True)
-        x_std = np.std(x, axis=-1, keepdims=True) + 1e-6
-        x = (x - x_mean) / x_std
-        
         return x
 
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray], training: bool = True) -> np.ndarray:
@@ -1445,10 +1441,6 @@ class Transformer(BaseModel):
         dec_output = self.decode(tar, enc_output, training, look_ahead_mask, dec_padding_mask)
         
         output = self.output_layer.forward_pass(dec_output)
-        
-        output_mean = np.mean(output, axis=-1, keepdims=True)
-        output_std = np.std(output, axis=-1, keepdims=True) + 1e-6
-        output = (output - output_mean) / output_std
         
         return output
 

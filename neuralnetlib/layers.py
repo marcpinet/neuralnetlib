@@ -2533,43 +2533,37 @@ class MultiHeadAttention(Layer):
         return np.transpose(x, (0, 2, 1, 3))
 
     def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
-        if query.shape[-1] != key.shape[-1]:
-            raise ValueError(f"Query depth {query.shape[-1]} != Key depth {key.shape[-1]}")
-            
         matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
         
         dk = np.float32(key.shape[-1])
         scaled_attention_logits = matmul_qk / np.sqrt(dk)
         
         if mask is not None:
-            while len(mask.shape) < len(scaled_attention_logits.shape):
-                mask = np.expand_dims(mask, axis=1)
-            scaled_attention_logits = np.where(mask, -1e9, scaled_attention_logits)
+            if len(mask.shape) == 3:  # [batch_size, seq_len_q, seq_len_k]
+                mask = mask[:, np.newaxis, :, :]  # [batch_size, 1, seq_len_q, seq_len_k]
+            
+            scaled_attention_logits = np.where(
+                mask, float('-inf'), scaled_attention_logits
+            )
         
-        attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
-        exp_attention = np.exp(scaled_attention_logits - attention_max)
+        attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
+        output = np.matmul(attention_weights, value)
+        
+        return output
+
+    def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
+        max_x = np.max(x, axis=-1, keepdims=True)
+        exp_x = np.exp(x - max_x)
         
         if mask is not None:
-            exp_attention = np.where(mask, 0.0, exp_attention)
+            exp_x = np.where(mask, 0.0, exp_x)
         
-        attention_sum = np.sum(exp_attention, axis=-1, keepdims=True)
-        attention_weights = np.divide(exp_attention, attention_sum + 1e-9)
+        sum_x = np.sum(exp_x, axis=-1, keepdims=True)
         
-        attention_weights = np.where(
-            attention_weights < np.finfo(np.float32).tiny,
-            0.0,
-            attention_weights
-        )
+        valid_positions = (sum_x > 0).astype(np.float32)
+        sum_x = np.where(valid_positions > 0, sum_x, 1.0)
         
-        attention_output = np.matmul(attention_weights, value)
-        
-        if training and self.dropout is not None:
-            attention_output = self.dropout.forward_pass(attention_output)
-        
-        if np.any(np.isnan(attention_output)) or np.any(np.isinf(attention_output)):
-            raise ValueError("Attention output contains NaN or Inf values")
-            
-        return attention_output
+        return exp_x / sum_x
 
     def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         if isinstance(inputs, tuple):
@@ -2924,8 +2918,12 @@ class AddNorm(Layer):
 
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
         feature_shape = input_shape[-1]
-        self.gamma = np.ones((1, 1, feature_shape))
-        self.beta = np.zeros((1, 1, feature_shape))
+        rng = np.random.default_rng(self.random_state)
+        
+        self.gamma = 1.0 + 0.1 * rng.normal(0, 1, (1, 1, feature_shape))
+        
+        self.beta = 0.01 * rng.normal(0, 1, (1, 1, feature_shape))
+        
         self.d_gamma = np.zeros_like(self.gamma)
         self.d_beta = np.zeros_like(self.beta)
 
@@ -2944,24 +2942,29 @@ class AddNorm(Layer):
         self.mean = np.mean(combined, axis=-1, keepdims=True)
         self.var = np.var(combined, axis=-1, keepdims=True, ddof=1)
         
-        self.normalized = (combined - self.mean) / np.sqrt(self.var + self.epsilon)
+        std = np.sqrt(self.var + self.epsilon)
+        self.normalized = (combined - self.mean) / std
+        
+        self.std = std
+        self.output_before_gamma = self.normalized
         
         return self.gamma * self.normalized + self.beta
-        
+
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        self.d_gamma = np.sum(output_error * self.normalized, axis=(0, 1), keepdims=True)
+        N = output_error.shape[-1]
+        
+        self.d_gamma = np.sum(output_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
         self.d_beta = np.sum(output_error, axis=(0, 1), keepdims=True)
         
         d_normalized = output_error * self.gamma
         
-        d_var = -0.5 * np.sum(d_normalized * (self.normalized - self.mean), 
-                             axis=-1, keepdims=True) / (self.var + self.epsilon)
+        d_variance = -0.5 * np.sum(d_normalized * (self.output_before_gamma), axis=-1, keepdims=True) / self.std
         
-        d_mean = -np.sum(d_normalized, axis=-1, keepdims=True) / np.sqrt(self.var + self.epsilon)
+        d_mean = -np.sum(d_normalized / self.std, axis=-1, keepdims=True)
         
-        d_input = (d_normalized / np.sqrt(self.var + self.epsilon) + 
-                  2 * d_var * (self.normalized - self.mean) / self.normalized.shape[-1] +
-                  d_mean / self.normalized.shape[-1])
+        d_input = (d_normalized / self.std + 
+                  2.0 * d_variance * (self.output_before_gamma) / N +
+                  d_mean / N)
         
         return d_input, d_input
         
