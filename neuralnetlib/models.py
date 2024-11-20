@@ -1470,7 +1470,7 @@ class Transformer(BaseModel):
         
         dx_enc = self.embedding.backward_pass(dx_enc)
 
-    def prepare_data(self, x_train, y_train):
+    def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
         max_seq_len = self.max_sequence_length
         
         x_train_with_tokens = [
@@ -1489,15 +1489,18 @@ class Transformer(BaseModel):
                                     padding='post', 
                                     pad_value=self.PAD_IDX)
         
-        x_mean = np.mean(x_train_padded)
-        x_std = np.std(x_train_padded) + 1e-8
-        y_mean = np.mean(y_train_padded)
-        y_std = np.std(y_train_padded) + 1e-8
+        if normalize:
+            x_mean = np.mean(x_train_padded)
+            x_std = np.std(x_train_padded) + 1e-8
+            y_mean = np.mean(y_train_padded)
+            y_std = np.std(y_train_padded) + 1e-8
+
+            x_train_normalized = (x_train_padded - x_mean) / x_std
+            y_train_normalized = (y_train_padded - y_mean) / y_std
+
+            return x_train_normalized, y_train_normalized
         
-        x_train_normalized = (x_train_padded - x_mean) / x_std
-        y_train_normalized = (y_train_padded - y_mean) / y_std
-        
-        return x_train_normalized, y_train_normalized
+        return x_train_padded, y_train_padded
 
     def compile(self, 
                 loss_function: LossFunction | str, 
