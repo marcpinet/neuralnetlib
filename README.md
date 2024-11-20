@@ -185,6 +185,12 @@ And test your changes on the examples.
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 
+## 🐞 Know issues
+
+- [ ] The transformer has gradient issues (normalization and often constant attention weights after a few epochs)
+- [ ] The save feature of some very rare cases (layers/models) aren't working properly (I just need to read my old code again)
+
+
 ## ✍️ Authors
 
 - Marc Pinet - *Initial work* - [marcpinet](https://github.com/marcpinet)
