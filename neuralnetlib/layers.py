@@ -2901,16 +2901,29 @@ class AddNorm(Layer):
     def __init__(
         self,
         epsilon: float = 1e-6,
+        gamma_init_std: float = 0.05,
+        beta_init_std: float = 0.01,
+        grad_clip: float = 3.0,
+        warmup_steps: int = 1000,
         random_state: int = None,
         **kwargs
     ) -> None:
         super().__init__()
         self.epsilon = epsilon
+        self.gamma_init_std = gamma_init_std
+        self.beta_init_std = beta_init_std
+        self.grad_clip = grad_clip
+        self.warmup_steps = warmup_steps
+        self.random_state = random_state
+        
+        self.step = 0
         self.gamma = None
         self.beta = None
         self.d_gamma = None
         self.d_beta = None
-        self.random_state = random_state
+        
+        self.grad_ema = None
+        self.grad_emv = None
         
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -2919,15 +2932,39 @@ class AddNorm(Layer):
         feature_shape = input_shape[-1]
         rng = np.random.default_rng(self.random_state)
         
-        self.gamma = 1.0 + 0.1 * rng.normal(0, 1, (1, 1, feature_shape))
-        
-        self.beta = 0.01 * rng.normal(0, 1, (1, 1, feature_shape))
+        self.gamma = 1.0 + self.gamma_init_std * rng.normal(0, 1, (1, 1, feature_shape))
+        self.beta = self.beta_init_std * rng.normal(0, 1, (1, 1, feature_shape))
         
         self.d_gamma = np.zeros_like(self.gamma)
         self.d_beta = np.zeros_like(self.beta)
-
-    def __str__(self) -> str:
-        return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
+        
+        self.grad_ema = np.zeros_like(self.gamma)
+        self.grad_emv = np.ones_like(self.gamma)
+        
+    def get_warmup_factor(self) -> float:
+        return min(1.0, (self.step + 1) / self.warmup_steps)
+        
+    def update_gradient_stats(self, grad: np.ndarray) -> None:
+        if self.grad_ema is None:
+            return
+            
+        beta1, beta2 = 0.9, 0.999  # Adam like momentum and variance
+        
+        self.grad_ema = beta1 * self.grad_ema + (1 - beta1) * grad
+        
+        self.grad_emv = beta2 * self.grad_emv + (1 - beta2) * (grad ** 2)
+        
+    def normalize_gradients(self, grad: np.ndarray) -> np.ndarray:
+        """Normalize gradients using running statistics"""
+        if self.grad_emv is None:
+            return grad
+            
+        scale = np.sqrt(self.grad_emv) + self.epsilon
+        
+        warmup = self.get_warmup_factor()
+        
+        normalized = grad / scale * warmup
+        return np.clip(normalized, -self.grad_clip, self.grad_clip)
         
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
         x, residual = inputs
@@ -2939,9 +2976,9 @@ class AddNorm(Layer):
             self.initialize_weights(combined.shape)
         
         self.mean = np.mean(combined, axis=-1, keepdims=True)
-        self.var = np.var(combined, axis=-1, keepdims=True, ddof=1)
+        self.var = np.var(combined, axis=-1, keepdims=True, ddof=1) + self.epsilon
         
-        std = np.sqrt(self.var + self.epsilon)
+        std = np.sqrt(self.var)
         self.normalized = (combined - self.mean) / std
         
         self.std = std
@@ -2951,21 +2988,35 @@ class AddNorm(Layer):
 
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         N = output_error.shape[-1]
+        batch_size = output_error.shape[0]
+        self.step += 1
         
-        self.d_gamma = np.sum(output_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
-        self.d_beta = np.sum(output_error, axis=(0, 1), keepdims=True)
+        d_gamma_raw = np.sum(output_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
+        d_beta_raw = np.sum(output_error, axis=(0, 1), keepdims=True)
+        
+        scale = 1.0 / (batch_size * output_error.shape[1])
+        d_gamma = d_gamma_raw * scale
+        d_beta = d_beta_raw * scale
+        
+        self.update_gradient_stats(d_gamma)
+        
+        self.d_gamma = self.normalize_gradients(d_gamma)
+        self.d_beta = self.normalize_gradients(d_beta)
         
         d_normalized = output_error * self.gamma
         
-        d_variance = -0.5 * np.sum(d_normalized * (self.output_before_gamma), axis=-1, keepdims=True) / self.std
-        
+        d_variance = -0.5 * np.sum(d_normalized * self.output_before_gamma, 
+                                 axis=-1, keepdims=True) / self.std
         d_mean = -np.sum(d_normalized / self.std, axis=-1, keepdims=True)
         
         d_input = (d_normalized / self.std + 
-                  2.0 * d_variance * (self.output_before_gamma) / N +
+                  2.0 * d_variance * self.output_before_gamma / N +
                   d_mean / N)
         
         return d_input, d_input
+        
+    def __str__(self) -> str:
+        return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
         
     def get_config(self) -> dict:
         return {
