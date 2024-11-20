@@ -221,31 +221,103 @@ class EarlyStopping(Callback):
 
 
 class LearningRateScheduler(Callback):
-    def __init__(self, schedule: callable, verbose: int = 0) -> None:
+    def __init__(self, 
+                 schedule: (str | callable),
+                 initial_learning_rate: float = 0.01,
+                 min_learning_rate: float = 1e-6,
+                 schedule_params: dict = None,
+                 verbose: bool = False) -> None:
         super().__init__()
-        self.schedule = schedule
+        self.initial_learning_rate = initial_learning_rate
+        self.min_learning_rate = min_learning_rate
         self.verbose = verbose
+        self.schedule_params = schedule_params or {}
+        
+        if isinstance(schedule, str):
+            self.schedule = self._get_schedule_function(schedule)
+        else:
+            self.schedule = schedule
+            
+        self.current_learning_rate = initial_learning_rate
 
-    def on_epoch_begin(self, epoch: int, logs: dict | None = None) -> None:
-        logs = logs or {}
-        model = logs.get('model')
-        if model is None:
-            raise ValueError("Model not found in logs. Ensure 'model' is passed in logs.")
+    def _step_decay(self, epoch: int, initial_learning_rate: float) -> float:
+        drop_rate = self.schedule_params.get('drop_rate', 0.5)
+        epochs_drop = self.schedule_params.get('epochs_drop', 10.0)
+        
+        learning_rate = initial_learning_rate * np.power(
+            drop_rate, np.floor((1 + epoch) / epochs_drop))
+        return max(learning_rate, self.min_learning_rate)
 
-        new_lr = self.schedule(epoch)
+    def _exponential_decay(self, epoch: int, initial_learning_rate: float) -> float:
+        decay_rate = self.schedule_params.get('decay_rate', 0.1)
+        
+        learning_rate = initial_learning_rate * np.exp(-decay_rate * epoch)
+        return max(learning_rate, self.min_learning_rate)
 
-        if hasattr(model, 'optimizer') and hasattr(model.optimizer, 'learning_rate'):
-            old_lr = model.optimizer.learning_rate
+    def _cosine_decay(self, epoch: int, initial_learning_rate: float) -> float:
+        total_epochs = self.schedule_params.get('total_epochs', 100)
+        
+        learning_rate = self.min_learning_rate + 0.5 * (initial_learning_rate - self.min_learning_rate) * \
+            (1 + np.cos(np.pi * epoch / total_epochs))
+        return max(learning_rate, self.min_learning_rate)
+
+    def _warmup_cosine_decay(self, epoch: int, initial_learning_rate: float) -> float:
+        warmup_epochs = self.schedule_params.get('warmup_epochs', 5)
+        total_epochs = self.schedule_params.get('total_epochs', 100)
+        
+        if epoch < warmup_epochs:
+            learning_rate = (epoch + 1) * initial_learning_rate / warmup_epochs
+        else:
+            learning_rate = self.min_learning_rate + 0.5 * (initial_learning_rate - self.min_learning_rate) * \
+                (1 + np.cos(np.pi * (epoch - warmup_epochs) / (total_epochs - warmup_epochs)))
+        return max(learning_rate, self.min_learning_rate)
+
+    def _cyclical(self, epoch: int, initial_learning_rate: float) -> float:
+        step_size = self.schedule_params.get('step_size', 5)
+        max_lr = self.schedule_params.get('max_lr', initial_learning_rate * 3)
+        
+        cycle = np.floor(1 + epoch / (2 * step_size))
+        x = np.abs(epoch / step_size - 2 * cycle + 1)
+        learning_rate = initial_learning_rate + (max_lr - initial_learning_rate) * max(0, 1 - x)
+        return max(learning_rate, self.min_learning_rate)
+
+    def _get_schedule_function(self, schedule_name: str) -> callable:
+        schedules = {
+            'step': self._step_decay,
+            'exponential': self._exponential_decay,
+            'cosine': self._cosine_decay,
+            'warmup_cosine': self._warmup_cosine_decay,
+            'cyclical': self._cyclical
+        }
+        
+        if schedule_name not in schedules:
+            raise ValueError(f"Unknown schedule: {schedule_name}. Available schedules: {list(schedules.keys())}")
+        
+        return schedules[schedule_name]
+
+    def _update_optimizer_learning_rate(self, model, new_lr: float) -> None:
+        if hasattr(model, 'optimizer'):
             model.optimizer.learning_rate = new_lr
-            if self.verbose > 0:
-                print(f"Epoch {epoch + 1}: Learning rate updated from {old_lr:.5f} to {new_lr:.5f}")
         elif hasattr(model, 'encoder_optimizer') and hasattr(model, 'decoder_optimizer'):
-            old_encoder_lr = model.encoder_optimizer.learning_rate
-            old_decoder_lr = model.decoder_optimizer.learning_rate
             model.encoder_optimizer.learning_rate = new_lr
             model.decoder_optimizer.learning_rate = new_lr
-            if self.verbose > 0:
-                print(f"Epoch {epoch + 1}: Encoder learning rate updated from {old_encoder_lr:.5f} to {new_lr:.5f}")
-                print(f"Epoch {epoch + 1}: Decoder learning rate updated from {old_decoder_lr:.5f} to {new_lr:.5f}")
-        else:
-            raise AttributeError("Model's optimizer(s) do not have a learning rate attribute or are not properly configured.")
+
+    def on_epoch_begin(self, epoch: int, logs: dict = None) -> None:
+        if not logs:
+            return
+            
+        model = logs.get('model')
+        if not model:
+            return
+            
+        new_lr = self.schedule(epoch, self.initial_learning_rate)
+        self._update_optimizer_learning_rate(model, new_lr)
+        
+        if self.verbose and new_lr != self.current_learning_rate:
+            print(f'\nEpoch {epoch + 1}: Learning rate adjusted to {new_lr:.6f}')
+            
+        self.current_learning_rate = new_lr
+
+    def on_train_begin(self, logs: dict = None) -> None:
+        if self.verbose:
+            print(f'Initial learning rate: {self.initial_learning_rate:.6f}')
