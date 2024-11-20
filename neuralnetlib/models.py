@@ -1448,11 +1448,15 @@ class Transformer(BaseModel):
         return output
 
     def backward_pass(self, error: np.ndarray) -> None:
-        dx = self.output_layer.backward_pass(error)
+        error = np.clip(error, -1.0, 1.0)
         
+        dx = self.output_layer.backward_pass(error)
         d_enc_output = None
+        
         for decoder_layer in reversed(self.decoder_layers):
             dx, d_enc = decoder_layer.backward_pass(dx)
+            dx = np.clip(dx, -1.0, 1.0)
+            d_enc = np.clip(d_enc, -1.0, 1.0)
             d_enc_output = d_enc if d_enc_output is None else d_enc_output + d_enc
                     
         dx = self.decoder_dropout.backward_pass(dx)
@@ -1488,7 +1492,15 @@ class Transformer(BaseModel):
                                     padding='post', 
                                     pad_value=self.PAD_IDX)
         
-        return x_train_padded, y_train_padded
+        x_mean = np.mean(x_train_padded)
+        x_std = np.std(x_train_padded) + 1e-8
+        y_mean = np.mean(y_train_padded)
+        y_std = np.std(y_train_padded) + 1e-8
+        
+        x_train_normalized = (x_train_padded - x_mean) / x_std
+        y_train_normalized = (y_train_padded - y_mean) / y_std
+        
+        return x_train_normalized, y_train_normalized
 
     def compile(self, 
                 loss_function: LossFunction | str, 
@@ -1825,91 +1837,37 @@ class Transformer(BaseModel):
             return history
         
     def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, 
-            alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
-        def get_next_token_predictions(sequence: np.ndarray, enc_output: np.ndarray) -> np.ndarray:
-            decoder_output = self.decode(sequence, enc_output, training=False)
-            predictions = self.output_layer.forward_pass(decoder_output)[:, -1, :]
-            
-            predictions_mean = np.mean(predictions, axis=-1, keepdims=True)
-            predictions_std = np.std(predictions, axis=-1, keepdims=True) + 1e-6
-            predictions = (predictions - predictions_mean) / predictions_std
-            
-            predictions = predictions / temperature
-            
-            max_logits = np.max(predictions, axis=-1, keepdims=True)
-            exp_preds = np.exp(predictions - max_logits)
-            probabilities = exp_preds / np.sum(exp_preds, axis=-1, keepdims=True)
-            
-            probabilities[:, self.PAD_IDX] = 0.0
-            
-            probabilities = probabilities / (np.sum(probabilities, axis=-1, keepdims=True) + 1e-9)
-            
-            return probabilities
-        
+                alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
         batch_size = inp.shape[0]
         enc_output = self.encode(inp, training=False)
         
-        beams = [(np.full((batch_size, 1), self.SOS_IDX), 0.0)]
-        finished_beams = []
+        dec_input = np.full((batch_size, 1), self.SOS_IDX)
         
-        for step in range(max_length - 1):
-            if not beams:
+        max_output_length = min(max_length, self.max_sequence_length)
+        
+        outputs = []
+        for i in range(max_output_length - 1):
+            if dec_input.shape[1] >= self.max_sequence_length:
                 break
                 
-            all_candidates = []
+            predictions = self.forward_pass((inp, dec_input), training=False)
+            predictions = predictions[:, -1:, :]
             
-            for sequence, accumulated_log_prob in beams:
-                predictions = get_next_token_predictions(sequence, enc_output)
-                
-                k = predictions.shape[-1]
-                top_k_probs = predictions[..., :k]
-                top_k_tokens = np.arange(k)
-                
-                for token_idx in range(k):
-                    token = top_k_tokens[token_idx]
-                    token_prob = top_k_probs[..., token_idx]
-                    token_log_prob = np.log(token_prob + 1e-10)
-                    
-                    if token != self.PAD_IDX:
-                        new_sequence = np.concatenate([sequence, token.reshape(-1, 1)], axis=1)
-                        new_log_prob = accumulated_log_prob + token_log_prob
-                        
-                        if token == self.EOS_IDX and new_sequence.shape[1] >= min_length:
-                            finished_beams.append((new_sequence, new_log_prob))
-                        elif token != self.EOS_IDX:
-                            all_candidates.append((new_sequence, new_log_prob))
+            scaled_logits = predictions[0, 0] / temperature
+            probs = np.exp(scaled_logits - np.max(scaled_logits))
+            probs = probs / np.sum(probs)
             
-            if not all_candidates:
+            rng = np.random.default_rng(self.random_state)
+            next_token = rng.choice(len(probs), p=probs)
+            
+            if next_token == self.EOS_IDX or len(outputs) >= max_output_length - 1:
                 break
-            
-            scored_candidates = [
-                (seq, score / (seq.shape[1] ** alpha)) 
-                for seq, score in all_candidates
-            ]
-            
-            sorted_candidates = sorted(
-                zip(scored_candidates, all_candidates),
-                key=lambda x: float(x[0][1]),
-                reverse=True
-            )
-            
-            beams = [original for _, original in sorted_candidates[:beam_size]]
-            
-            if len(finished_beams) >= beam_size:
-                break
+                
+            outputs.append(next_token)
+            dec_input = np.array([[self.SOS_IDX] + outputs])
         
-        finished_beams.extend(beams)
-        
-        if not finished_beams:
-            finished_beams = beams
-        
-        scored_finished = [
-            (seq, score / (seq.shape[1] ** alpha)) 
-            for seq, score in finished_beams
-        ]
-        
-        best_seq = max(scored_finished, key=lambda x: float(x[1]))[0]
-        return best_seq
+        final_sequence = np.array([[self.SOS_IDX] + outputs + [self.EOS_IDX]])
+        return final_sequence
 
     def evaluate(self, 
                 x_test: np.ndarray, 

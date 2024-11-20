@@ -168,89 +168,79 @@ class KullbackLeiblerDivergence(LossFunction):
     
 
 class SequenceCrossEntropy(LossFunction):
-    def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None):
+    def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None, 
+                 repetition_penalty: float = 1.2):
         super().__init__()
         self.label_smoothing = label_smoothing
         self.epsilon = 1e-10
-        self.PAD_IDX = 0
         self.ignore_tokens = ignore_tokens if ignore_tokens is not None else []
+        self.repetition_penalty = repetition_penalty
         
-    def __call__(self, y_true, y_pred):
-        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
-        
-        mask = np.ones_like(y_true, dtype=np.float32)
-        for token in self.ignore_tokens:
-            mask *= (y_true != token)
-                
-        n_classes = y_pred.shape[-1]
-        y_true_smooth = np.zeros_like(y_pred)
-        
-        for i in range(y_true.shape[0]):
-            for j in range(y_true.shape[1]):
-                token = y_true[i, j]
-                if token not in self.ignore_tokens:
-                    valid_tokens = [t for t in range(n_classes) if t not in self.ignore_tokens]
-                    n_valid_classes = len(valid_tokens)
-                    smooth_prob = self.label_smoothing / (n_valid_classes - 1)
-                    
-                    for t in valid_tokens:
-                        if t != token:
-                            y_true_smooth[i, j, t] = smooth_prob
-                    y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
-                else:
-                    y_true_smooth[i, j, token] = 1.0
-        
-        log_probs = np.log(y_pred + self.epsilon)
-        loss = -np.sum(y_true_smooth * log_probs * mask[..., np.newaxis])
-        return loss / (np.sum(mask) + self.epsilon)
-    
-    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
-        
-        mask = np.ones_like(y_true, dtype=np.float32)
-        for token in self.ignore_tokens:
-            mask *= (y_true != token)
-        
-        n_classes = y_pred.shape[-1]
-        y_true_smooth = np.zeros_like(y_pred)
-        
-        for i in range(y_true.shape[0]):
-            for j in range(y_true.shape[1]):
-                token = y_true[i, j]
-                if token not in self.ignore_tokens:
-                    valid_tokens = [t for t in range(n_classes) if t not in self.ignore_tokens]
-                    n_valid_classes = len(valid_tokens)
-                    smooth_prob = self.label_smoothing / (n_valid_classes - 1)
-                    
-                    for t in valid_tokens:
-                        if t != token:
-                            y_true_smooth[i, j, t] = smooth_prob
-                    y_true_smooth[i, j, token] = 1.0 - self.label_smoothing
-                else:
-                    y_true_smooth[i, j, token] = 1.0
-        
-        total_tokens = np.sum(mask) + self.epsilon
-        
-        grad = y_pred - y_true_smooth
-        
-        grad *= mask[..., np.newaxis]
-        grad /= total_tokens
-        
-        stabilizer = self.epsilon * np.sign(grad)
-        grad += stabilizer
-        
-        grad = np.clip(grad, -1.0, 1.0)
-        
-        return grad
-    
-    def hessian(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_true = y_true.astype(np.int32)
         
         mask = np.ones_like(y_true, dtype=np.float32)
         for token in self.ignore_tokens:
             mask *= (y_true != token)
             
-        hessian = y_pred * (1 - y_pred)
-        hessian *= mask[..., np.newaxis]
+        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
         
-        return hessian / (np.sum(mask) + self.epsilon)
+        smoothed = np.zeros_like(y_pred)
+        n_classes = y_pred.shape[-1]
+        smooth_value = self.label_smoothing / (n_classes - 1)
+        
+        smoothed.fill(smooth_value)
+        
+        for i in range(y_true.shape[0]):
+            for j in range(y_true.shape[1]):
+                if mask[i, j]:
+                    true_class = int(y_true[i, j])
+                    smoothed[i, j] = smooth_value
+                    if 0 <= true_class < n_classes:
+                        smoothed[i, j, true_class] = 1.0 - self.label_smoothing
+        
+        for i in range(y_true.shape[0]):
+            for j in range(1, y_true.shape[1]):
+                if mask[i, j] and mask[i, j-1]:
+                    if y_true[i, j] == y_true[i, j-1]:
+                        smoothed[i, j] *= self.repetition_penalty
+        
+        loss = -np.sum(smoothed * np.log(y_pred + self.epsilon) * mask[..., np.newaxis])
+        normalizer = np.sum(mask) + self.epsilon
+        return loss / normalizer
+    
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_true = y_true.astype(np.int32)
+        
+        mask = np.ones_like(y_true, dtype=np.float32)
+        for token in self.ignore_tokens:
+            mask *= (y_true != token)
+            
+        y_pred = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
+        
+        smoothed = np.zeros_like(y_pred)
+        n_classes = y_pred.shape[-1]
+        smooth_value = self.label_smoothing / (n_classes - 1)
+        
+        smoothed.fill(smooth_value)
+        
+        for i in range(y_true.shape[0]):
+            for j in range(y_true.shape[1]):
+                if mask[i, j]:
+                    true_class = int(y_true[i, j])
+                    if 0 <= true_class < n_classes:
+                        smoothed[i, j, true_class] = 1.0 - self.label_smoothing
+        
+        for i in range(y_true.shape[0]):
+            for j in range(1, y_true.shape[1]):
+                if mask[i, j] and mask[i, j-1]:
+                    if y_true[i, j] == y_true[i, j-1]:
+                        smoothed[i, j] *= self.repetition_penalty
+        
+        grad = -(smoothed / (y_pred + self.epsilon))
+        grad *= mask[..., np.newaxis]
+        
+        normalizer = np.sum(mask) + self.epsilon
+        grad /= normalizer
+        
+        return grad
