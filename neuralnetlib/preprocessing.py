@@ -216,6 +216,13 @@ def pad_sequences(sequences: np.ndarray, max_length: int, pad_value: int = 0, pa
     return np.array(padded_sequences)
 
 
+def clip_gradients(gradient: np.ndarray, threshold: float = 1.0) -> np.ndarray:
+    grad_norm = np.sqrt(np.sum(gradient * gradient))
+    if grad_norm > threshold:
+        gradient = threshold * gradient / grad_norm
+    return gradient
+
+
 def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
     """
     Compute the cosine similarity between two vectors.

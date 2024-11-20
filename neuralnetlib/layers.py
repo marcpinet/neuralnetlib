@@ -4,7 +4,7 @@ import numpy as np
 from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d
+from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d, clip_gradients
 from neuralnetlib.regularizers import AdaptiveDropout
 
 
@@ -2476,6 +2476,7 @@ class MultiHeadAttention(Layer):
         attention_axes: list[int] = None,
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
+        gradient_threshold: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2489,6 +2490,7 @@ class MultiHeadAttention(Layer):
         self.attention_axes: list[int] = attention_axes
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
+        self.gradient_threshold: float = gradient_threshold
         self.random_state: int = random_state
 
         self.query_dense: Dense = None
@@ -2530,7 +2532,7 @@ class MultiHeadAttention(Layer):
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
-    def _scaled_dot_product_attention(self, query, key, value, mask=None, training=True):
+    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, value: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         if query.shape[-1] != key.shape[-1]:
             raise ValueError(f"Query depth {query.shape[-1]} != Key depth {key.shape[-1]}")
             
@@ -2539,34 +2541,19 @@ class MultiHeadAttention(Layer):
         dk = np.float32(key.shape[-1])
         scaled_attention_logits = matmul_qk / np.sqrt(dk)
         
-        logits_std = np.std(scaled_attention_logits, axis=-1, keepdims=True) + 1e-12
-        scaled_attention_logits = scaled_attention_logits / logits_std
-        
         if mask is not None:
             while len(mask.shape) < len(scaled_attention_logits.shape):
                 mask = np.expand_dims(mask, axis=1)
-            
-            LOG_MASK_VALUE = -1e4
-            masked_logits = np.where(mask, LOG_MASK_VALUE, scaled_attention_logits)
-            
-            attention_max = np.max(masked_logits, axis=-1, keepdims=True)
-            
-            log_attention = scaled_attention_logits - attention_max
-            
-            exp_attention = np.exp(log_attention, dtype=np.float64)
-            
+            scaled_attention_logits = np.where(mask, -1e9, scaled_attention_logits)
+        
+        attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
+        exp_attention = np.exp(scaled_attention_logits - attention_max)
+        
+        if mask is not None:
             exp_attention = np.where(mask, 0.0, exp_attention)
-        else:
-            attention_max = np.max(scaled_attention_logits, axis=-1, keepdims=True)
-            log_attention = scaled_attention_logits - attention_max
-            exp_attention = np.exp(log_attention, dtype=np.float64)
         
-        attention_sum = np.sum(exp_attention, axis=-1, keepdims=True, dtype=np.float64)
-        
-        eps = np.finfo(np.float64).tiny
-        attention_weights = exp_attention / (attention_sum + eps)
-        
-        attention_weights = attention_weights.astype(np.float32)
+        attention_sum = np.sum(exp_attention, axis=-1, keepdims=True)
+        attention_weights = np.divide(exp_attention, attention_sum + 1e-9)
         
         attention_weights = np.where(
             attention_weights < np.finfo(np.float32).tiny,
@@ -2574,15 +2561,10 @@ class MultiHeadAttention(Layer):
             attention_weights
         )
         
+        attention_output = np.matmul(attention_weights, value)
+        
         if training and self.dropout is not None:
-            attention_weights = self.dropout.forward_pass(attention_weights)
-        
-        attention_output = np.matmul(
-            attention_weights.astype(np.float64), 
-            value.astype(np.float64)
-        ).astype(np.float32)
-        
-        self.attention_weights = attention_weights
+            attention_output = self.dropout.forward_pass(attention_output)
         
         if np.any(np.isnan(attention_output)) or np.any(np.isinf(attention_output)):
             raise ValueError("Attention output contains NaN or Inf values")
@@ -2630,55 +2612,58 @@ class MultiHeadAttention(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+        output_error = clip_gradients(output_error, self.gradient_threshold)
+        
         batch_size = output_error.shape[0]
         query_seq_length = output_error.shape[1]
         key_value_seq_length = self.reshaped_value.shape[2]
-
+        
         d_attention_output = np.reshape(output_error, 
             (batch_size, query_seq_length, self.num_heads, -1))
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
-
-        epsilon = 1e-10
+        d_attention_output = clip_gradients(d_attention_output, self.gradient_threshold)
+        
+        if self.attention_weights is None:
+            self.attention_weights = np.ones((batch_size, self.num_heads, query_seq_length, key_value_seq_length))
+        
+        if self.attention_weights.shape != (batch_size, self.num_heads, query_seq_length, key_value_seq_length):
+            raise ValueError(f"Attention weights shape {self.attention_weights.shape} doesn't match expected shape {(batch_size, self.num_heads, query_seq_length, key_value_seq_length)}")
         
         d_values = np.matmul(
             np.transpose(self.attention_weights, (0, 1, 3, 2)),
             d_attention_output
         )
-
+        d_values = clip_gradients(d_values, self.gradient_threshold)
+        
         d_weights = np.matmul(
             d_attention_output,
             np.transpose(self.reshaped_value, (0, 1, 3, 2))
         )
-
-        attention_weights = np.clip(self.attention_weights, epsilon, 1.0 - epsilon)
-        d_scores = d_weights * attention_weights
-        sum_d_scores = np.sum(d_weights * attention_weights, axis=-1, keepdims=True)
-        d_scores -= attention_weights * sum_d_scores
+        d_weights = clip_gradients(d_weights, self.gradient_threshold)
         
-        d_scores /= np.sqrt(self.key_dim)
-
-        if self.dropout and isinstance(self.attention_weights, np.ndarray):
-            d_scores = self.dropout.backward_pass(d_scores)
-
-        d_query = np.matmul(d_scores, self.reshaped_key)
+        d_query = np.matmul(d_weights, self.reshaped_key)
         d_key = np.matmul(
-            np.transpose(d_scores, (0, 1, 3, 2)),
+            np.transpose(d_weights, (0, 1, 3, 2)),
             self.reshaped_query
         )
-
+        
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
         d_values = np.transpose(d_values, (0, 2, 1, 3))
-
+        
         final_dim = self.num_heads * self.key_dim
         d_query = np.reshape(d_query, (batch_size, query_seq_length, final_dim))
         d_key = np.reshape(d_key, (batch_size, key_value_seq_length, final_dim))
         d_values = np.reshape(d_values, (batch_size, key_value_seq_length, final_dim))
-
+        
+        d_query = clip_gradients(d_query, self.gradient_threshold)
+        d_key = clip_gradients(d_key, self.gradient_threshold)
+        d_values = clip_gradients(d_values, self.gradient_threshold)
+        
         d_query = self.query_dense.backward_pass(d_query)
         d_key = self.key_dense.backward_pass(d_key)
         d_value = self.value_dense.backward_pass(d_values)
-
+        
         if self.is_cross_attention:
             return d_query, d_key, d_value
         return d_query
@@ -3006,6 +2991,7 @@ class TransformerEncoderLayer(Layer):
         activation: str = 'relu',
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
+        gradient_threshold: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -3018,6 +3004,7 @@ class TransformerEncoderLayer(Layer):
         self.activation_name: str = activation
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
+        self.gradient_threshold: float = gradient_threshold
         self.random_state: int | None = random_state
 
         self.attention: MultiHeadAttention = MultiHeadAttention(
@@ -3050,7 +3037,7 @@ class TransformerEncoderLayer(Layer):
             
     def __str__(self) -> str:
         return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
-        
+
     def forward_pass(
         self, inputs: np.ndarray, mask: np.ndarray | None = None, training: bool = True
     ) -> np.ndarray:
@@ -3069,23 +3056,28 @@ class TransformerEncoderLayer(Layer):
         return output
         
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        ffn_norm_dx: np.ndarray
-        ffn_norm_dresidual: np.ndarray
-        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
+        output_error = clip_gradients(output_error, self.gradient_threshold)
         
-        ffn_dx: np.ndarray = self.ffn_dropout.backward_pass(ffn_norm_dx)
+        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
+        ffn_dx = self.ffn_dropout.backward_pass(ffn_norm_dx)
+        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
+        
         ffn_dx = self.ffn.backward_pass(ffn_dx)
+        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         ffn_dx = ffn_dx + ffn_norm_dresidual
+        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
-        attn_norm_dx: np.ndarray
-        attn_norm_dresidual: np.ndarray
         attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
+        attn_dx = self.attention_dropout.backward_pass(attn_norm_dx)
+        attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
-        attn_dx: np.ndarray = self.attention_dropout.backward_pass(attn_norm_dx)
         attn_dx = self.attention.backward_pass(attn_dx)
+        attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
-        dx: np.ndarray = attn_dx + attn_norm_dresidual
+        dx = attn_dx + attn_norm_dresidual
+        dx = clip_gradients(dx, self.gradient_threshold)
+        
         return dx
         
     def get_config(self) -> dict:
@@ -3128,6 +3120,7 @@ class TransformerDecoderLayer(Layer):
         activation: str = 'relu',
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
+        gradient_threshold: float = 1.0,
         random_state: int | None = None,
     ) -> None:
         super().__init__()
@@ -3139,6 +3132,7 @@ class TransformerDecoderLayer(Layer):
         self.activation_name = activation
         self.kernel_initializer = kernel_initializer
         self.bias_initializer = bias_initializer
+        self.gradient_threshold = gradient_threshold
         self.random_state = random_state
         
         self.self_attention = MultiHeadAttention(
@@ -3181,7 +3175,7 @@ class TransformerDecoderLayer(Layer):
             
     def __str__(self) -> str:
         return f'TransformerDecoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
-        
+    
     def forward_pass(
         self,
         x: np.ndarray,
@@ -3223,46 +3217,70 @@ class TransformerDecoderLayer(Layer):
         return out3
         
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        output_error = clip_gradients(output_error, self.gradient_threshold)
+        
         d_norm3, d_residual3 = self.norm3.backward_pass(output_error)
         d_ffn = self.dropout3.backward_pass(d_norm3)
+        d_ffn = clip_gradients(d_ffn, self.gradient_threshold)
+        
         d_ffn = self.ffn.backward_pass(d_ffn)
+        d_ffn = clip_gradients(d_ffn, self.gradient_threshold)
+        
         d_out2 = d_residual3 + d_ffn
+        d_out2 = clip_gradients(d_out2, self.gradient_threshold)
         
         d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
+        d_attn2 = clip_gradients(d_attn2, self.gradient_threshold)
         
         d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
+        d_attn2_query = clip_gradients(d_attn2_query, self.gradient_threshold)
+        d_attn2_key = clip_gradients(d_attn2_key, self.gradient_threshold)
+        d_attn2_value = clip_gradients(d_attn2_value, self.gradient_threshold)
         
         d_out1 = d_residual2 + d_attn2_query
+        d_out1 = clip_gradients(d_out1, self.gradient_threshold)
         
         d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
         d_attn1 = self.dropout1.backward_pass(d_norm1)
+        d_attn1 = clip_gradients(d_attn1, self.gradient_threshold)
+        
         d_x = self.self_attention.backward_pass(d_attn1)
+        d_x = clip_gradients(d_x, self.gradient_threshold)
+        
         d_x = d_residual1 + d_x
+        d_x = clip_gradients(d_x, self.gradient_threshold)
         
         batch_size, seq_len, hidden_dim = d_attn2_key.shape
         attention_weights = self.cross_attention.attention_weights
         num_heads = self.cross_attention.num_heads
+        head_dim = hidden_dim // num_heads
         
-        head_importance = np.mean(attention_weights, axis=(2, 3))
-        
+        if attention_weights is None:
+            attention_weights = np.ones((batch_size, num_heads, seq_len, seq_len))
+            
+        head_importance = np.mean(attention_weights, axis=(2, 3), keepdims=True)
         head_importance = head_importance.reshape(batch_size, num_heads, 1, 1)
         
-        d_key_heads = d_attn2_key.reshape(batch_size, seq_len, num_heads, -1)
+        d_key_reshaped = d_attn2_key.reshape(batch_size * seq_len, num_heads * head_dim)
+        d_key_heads = d_key_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
         d_key_heads = np.transpose(d_key_heads, (0, 2, 1, 3))
+        d_key_heads = clip_gradients(d_key_heads, self.gradient_threshold)
         
-        d_value_heads = d_attn2_value.reshape(batch_size, seq_len, num_heads, -1)
+        d_value_reshaped = d_attn2_value.reshape(batch_size * seq_len, num_heads * head_dim)
+        d_value_heads = d_value_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
         d_value_heads = np.transpose(d_value_heads, (0, 2, 1, 3))
+        d_value_heads = clip_gradients(d_value_heads, self.gradient_threshold)
         
         d_key_weighted = head_importance * d_key_heads
         d_value_weighted = (1.0 - head_importance) * d_value_heads
         
         d_combined_heads = d_key_weighted + d_value_weighted
+        d_combined_heads = clip_gradients(d_combined_heads, self.gradient_threshold)
         
         d_combined = np.transpose(d_combined_heads, (0, 2, 1, 3))
         d_combined = d_combined.reshape(batch_size, seq_len, hidden_dim)
-        
-        self.cache.clear()
+        d_combined = clip_gradients(d_combined, self.gradient_threshold)
         
         return d_x, d_combined
         
