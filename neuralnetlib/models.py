@@ -1285,7 +1285,8 @@ class Autoencoder(BaseModel):
 
 class Transformer(BaseModel):
     def __init__(self,
-                 vocab_size: int,
+                 src_vocab_size: int,
+                 tgt_vocab_size: int,
                  d_model: int = 512,
                  n_heads: int = 8,
                  n_encoder_layers: int = 6,
@@ -1299,33 +1300,54 @@ class Transformer(BaseModel):
                  scale_embeddings: bool = True,
                  random_state: int | None = None,
                  pad_idx: int = 0,
-                 unk_idx: int | None = None,
-                 sos_idx: int | None = None,
-                 eos_idx: int | None = None,
+                 src_unk_idx: int | None = None,
+                 src_sos_idx: int | None = None,
+                 src_eos_idx: int | None = None,
+                 tgt_unk_idx: int | None = None,
+                 tgt_sos_idx: int | None = None,
+                 tgt_eos_idx: int | None = None,
                  ) -> None:
-                 
         
+        # Source special tokens
         self.PAD_IDX = pad_idx
-        if unk_idx is None:
-            regular_token_end = vocab_size - 4  # subtract 4 for PAD, UNK, BOS, EOS
-            self.UNK_IDX = regular_token_end + 2  # +2 to skip PAD and gap
+        if src_unk_idx is None:
+            regular_token_end = src_vocab_size - 4
+            self.SRC_UNK_IDX = regular_token_end + 2
         else:
-            self.UNK_IDX = unk_idx
+            self.SRC_UNK_IDX = src_unk_idx
             
-        if sos_idx is None:
-            self.SOS_IDX = self.UNK_IDX + 1
+        if src_sos_idx is None:
+            self.SRC_SOS_IDX = self.SRC_UNK_IDX + 1
         else:
-            self.SOS_IDX = sos_idx
+            self.SRC_SOS_IDX = src_sos_idx
             
-        if eos_idx is None:
-            self.EOS_IDX = self.UNK_IDX + 2
+        if src_eos_idx is None:
+            self.SRC_EOS_IDX = self.SRC_UNK_IDX + 2
         else:
-            self.EOS_IDX = eos_idx
+            self.SRC_EOS_IDX = src_eos_idx
+            
+        # Target special tokens
+        if tgt_unk_idx is None:
+            regular_token_end = tgt_vocab_size - 4
+            self.TGT_UNK_IDX = regular_token_end + 2
+        else:
+            self.TGT_UNK_IDX = tgt_unk_idx
+            
+        if tgt_sos_idx is None:
+            self.TGT_SOS_IDX = self.TGT_UNK_IDX + 1
+        else:
+            self.TGT_SOS_IDX = tgt_sos_idx
+            
+        if tgt_eos_idx is None:
+            self.TGT_EOS_IDX = self.TGT_UNK_IDX + 2
+        else:
+            self.TGT_EOS_IDX = tgt_eos_idx
         
         super().__init__(gradient_clip_threshold, 
                         enable_padding, padding_size, random_state)
         
-        self.vocab_size: int = vocab_size
+        self.src_vocab_size: int = src_vocab_size
+        self.tgt_vocab_size: int = tgt_vocab_size
         self.d_model: int = d_model
         self.n_heads: int = n_heads
         self.n_encoder_layers: int = n_encoder_layers
@@ -1334,7 +1356,9 @@ class Transformer(BaseModel):
         self.dropout_rate: float = dropout_rate
         self.max_sequence_length: int = max_sequence_length
         
-        self.embedding = Embedding(self.vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
+        self.src_embedding = Embedding(self.src_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
+        self.tgt_embedding = Embedding(self.tgt_vocab_size, d_model, input_length=max_sequence_length, random_state=random_state)
+        
         self.positional_encoding = PositionalEncoding(
             max_sequence_length=max_sequence_length,
             embedding_dim=d_model,
@@ -1367,7 +1391,7 @@ class Transformer(BaseModel):
             )
             self.decoder_layers.append(decoder_layer)
             
-        self.output_layer = Dense(vocab_size, random_state=random_state)
+        self.output_layer = Dense(tgt_vocab_size, random_state=random_state)
         
         self.optimizer = None
         self.loss_function = None
@@ -1398,7 +1422,7 @@ class Transformer(BaseModel):
         return enc_padding_mask, combined_mask, dec_padding_mask
 
     def encode(self, inp: np.ndarray, training: bool = True, mask: np.ndarray | None = None) -> np.ndarray:
-        x = self.embedding.forward_pass(inp)
+        x = self.src_embedding.forward_pass(inp)
         x = self.positional_encoding.forward_pass(x)
         x = self.encoder_dropout.forward_pass(x, training=training)
         
@@ -1411,7 +1435,7 @@ class Transformer(BaseModel):
             look_ahead_mask: np.ndarray | None = None, 
             padding_mask: np.ndarray | None = None) -> np.ndarray:
         
-        x = self.embedding.forward_pass(tar)
+        x = self.tgt_embedding.forward_pass(tar)
         x = self.positional_encoding.forward_pass(x)
         
         if training:
@@ -1458,7 +1482,7 @@ class Transformer(BaseModel):
                     
         dx = self.decoder_dropout.backward_pass(dx)
         dx = dx * np.sqrt(self.d_model)
-        dx = self.embedding.backward_pass(dx)
+        dx = self.tgt_embedding.backward_pass(dx)
         dx = self.positional_encoding.backward_pass(dx)
         
         dx_enc = d_enc_output
@@ -1468,13 +1492,13 @@ class Transformer(BaseModel):
         dx_enc = self.encoder_dropout.backward_pass(dx_enc)
         dx_enc = dx_enc * np.sqrt(self.d_model)
         
-        dx_enc = self.embedding.backward_pass(dx_enc)
+        dx_enc = self.src_embedding.backward_pass(dx_enc)
 
     def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
         max_seq_len = self.max_sequence_length
         
         x_train_with_tokens = [
-            [self.SOS_IDX] + seq + [self.EOS_IDX] for seq in x_train
+            [self.SRC_SOS_IDX] + seq + [self.SRC_EOS_IDX] for seq in x_train
         ]
         x_train_padded = pad_sequences(x_train_with_tokens, 
                                     max_length=max_seq_len,
@@ -1482,7 +1506,7 @@ class Transformer(BaseModel):
                                     pad_value=self.PAD_IDX)
         
         y_train_with_tokens = [
-            [self.SOS_IDX] + seq + [self.EOS_IDX] for seq in y_train
+            [self.TGT_SOS_IDX] + seq + [self.TGT_EOS_IDX] for seq in y_train
         ]
         y_train_padded = pad_sequences(y_train_with_tokens, 
                                     max_length=max_seq_len,
@@ -1510,7 +1534,7 @@ class Transformer(BaseModel):
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
         
         if isinstance(self.loss_function, SequenceCrossEntropy):
-            special_tokens = [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX, self.EOS_IDX]
+            special_tokens = [self.PAD_IDX, self.TGT_UNK_IDX, self.TGT_SOS_IDX, self.TGT_EOS_IDX]
             self.loss_function.ignore_tokens = list(set(self.loss_function.ignore_tokens + special_tokens))
         
         if verbose:
@@ -1534,13 +1558,23 @@ class Transformer(BaseModel):
         
         layer_index = 0
         
-        # Update embedding layer
+        # Update source embedding layer
         self.optimizer.update(
             layer_index,
-            self.embedding.weights,
-            self.embedding.d_weights,
-            self.embedding.bias,
-            self.embedding.d_bias
+            self.src_embedding.weights,
+            self.src_embedding.d_weights,
+            self.src_embedding.bias,
+            self.src_embedding.d_bias
+        )
+        layer_index += 1
+        
+        # Update target embedding layer 
+        self.optimizer.update(
+            layer_index,
+            self.tgt_embedding.weights,
+            self.tgt_embedding.d_weights,
+            self.tgt_embedding.bias,
+            self.tgt_embedding.d_bias
         )
         layer_index += 1
         
@@ -1841,7 +1875,7 @@ class Transformer(BaseModel):
         batch_size = inp.shape[0]
         enc_output = self.encode(inp, training=False)
         
-        dec_input = np.full((batch_size, 1), self.SOS_IDX)
+        dec_input = np.full((batch_size, 1), self.TGT_SOS_IDX)
         
         max_output_length = min(max_length, self.max_sequence_length)
         
@@ -1860,13 +1894,13 @@ class Transformer(BaseModel):
             rng = np.random.default_rng(self.random_state)
             next_token = rng.choice(len(probs), p=probs)
             
-            if next_token == self.EOS_IDX or len(outputs) >= max_output_length - 1:
+            if next_token == self.TGT_EOS_IDX or len(outputs) >= max_output_length - 1:
                 break
                 
             outputs.append(next_token)
-            dec_input = np.array([[self.SOS_IDX] + outputs])
+            dec_input = np.array([[self.TGT_SOS_IDX] + outputs])
         
-        final_sequence = np.array([[self.SOS_IDX] + outputs + [self.EOS_IDX]])
+        final_sequence = np.array([[self.TGT_SOS_IDX] + outputs + [self.TGT_EOS_IDX]])
         return final_sequence
 
     def evaluate(self, 
@@ -1894,7 +1928,8 @@ class Transformer(BaseModel):
 
     def get_config(self) -> dict:
         return {
-            'vocab_size': self.vocab_size,
+            'src_vocab_size': self.src_vocab_size,
+            'tgt_vocab_size': self.tgt_vocab_size,
             'd_model': self.d_model,
             'n_heads': self.n_heads,
             'n_encoder_layers': self.n_encoder_layers,
@@ -1927,7 +1962,8 @@ class Transformer(BaseModel):
 
     def __str__(self) -> str:
         return (f"Transformer(\n"
-                f"  vocab_size={self.vocab_size},\n"
+                f"  src_vocab_size={self.src_vocab_size},\n"
+                f"  tgt_vocab_size={self.tgt_vocab_size},\n"
                 f"  d_model={self.d_model},\n"
                 f"  n_heads={self.n_heads},\n"
                 f"  n_encoder_layers={self.n_encoder_layers},\n"
