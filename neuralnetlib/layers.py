@@ -4,7 +4,7 @@ import numpy as np
 from collections import Counter
 
 from neuralnetlib.activations import ActivationFunction
-from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d, clip_gradients
+from neuralnetlib.preprocessing import im2col_2d, col2im_2d, im2col_1d, col2im_1d, normalize_gradient
 from neuralnetlib.regularizers import AdaptiveDropout
 
 
@@ -1038,24 +1038,15 @@ class Embedding(Layer):
         return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim})'
 
     def initialize_weights(self):
-        self.rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
+        self.rng = np.random.default_rng(self.random_state)
 
-        if self.weights_init == "xavier":
-            scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
-            self.weights = self.rng.normal(
-                0, scale, (self.input_dim, self.output_dim))
-        elif self.weights_init == "uniform":
-            limit = np.sqrt(3.0 / self.output_dim)
-            self.weights = self.rng.uniform(-limit,
-                                            limit, (self.input_dim, self.output_dim))
-        else:
-            scale = 0.05
-            self.weights = self.rng.normal(
-                0, scale, (self.input_dim, self.output_dim))
-
+        scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
+        self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
+        
+        special_token_indices = [0, 1, 2, 3]
+        self.weights[special_token_indices] *= 0.1
+        
         self.bias = np.zeros((1, 1, self.output_dim))
-
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
@@ -1063,37 +1054,40 @@ class Embedding(Layer):
         if self.weights is None:
             self.initialize_weights()
 
-        if not np.issubdtype(input_data.dtype, np.integer):
-            input_data = np.round(input_data).astype(int)
-
-        if np.any(input_data >= self.input_dim) or np.any(input_data < 0):
-            input_data = np.clip(input_data, 0, self.input_dim - 1)
-            
+        input_data = np.clip(input_data, 0, self.input_dim - 1)
         self.clipped_input = input_data.copy()
 
         output = self.weights[input_data]
+        
+        output_norm = np.linalg.norm(output, axis=-1, keepdims=True)
+        output = output / np.maximum(output_norm, 1e-7)
+        
         output = output + self.bias
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        if output_error.ndim != 3:
-            raise ValueError(
-                f"Expected 3D output_error, got shape {output_error.shape}")
-
         batch_size, seq_length, _ = output_error.shape
         grad_weights = np.zeros_like(self.weights)
         
         seq_length = min(seq_length, self.clipped_input.shape[1])
-        
         input_indices = self.clipped_input[:batch_size, :seq_length]
-        
         flattened_output = output_error[:batch_size, :seq_length]
         
-        for b in range(batch_size):
-            np.add.at(grad_weights, input_indices[b], flattened_output[b])
+        token_counts = np.bincount(input_indices.flatten(), minlength=self.input_dim)
+        token_counts = np.maximum(token_counts, 1)
         
-        self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
+        for b in range(batch_size):
+            grad_batch = flattened_output[b]
+            indices_batch = input_indices[b]
+            grad_batch = grad_batch / token_counts[indices_batch, np.newaxis]
+            np.add.at(grad_weights, indices_batch, grad_batch)
+        
+        grad_norm = np.linalg.norm(grad_weights)
+        if grad_norm > 1.0:
+            grad_weights = grad_weights / grad_norm
+        
         self.d_weights = grad_weights
+        self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
         
         return np.zeros((batch_size, seq_length))
 
@@ -2476,7 +2470,6 @@ class MultiHeadAttention(Layer):
         attention_axes: list[int] = None,
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
-        gradient_threshold: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2490,7 +2483,6 @@ class MultiHeadAttention(Layer):
         self.attention_axes: list[int] = attention_axes
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
-        self.gradient_threshold: float = gradient_threshold
         self.random_state: int = random_state
 
         self.query_dense: Dense = None
@@ -2537,9 +2529,8 @@ class MultiHeadAttention(Layer):
                                     training: bool = True) -> np.ndarray:
         matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
         
-        dk = np.float32(key.shape[-1])
-        
-        scaled_attention_logits = matmul_qk / np.sqrt(dk)
+        d_k = key.shape[-1]  
+        scaled_attention_logits = matmul_qk / np.sqrt(d_k)
         
         if mask is not None:
             scaled_attention_logits = np.where(mask, float('-inf'), scaled_attention_logits)
@@ -2606,16 +2597,14 @@ class MultiHeadAttention(Layer):
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
-        output_error = clip_gradients(output_error, self.gradient_threshold)
-        
         batch_size = output_error.shape[0]
         query_seq_length = output_error.shape[1]
         key_value_seq_length = self.reshaped_value.shape[2]
         
         d_attention_output = np.reshape(output_error, 
             (batch_size, query_seq_length, self.num_heads, -1))
+        d_attention_output = normalize_gradient(d_attention_output)
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
-        d_attention_output = clip_gradients(d_attention_output, self.gradient_threshold)
         
         if self.attention_weights.shape != (batch_size, self.num_heads, query_seq_length, key_value_seq_length):
             raise ValueError(f"Attention weights shape {self.attention_weights.shape} doesn't match expected shape {(batch_size, self.num_heads, query_seq_length, key_value_seq_length)}")
@@ -2624,19 +2613,19 @@ class MultiHeadAttention(Layer):
             np.transpose(self.attention_weights, (0, 1, 3, 2)),
             d_attention_output
         )
-        d_values = clip_gradients(d_values, self.gradient_threshold)
+        d_values = normalize_gradient(d_values)
         
         d_weights = np.matmul(
             d_attention_output,
             np.transpose(self.reshaped_value, (0, 1, 3, 2))
         )
-        d_weights = clip_gradients(d_weights, self.gradient_threshold)
+        d_weights = normalize_gradient(d_weights)
         
-        d_query = np.matmul(d_weights, self.reshaped_key)
-        d_key = np.matmul(
+        d_query = normalize_gradient(np.matmul(d_weights, self.reshaped_key))
+        d_key = normalize_gradient(np.matmul(
             np.transpose(d_weights, (0, 1, 3, 2)),
             self.reshaped_query
-        )
+        ))
         
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
@@ -2646,10 +2635,6 @@ class MultiHeadAttention(Layer):
         d_query = np.reshape(d_query, (batch_size, query_seq_length, final_dim))
         d_key = np.reshape(d_key, (batch_size, key_value_seq_length, final_dim))
         d_values = np.reshape(d_values, (batch_size, key_value_seq_length, final_dim))
-        
-        d_query = clip_gradients(d_query, self.gradient_threshold)
-        d_key = clip_gradients(d_key, self.gradient_threshold)
-        d_values = clip_gradients(d_values, self.gradient_threshold)
         
         d_query = self.query_dense.backward_pass(d_query)
         d_key = self.key_dense.backward_pass(d_key)
@@ -2769,9 +2754,7 @@ class PositionalEncoding(Layer):
             pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
             
         if self.scale_embeddings:
-            scaled_input = input_data * self.scale_factor
-            scaled_pos_encoding = pos_encoding * self.scale_factor
-            return scaled_input + scaled_pos_encoding
+            return pos_encoding + input_data
         else:
             return input_data + (pos_encoding * 0.1)
     
@@ -3043,7 +3026,6 @@ class TransformerEncoderLayer(Layer):
         activation: str = 'gelu',
         kernel_initializer: str = "glorot_normal",
         bias_initializer: str = "zeros",
-        gradient_threshold: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -3051,13 +3033,15 @@ class TransformerEncoderLayer(Layer):
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_ff = d_ff
+        self.activation = activation
         self.dropout_rate = dropout_rate
-        self.gradient_threshold = gradient_threshold
         self.random_state = random_state
+        self.kernel_initializer = kernel_initializer
+        self.bias_initializer = bias_initializer
 
         key_dim = d_model // num_heads
         self.attention_key_scale = np.sqrt(key_dim) * 0.6
-        self.attention_output_scale = 1.6
+        self.attention_output_scale = 1.0
 
         self.attention = MultiHeadAttention(
             num_heads=num_heads,
@@ -3069,7 +3053,7 @@ class TransformerEncoderLayer(Layer):
         )
         
         self.ffn = FeedForward(
-            d_ff=int(d_ff * 1.8),
+            d_ff=d_ff,
             d_model=d_model,
             dropout_rate=dropout_rate * 0.6,
             activation=activation,
@@ -3094,7 +3078,7 @@ class TransformerEncoderLayer(Layer):
         
         rng = np.random.default_rng(random_state)
         self.attention_gate = 0.7 + 0.05 * rng.normal()
-        self.ffn_gate = 0.85 + 0.05 * rng.normal()
+        self.ffn_gate = 1.0
         
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -3125,32 +3109,23 @@ class TransformerEncoderLayer(Layer):
         return output
         
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        output_error = output_error / np.sqrt(2.0)
-        output_error = clip_gradients(output_error, self.gradient_threshold)
-        
         ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
         ffn_dx = self.ffn_dropout.backward_pass(ffn_norm_dx)
         ffn_dx = ffn_dx * 1.2
-        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         ffn_dx = self.ffn.backward_pass(ffn_dx)
-        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         ffn_norm_dresidual = ffn_norm_dresidual * self.ffn_gate
         ffn_dx = ffn_dx + ffn_norm_dresidual
-        ffn_dx = clip_gradients(ffn_dx, self.gradient_threshold)
         
         attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
         attn_dx = self.attention_dropout.backward_pass(attn_norm_dx)
         attn_dx = attn_dx * self.attention_output_scale
-        attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
         attn_dx = self.attention.backward_pass(attn_dx)
-        attn_dx = clip_gradients(attn_dx, self.gradient_threshold)
         
         attn_norm_dresidual = attn_norm_dresidual * self.attention_gate
         dx = attn_dx + attn_norm_dresidual
-        dx = clip_gradients(dx, self.gradient_threshold)
         
         return dx
         
@@ -3165,7 +3140,7 @@ class TransformerEncoderLayer(Layer):
             'd_ff': self.d_ff,
             'dropout_rate': self.dropout_rate,
             'attention_dropout': self.attention_dropout,
-            'activation': self.activation_name,
+            'activation': self.activation,
             'kernel_initializer': self.kernel_initializer,
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
@@ -3197,7 +3172,6 @@ class TransformerDecoderLayer(Layer):
         activation: str = 'relu',
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
-        gradient_threshold: float = 1.0,
         random_state: int | None = None,
     ) -> None:
         super().__init__()
@@ -3209,7 +3183,6 @@ class TransformerDecoderLayer(Layer):
         self.activation_name = activation
         self.kernel_initializer = kernel_initializer
         self.bias_initializer = bias_initializer
-        self.gradient_threshold = gradient_threshold
         self.random_state = random_state
         
         self.self_attention = MultiHeadAttention(
@@ -3294,39 +3267,25 @@ class TransformerDecoderLayer(Layer):
         return out3
         
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        output_error = clip_gradients(output_error, self.gradient_threshold)
-        
         d_norm3, d_residual3 = self.norm3.backward_pass(output_error)
         d_ffn = self.dropout3.backward_pass(d_norm3)
-        d_ffn = clip_gradients(d_ffn, self.gradient_threshold)
         
         d_ffn = self.ffn.backward_pass(d_ffn)
-        d_ffn = clip_gradients(d_ffn, self.gradient_threshold)
         
         d_out2 = d_residual3 + d_ffn
-        d_out2 = clip_gradients(d_out2, self.gradient_threshold)
         
         d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
-        d_attn2 = clip_gradients(d_attn2, self.gradient_threshold)
         
         d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
-        d_attn2_query = clip_gradients(d_attn2_query, self.gradient_threshold)
-        d_attn2_key = clip_gradients(d_attn2_key, self.gradient_threshold)
-        d_attn2_value = clip_gradients(d_attn2_value, self.gradient_threshold)
-        
-        d_out1 = d_residual2 + d_attn2_query
-        d_out1 = clip_gradients(d_out1, self.gradient_threshold)
+        d_out1 = d_residual2 + normalize_gradient(d_attn2_query)
         
         d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
         d_attn1 = self.dropout1.backward_pass(d_norm1)
-        d_attn1 = clip_gradients(d_attn1, self.gradient_threshold)
         
         d_x = self.self_attention.backward_pass(d_attn1)
-        d_x = clip_gradients(d_x, self.gradient_threshold)
         
         d_x = d_residual1 + d_x
-        d_x = clip_gradients(d_x, self.gradient_threshold)
         
         batch_size, seq_len, hidden_dim = d_attn2_key.shape
         attention_weights = self.cross_attention.attention_weights
@@ -3342,22 +3301,18 @@ class TransformerDecoderLayer(Layer):
         d_key_reshaped = d_attn2_key.reshape(batch_size * seq_len, num_heads * head_dim)
         d_key_heads = d_key_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
         d_key_heads = np.transpose(d_key_heads, (0, 2, 1, 3))
-        d_key_heads = clip_gradients(d_key_heads, self.gradient_threshold)
         
         d_value_reshaped = d_attn2_value.reshape(batch_size * seq_len, num_heads * head_dim)
         d_value_heads = d_value_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
         d_value_heads = np.transpose(d_value_heads, (0, 2, 1, 3))
-        d_value_heads = clip_gradients(d_value_heads, self.gradient_threshold)
         
         d_key_weighted = head_importance * d_key_heads
         d_value_weighted = (1.0 - head_importance) * d_value_heads
         
         d_combined_heads = d_key_weighted + d_value_weighted
-        d_combined_heads = clip_gradients(d_combined_heads, self.gradient_threshold)
         
         d_combined = np.transpose(d_combined_heads, (0, 2, 1, 3))
         d_combined = d_combined.reshape(batch_size, seq_len, hidden_dim)
-        d_combined = clip_gradients(d_combined, self.gradient_threshold)
         
         return d_x, d_combined
         

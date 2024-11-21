@@ -14,7 +14,7 @@ from neuralnetlib.layers import *
 from neuralnetlib.losses import *
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
-from neuralnetlib.preprocessing import PCA, pad_sequences
+from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients
 from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, History
 
 
@@ -152,13 +152,6 @@ class Sequential(BaseModel):
         return X
 
     def backward_pass(self, error: np.ndarray):
-        def clip_gradients(gradient: np.ndarray) -> np.ndarray:
-            if self.gradient_clip_threshold > 0:
-                grad_norm = np.linalg.norm(gradient)
-                if grad_norm > self.gradient_clip_threshold:
-                    return gradient * (self.gradient_clip_threshold / grad_norm)
-            return gradient
-
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
                 if (type(layer.activation_function).__name__ == "Softmax" and
@@ -1431,13 +1424,13 @@ class Transformer(BaseModel):
         enc_output = self.encode(inp, training, enc_padding_mask)
         
         dec_output = self.decode(tar, enc_output, training, look_ahead_mask, dec_padding_mask)
-        
+
         output = self.output_layer.forward_pass(dec_output)
         
         return output
 
     def backward_pass(self, error: np.ndarray) -> None:
-        error = np.clip(error, -self.gradient_clip_threshold, self.gradient_clip_threshold)
+        error = clip_gradients(error)
         
         dx = self.output_layer.backward_pass(error)
         d_enc_output = None
@@ -1447,7 +1440,6 @@ class Transformer(BaseModel):
             d_enc_output = d_enc if d_enc_output is None else d_enc_output + d_enc
                     
         dx = self.decoder_dropout.backward_pass(dx)
-        dx = dx * np.sqrt(self.d_model)
         dx = self.tgt_embedding.backward_pass(dx)
         dx = self.positional_encoding.backward_pass(dx)
         
@@ -1456,7 +1448,6 @@ class Transformer(BaseModel):
             dx_enc = encoder_layer.backward_pass(dx_enc)
         
         dx_enc = self.encoder_dropout.backward_pass(dx_enc)
-        dx_enc = dx_enc * np.sqrt(self.d_model)
         dx_enc = self.src_embedding.backward_pass(dx_enc)
 
     def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
@@ -1938,174 +1929,3 @@ class Transformer(BaseModel):
                 f"  dropout_rate={self.dropout_rate},\n"
                 f"  max_sequence_length={self.max_sequence_length}\n"
                 f")")
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
-# mute matplotlib loggin
-import logging
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
-
-from neuralnetlib.optimizers import Adam
-from neuralnetlib.losses import SequenceCrossEntropy
-from neuralnetlib.preprocessing import Tokenizer
-
-def test_transformer_gradients():
-    """Test gradient behavior in the Transformer"""
-    print("\nTesting Transformer Gradient Behavior")
-    print("=" * 50)
-    
-    # Initialize small test data
-    batch_size = 4
-    seq_length = 10
-    vocab_size = 100
-    d_model = 64  # Smaller for testing
-    
-    # Create tokenizer and transformer
-    tokenizer = Tokenizer(num_words=vocab_size)
-    tokenizer.fit_on_texts(["This is a test sentence"])
-    
-    transformer = Transformer(
-        src_vocab_size=vocab_size,
-        tgt_vocab_size=vocab_size,
-        d_model=d_model,
-        n_heads=2,
-        n_encoder_layers=2,
-        n_decoder_layers=2,
-        d_ff=128,
-        gradient_clip_threshold=1.0
-    )
-    
-    loss_function = SequenceCrossEntropy(label_smoothing=0.1)
-    optimizer = Adam(learning_rate=0.001)
-    transformer.compile(loss_function=loss_function, optimizer=optimizer)
-    
-    def create_test_batch(extreme_values: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-        """Create a test batch, optionally with extreme values"""
-        rng = np.random.default_rng(42)
-        x = rng.integers(4, vocab_size, (batch_size, seq_length))  # Start at 4 to avoid special tokens
-        y = rng.integers(4, vocab_size, (batch_size, seq_length))
-        
-        if extreme_values:
-            # Add some extreme patterns
-            x[0] = vocab_size - 1  # All same token
-            y[0] = 4  # All same target
-        
-        return x, y
-    
-    def collect_gradient_stats(grad_norms: Dict) -> Dict:
-        """Collect statistics about gradients"""
-        if not grad_norms:
-            return {}
-            
-        stats = {
-            'max_norm': max(info['weights'] for info in grad_norms.values()),
-            'min_norm': min(info['weights'] for info in grad_norms.values()),
-            'mean_norm': np.mean([info['weights'] for info in grad_norms.values()]),
-            'std_norm': np.std([info['weights'] for info in grad_norms.values()]),
-            'clipped_layers': sum(1 for info in grad_norms.values() 
-                                if info['weights'] > transformer.gradient_clip_threshold)
-        }
-        return stats
-    
-    print("\nTest 1: Normal Batch")
-    print("-" * 30)
-    x_normal, y_normal = create_test_batch(extreme_values=False)
-    loss_normal = transformer.train_on_batch(x_normal, y_normal, print_logging=True)
-    normal_stats = collect_gradient_stats(transformer.gradient_norms)
-    print(f"Loss: {loss_normal:.4f}")
-    print("Gradient Statistics:")
-    for key, value in normal_stats.items():
-        print(f"  {key}: {value:.4f}")
-    
-    print("\nTest 2: Extreme Batch")
-    print("-" * 30)
-    x_extreme, y_extreme = create_test_batch(extreme_values=True)
-    loss_extreme = transformer.train_on_batch(x_extreme, y_extreme, print_logging=True)
-    extreme_stats = collect_gradient_stats(transformer.gradient_norms)
-    print(f"Loss: {loss_extreme:.4f}")
-    print("Gradient Statistics:")
-    for key, value in extreme_stats.items():
-        print(f"  {key}: {value:.4f}")
-    
-    # Visualize gradient norms distribution
-    plt.figure(figsize=(15, 5))
-    
-    # Plot 1: Normal batch gradient distribution
-    plt.subplot(131)
-    normal_norms = [info['weights'] for info in transformer.gradient_norms.values()]
-    plt.hist(normal_norms, bins=30, alpha=0.7, label='Normal')
-    plt.axvline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
-    plt.title('Normal Batch Gradient Norms')
-    plt.xlabel('Gradient Norm')
-    plt.ylabel('Count')
-    plt.legend()
-    
-    # Plot 2: Extreme batch gradient distribution
-    plt.subplot(132)
-    extreme_norms = [info['weights'] for info in transformer.gradient_norms.values()]
-    plt.hist(extreme_norms, bins=30, alpha=0.7, label='Extreme')
-    plt.axvline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
-    plt.title('Extreme Batch Gradient Norms')
-    plt.xlabel('Gradient Norm')
-    plt.ylabel('Count')
-    plt.legend()
-    
-    # Plot 3: Layer-wise comparison
-    plt.subplot(133)
-    layer_names = list(transformer.gradient_norms.keys())
-    normal_values = [transformer.gradient_norms[name]['weights'] for name in layer_names]
-    extreme_values = [transformer.gradient_norms[name]['weights'] for name in layer_names]
-    
-    # Select a few interesting layers to plot
-    interesting_layers = ['src_embedding', 'tgt_embedding', 'output'] + \
-                        [name for name in layer_names if 'attn' in name][:3]
-    indices = [layer_names.index(name) for name in interesting_layers]
-    
-    plt.bar(np.arange(len(indices)) - 0.2, 
-           [normal_values[i] for i in indices], 
-           width=0.4, label='Normal', alpha=0.7)
-    plt.bar(np.arange(len(indices)) + 0.2, 
-           [extreme_values[i] for i in indices], 
-           width=0.4, label='Extreme', alpha=0.7)
-    plt.axhline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
-    plt.xticks(range(len(indices)), [interesting_layers[i] for i in range(len(indices))], rotation=45)
-    plt.title('Layer-wise Gradient Comparison')
-    plt.xlabel('Layer')
-    plt.ylabel('Gradient Norm')
-    plt.legend()
-    
-    plt.tight_layout()
-    plt.show()
-    
-    print("\nTest 3: Multiple Batches Stability")
-    print("-" * 30)
-    n_batches = 5
-    grad_evolution = {layer: [] for layer in ['src_embedding', 'tgt_embedding', 'output']}
-    
-    print("Training on multiple batches...")
-    for i in range(n_batches):
-        x_batch, y_batch = create_test_batch(extreme_values=False)
-        loss = transformer.train_on_batch(x_batch, y_batch, print_logging=True)
-        
-        for layer in grad_evolution:
-            grad_evolution[layer].append(transformer.gradient_norms[layer]['weights'])
-        
-        print(f"Batch {i+1}/{n_batches} - Loss: {loss:.4f}")
-    
-    plt.figure(figsize=(10, 5))
-    for layer, values in grad_evolution.items():
-        plt.plot(range(n_batches), values, 'o-', label=layer)
-    plt.axhline(transformer.gradient_clip_threshold, color='r', linestyle='--', label='Clip Threshold')
-    plt.title('Gradient Evolution Over Batches')
-    plt.xlabel('Batch')
-    plt.ylabel('Gradient Norm')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-    
-    return transformer
-
-if __name__ == "__main__":
-    transformer = test_transformer_gradients()
