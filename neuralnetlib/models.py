@@ -1298,13 +1298,9 @@ class Transformer(BaseModel):
                         enable_padding, padding_size, random_state)
         
         self.PAD_IDX = 0
-        self.SRC_UNK_IDX = 1
-        self.SRC_SOS_IDX = 2
-        self.SRC_EOS_IDX = 3
-        
-        self.TGT_UNK_IDX = 1
-        self.TGT_SOS_IDX = 2
-        self.TGT_EOS_IDX = 3
+        self.UNK_IDX = 1
+        self.SOS_IDX = 2
+        self.EOS_IDX = 3
         
         self.src_vocab_size = src_vocab_size
         self.tgt_vocab_size = tgt_vocab_size
@@ -1417,13 +1413,19 @@ class Transformer(BaseModel):
         return x
 
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray], training: bool = True) -> np.ndarray:
-        inp, tar = inputs
+        encoder_input, decoder_input = inputs
         
-        enc_padding_mask, look_ahead_mask, dec_padding_mask = self.create_masks(inp, tar)
+        enc_padding_mask, look_ahead_mask, dec_padding_mask = self.create_masks(encoder_input, decoder_input)
         
-        enc_output = self.encode(inp, training, enc_padding_mask)
+        enc_output = self.encode(encoder_input, training, enc_padding_mask)
         
-        dec_output = self.decode(tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        dec_output = self.decode(
+            decoder_input,
+            enc_output, 
+            training,
+            look_ahead_mask,
+            dec_padding_mask
+        )
 
         output = self.output_layer.forward_pass(dec_output)
         
@@ -1450,37 +1452,37 @@ class Transformer(BaseModel):
         dx_enc = self.encoder_dropout.backward_pass(dx_enc)
         dx_enc = self.src_embedding.backward_pass(dx_enc)
 
-    def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray, normalize: bool = False) -> tuple[np.ndarray, np.ndarray]:
-        max_seq_len = self.max_sequence_length
+    def prepare_data(self, x_train: np.ndarray, y_train: np.ndarray) -> tuple:
+        """Prepare data for text translation (we assume that the input and output sequences are already tokenized)"""
+        if isinstance(x_train, np.ndarray):
+            x_train = x_train.tolist()
+        if isinstance(y_train, np.ndarray):
+            y_train = y_train.tolist()
         
-        x_train_with_tokens = [
-            [self.SRC_SOS_IDX] + seq + [self.SRC_EOS_IDX] for seq in x_train
-        ]
-        x_train_padded = pad_sequences(x_train_with_tokens, 
-                                    max_length=max_seq_len,
+        if x_train[0][0] != self.SOS_IDX and x_train[0][-1] != self.EOS_IDX and y_train[0][0] != self.SOS_IDX and y_train[0][-1] != self.EOS_IDX:
+            decoder_input = [[self.SOS_IDX] + seq for seq in y_train]
+            decoder_target = [seq + [self.EOS_IDX] for seq in y_train]
+        else:
+            decoder_input = [seq[:-1] for seq in y_train]
+            decoder_target = [seq[1:] for seq in y_train]
+            
+        
+        encoder_input = pad_sequences(x_train, 
+                                    max_length=self.max_sequence_length,
                                     padding='post', 
                                     pad_value=self.PAD_IDX)
         
-        y_train_with_tokens = [
-            [self.TGT_SOS_IDX] + seq + [self.TGT_EOS_IDX] for seq in y_train
-        ]
-        y_train_padded = pad_sequences(y_train_with_tokens, 
-                                    max_length=max_seq_len,
-                                    padding='post', 
+        decoder_input = pad_sequences(decoder_input,
+                                    max_length=self.max_sequence_length,
+                                    padding='post',
                                     pad_value=self.PAD_IDX)
         
-        if normalize:
-            x_mean = np.mean(x_train_padded)
-            x_std = np.std(x_train_padded) + 1e-8
-            y_mean = np.mean(y_train_padded)
-            y_std = np.std(y_train_padded) + 1e-8
-
-            x_train_normalized = (x_train_padded - x_mean) / x_std
-            y_train_normalized = (y_train_padded - y_mean) / y_std
-
-            return x_train_normalized, y_train_normalized
+        decoder_target = pad_sequences(decoder_target,
+                                    max_length=self.max_sequence_length,
+                                    padding='post',
+                                    pad_value=self.PAD_IDX)
         
-        return x_train_padded, y_train_padded
+        return encoder_input, decoder_input, decoder_target
 
     def compile(self, 
                 loss_function: LossFunction | str, 
@@ -1490,26 +1492,29 @@ class Transformer(BaseModel):
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
         
         if isinstance(self.loss_function, SequenceCrossEntropy):
-            special_tokens = [self.PAD_IDX, self.TGT_UNK_IDX, self.TGT_SOS_IDX, self.TGT_EOS_IDX]
+            special_tokens = [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX, self.EOS_IDX]
             self.loss_function.ignore_tokens = list(set(self.loss_function.ignore_tokens + special_tokens))
         
         if verbose:
             print(str(self))
 
-    def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray, print_logging: bool = False) -> float:
+    def train_on_batch(self, x_batch: tuple[np.ndarray, np.ndarray], y_batch: np.ndarray, print_logging: bool = False) -> float:
         self.gradient_norms = {}
         
-        decoder_input = y_batch[:, :-1]
-        targets = y_batch[:, 1:]
+        if isinstance(x_batch, list) and len(x_batch) == 2:
+            encoder_input, decoder_input = x_batch
+        else:
+            raise ValueError("x_batch must be a list of [encoder_input, decoder_input]")
+
+        decoder_target = y_batch
         
-        self.enc_seq_length = x_batch.shape[1]  
+        self.enc_seq_length = encoder_input.shape[1]  
         self.dec_seq_length = decoder_input.shape[1]
         
-        self.predictions = self.forward_pass((x_batch, decoder_input), training=True)
+        self.predictions = self.forward_pass((encoder_input, decoder_input), training=True)
         
-        loss = self.loss_function(targets, self.predictions)
-        
-        error = self.loss_function.derivative(targets, self.predictions)
+        loss = self.loss_function(decoder_target, self.predictions)
+        error = self.loss_function.derivative(decoder_target, self.predictions)
         self.backward_pass(error)
         
         def update_with_monitoring(name: str, layer_idx: int, weights: np.ndarray, 
@@ -1699,7 +1704,7 @@ class Transformer(BaseModel):
         
         return loss
 
-    def fit(self, x_train: np.ndarray, y_train: np.ndarray,
+    def fit(self, x_train: np.ndarray | list, y_train: np.ndarray | list,
                 epochs: int,
                 batch_size: int | None = None,
                 verbose: bool = True,
@@ -1712,9 +1717,8 @@ class Transformer(BaseModel):
                 'loss': [],
                 'val_loss': []
             })
-
-            x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
-            y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+                
+            encoder_input, decoder_input, decoder_target = self.prepare_data(x_train, y_train)
 
             if metrics is not None:
                 metrics: list[Metric] = [Metric(m) for m in metrics]
@@ -1733,21 +1737,32 @@ class Transformer(BaseModel):
                     callback.on_epoch_begin(epoch)
 
                 start_time = time.time()
-                x_train_shuffled, y_train_shuffled = shuffle(x_train, y_train,
-                                                        random_state=random_state if random_state is not None else self.random_state)
+                
+                indices = np.arange(len(encoder_input))
+                if random_state is not None:
+                    rng = np.random.default_rng(random_state if random_state is not None else self.random_state)
+                    rng.shuffle(indices)
+                encoder_input_shuffled = encoder_input[indices]
+                decoder_input_shuffled = decoder_input[indices]
+                decoder_target_shuffled = decoder_target[indices]
+                
                 error = 0
                 predictions_list = []
                 y_true_list = []
 
                 if batch_size is not None:
-                    num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
-                    for j in range(0, x_train.shape[0], batch_size):
-                        x_batch = x_train_shuffled[j:j + batch_size]
-                        y_batch = y_train_shuffled[j:j + batch_size]
+                    num_batches = np.ceil(len(encoder_input) / batch_size).astype(int)
+                    for j in range(0, len(encoder_input), batch_size):
+                        enc_batch = encoder_input_shuffled[j:j + batch_size]
+                        dec_batch = decoder_input_shuffled[j:j + batch_size]
+                        target_batch = decoder_target_shuffled[j:j + batch_size]
 
-                        error += self.train_on_batch(x_batch, y_batch)
+                        error += self.train_on_batch(
+                            [enc_batch, dec_batch], 
+                            target_batch
+                        )
                         predictions_list.append(self.predictions)
-                        y_true_list.append(y_batch[:, 1:])  # Remove SOS token
+                        y_true_list.append(target_batch)
 
                         if verbose:
                             metrics_str = ''
@@ -1760,9 +1775,12 @@ class Transformer(BaseModel):
 
                     error /= num_batches
                 else:
-                    error = self.train_on_batch(x_train, y_train)
+                    error = self.train_on_batch(
+                        [encoder_input, decoder_input], 
+                        decoder_target
+                    )
                     predictions_list.append(self.predictions)
-                    y_true_list.append(y_train[:, 1:])  # Remove SOS token
+                    y_true_list.append(decoder_target)
 
                     if verbose:
                         metrics_str = ''
@@ -1783,15 +1801,20 @@ class Transformer(BaseModel):
                         logs[metric.name] = metric_value
 
                 if validation_data is not None:
-                    x_test, y_test = validation_data
-                    val_loss, val_predictions = self.evaluate(x_test, y_test, batch_size)
+                    if isinstance(validation_data, tuple) and len(validation_data) == 2:
+                        x_val, y_val = validation_data
+                        x_val_enc, x_val_dec, y_val_prep = self.prepare_data(x_val, y_val)
+                        val_loss, val_predictions = self.evaluate([x_val_enc, x_val_dec], y_val_prep, batch_size)
+                    else:
+                        raise ValueError("validation_data must be a tuple of (x_val, y_val)")
+                    
                     history['val_loss'].append(val_loss)
                     logs['val_loss'] = val_loss
 
                     if metrics is not None:
                         val_metrics = []
                         for metric in metrics:
-                            val_metric = metric(val_predictions, y_test[:, 1:])  # Remove SOS token
+                            val_metric = metric(val_predictions, y_val)
                             history[f'val_{metric.name}'].append(val_metric)
                             logs[f'val_{metric.name}'] = val_metric
                             val_metrics.append(val_metric)
@@ -1828,56 +1851,82 @@ class Transformer(BaseModel):
             return history
         
     def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, 
-                alpha: float = 0.6, min_length: int = 5, temperature: float = 1.0) -> np.ndarray:
-        batch_size = inp.shape[0]
+                alpha: float = 0.2, min_length: int = 2, temperature: float = 1.0) -> np.ndarray:
         enc_output = self.encode(inp, training=False)
         
-        dec_input = np.full((batch_size, 1), self.TGT_SOS_IDX)
+        beam_sequences = [[
+            (np.array([[self.SOS_IDX]]), 0.0)
+        ]]
         
-        max_output_length = min(max_length, self.max_sequence_length)
-        
-        outputs = []
-        for i in range(max_output_length - 1):
-            if dec_input.shape[1] >= self.max_sequence_length:
-                break
+        for i in range(max_length - 1):
+            all_candidates = []
+            
+            for sequences in beam_sequences[-1]:
+                seq, score = sequences
                 
-            predictions = self.forward_pass((inp, dec_input), training=False)
-            predictions = predictions[:, -1:, :]
-            
-            scaled_logits = predictions[0, 0] / temperature
-            probs = np.exp(scaled_logits - np.max(scaled_logits))
-            probs = probs / np.sum(probs)
-            
-            rng = np.random.default_rng(self.random_state)
-            next_token = rng.choice(len(probs), p=probs)
-            
-            if next_token == self.TGT_EOS_IDX or len(outputs) >= max_output_length - 1:
-                break
+                if seq[0, -1] == self.EOS_IDX:
+                    if len(seq[0]) >= min_length:
+                        all_candidates.append((seq, score))
+                    continue
+                    
+                dec_output = self.decode(
+                    seq,
+                    enc_output, 
+                    training=False,
+                    look_ahead_mask=self.create_look_ahead_mask(seq.shape[1]),
+                    padding_mask=self.create_padding_mask(inp)
+                )
+                predictions = self.output_layer.forward_pass(dec_output)
+                predictions = predictions[:, -1, :] / temperature
                 
-            outputs.append(next_token)
-            dec_input = np.array([[self.TGT_SOS_IDX] + outputs])
+                top_k = min(beam_size * 2, self.tgt_vocab_size)
+                top_indices = np.argpartition(predictions[0], -top_k)[-top_k:]
+                top_probs = self._softmax(predictions[0][top_indices])
+                
+                for idx, prob in zip(top_indices, top_probs):
+                    candidate_score = score - np.log(prob + 1e-10)
+                    candidate_score = candidate_score / ((1 + len(seq[0])) ** alpha)
+                    
+                    candidate_seq = np.concatenate([seq, [[idx]]], axis=1)
+                    all_candidates.append((candidate_seq, candidate_score))
+            
+            ordered = sorted(all_candidates, key=lambda x: x[1])
+            beam_sequences.append(ordered[:beam_size])
+            
+            if all(seq[0, -1] == self.EOS_IDX for seq, _ in beam_sequences[-1]):
+                break
         
-        final_sequence = np.array([[self.TGT_SOS_IDX] + outputs + [self.TGT_EOS_IDX]])
-        return final_sequence
+        best_seq = beam_sequences[-1][0][0]
+        return best_seq
 
-    def evaluate(self, 
-                x_test: np.ndarray, 
-                y_test: np.ndarray, 
-                batch_size: int = 32) -> tuple[float, np.ndarray]:
-        total_loss = 0
-        num_batches = int(np.ceil(len(x_test) / batch_size))
-        predictions_list: list = []
-        
-        for i in range(0, len(x_test), batch_size):
-            batch_x = x_test[i:i + batch_size]
-            batch_y = y_test[i:i + batch_size]
+    def _softmax(self, x: np.ndarray) -> np.ndarray:
+        x_max = np.max(x, axis=-1, keepdims=True)
+        exp_x = np.exp(x - x_max)
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+    def evaluate(self, x_test: list[np.ndarray], y_test: np.ndarray, batch_size: int = 32) -> tuple[float, np.ndarray]:
+        if isinstance(x_test, list) and len(x_test) == 2:
+            encoder_input, decoder_input = x_test
+        else:
+            raise ValueError("x_test must be a list of [encoder_input, decoder_input]")
             
-            predictions = self.forward_pass((batch_x, batch_y[:, :-1]), training=False)
-            batch_loss = self.loss_function(batch_y[:, 1:], predictions)
+        decoder_target = y_test
+        
+        total_loss = 0
+        num_batches = int(np.ceil(len(encoder_input) / batch_size))
+        predictions_list = []
+        
+        for i in range(0, len(encoder_input), batch_size):
+            enc_batch = encoder_input[i:i + batch_size]
+            dec_batch = decoder_input[i:i + batch_size]
+            target_batch = decoder_target[i:i + batch_size]
+            
+            predictions = self.forward_pass((enc_batch, dec_batch), training=False)
+            batch_loss = self.loss_function(target_batch, predictions)
             
             total_loss += batch_loss
             predictions_list.append(predictions)
-            
+        
         avg_loss = total_loss / num_batches
         all_predictions = np.vstack(predictions_list)
         

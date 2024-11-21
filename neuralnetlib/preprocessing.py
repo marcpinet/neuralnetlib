@@ -455,6 +455,7 @@ class Tokenizer:
         """
         Fit tokenizer on texts, keeping special tokens at their fixed positions.
         Regular vocabulary starts at index FIRST_REGULAR_IDX (4).
+        Hyphenated words as single tokens.
         """
         FIRST_REGULAR_IDX = len(self.SPECIAL_TOKENS)
         
@@ -506,22 +507,25 @@ class Tokenizer:
 
         self.index_word = {i: w for w, i in self.word_index.items()}
 
-    def texts_to_sequences(self, texts: list[str], preprocess_ponctuation: bool = False) -> list[list[int]]:
-        if preprocess_ponctuation:
-            texts = [self.preprocess_text(text) for text in texts]
-        return list(self.texts_to_sequences_generator(texts))
-
-    def texts_to_sequences_generator(self, texts: list[str]) -> Generator[list[int], None, None]:
+    def texts_to_sequences(self, texts: list[str], preprocess_ponctuation: bool = False,
+                        add_special_tokens: bool = True) -> list[list[int]]:
+        sequences = []
         for text in texts:
+            if preprocess_ponctuation:
+                text = self.preprocess_text(text)
+            
             if self.char_level:
                 seq = text
             else:
                 seq = text.split(self.split) if isinstance(text, str) else text
+            
             vect = []
             for w in seq:
                 if self.lower:
                     w = w.lower()
+                    
                 i = self.word_index.get(w)
+                
                 if i is not None:
                     if self.num_words and i >= self.num_words:
                         if w in {self.pad_token, self.unk_token, self.sos_token, self.eos_token}:
@@ -531,8 +535,21 @@ class Tokenizer:
                     else:
                         vect.append(i)
                 else:
-                    vect.append(self.word_index[self.unk_token])
-            yield vect
+                    if '-' in w and not self.char_level:
+                        subwords = w.split('-')
+                        for idx, subw in enumerate(subwords):
+                            if idx > 0:
+                                vect.append(self.word_index.get('-', self.UNK_IDX))
+                            i = self.word_index.get(subw, self.UNK_IDX)
+                            vect.append(i)
+                    else:
+                        vect.append(self.UNK_IDX)
+            
+            if add_special_tokens:
+                vect = [self.SOS_IDX] + vect + [self.EOS_IDX]
+            sequences.append(vect)
+            
+        return sequences
 
     def sequences_to_texts(self, sequences: list[list[int]]) -> list[str]:
         return list(self.sequences_to_texts_generator(sequences))
