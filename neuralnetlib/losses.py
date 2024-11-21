@@ -252,7 +252,8 @@ class SequenceCrossEntropy(LossFunction):
                 rows, cols = np.nonzero(repeat_mask)
                 smoothed[rows, cols+1] *= self.repetition_penalty
         
-        grad = -(smoothed / (y_pred_clipped + self.epsilon))
+        normalizer = (1.0 - self.label_smoothing) + self.label_smoothing / (n_classes - 1)
+        grad = -(smoothed / (y_pred_clipped + self.epsilon)) / normalizer
         masked_grad = grad * mask[..., np.newaxis]
         
         normalizer = np.sum(mask) + self.epsilon
