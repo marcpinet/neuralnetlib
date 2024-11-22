@@ -1733,6 +1733,7 @@ class Transformer(BaseModel):
 
                 start_time = time.time()
                 
+                random_state = random_state if random_state is not None else self.random_state
                 indices = np.arange(len(encoder_input))
                 if random_state is not None:
                     rng = np.random.default_rng(random_state if random_state is not None else self.random_state)
