@@ -3234,6 +3234,7 @@ class TransformerDecoderLayer(Layer):
             mask=cross_attention_mask,
             training=training
         )
+        
         if training:
             attn2 = self.dropout2.forward_pass(attn2, training=True)
         out2 = self.norm2.forward_pass((attn2, out1))

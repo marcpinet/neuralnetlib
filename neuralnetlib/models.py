@@ -1466,7 +1466,6 @@ class Transformer(BaseModel):
             decoder_input = [seq[:-1] for seq in y_train]
             decoder_target = [seq[1:] for seq in y_train]
             
-        
         encoder_input = pad_sequences(x_train, 
                                     max_length=self.max_sequence_length,
                                     padding='post', 

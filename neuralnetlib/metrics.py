@@ -319,26 +319,34 @@ def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> 
     return 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
 
-def bleu_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n_gram: int = 4, smooth: bool = False) -> float:
+def bleu_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float | None = None, n_gram: int = 4, smooth: bool = False) -> float:
     """Compute BLEU score for machine translation evaluation.
-
+    
     Args:
-        y_pred (list[list[str]]): List of list containing predicted tokens.
-        y_true (list[list[list[str]]]): List of list containing reference tokens.
-        n_gram (int, optional): Maximum n-gram length. Defaults to 4.
-        smooth (bool, optional): Whether to apply smoothing. Defaults to False.
-
+        y_pred: Model predictions (batch_size, seq_length, vocab_size) or (batch_size, seq_length)
+        y_true: True sequences (batch_size, seq_length)
+        threshold: Optional threshold parameter (ignored for BLEU score)
+        n_gram: Maximum n-gram length. Defaults to 4.
+        smooth: Whether to apply smoothing. Defaults to False.
+    
     Returns:
         float: BLEU score.
     """
+    
+    if y_pred.ndim == 3:
+        y_pred = np.argmax(y_pred, axis=-1)
+    
+    pred_sequences = [[int(token) for token in seq] for seq in y_pred]
+    true_sequences = [[[int(token) for token in seq]] for seq in y_true]
+    
     def get_ngrams(sequence, n):
         return [tuple(sequence[i:i + n]) for i in range(len(sequence) - n + 1)]
     
     precisions = []
-    for n in range(1, n_gram + 1):
+    for n in range(1, int(n_gram) + 1):
         matches = 0
         total = 0
-        for pred, refs in zip(y_pred, y_true):
+        for pred, refs in zip(pred_sequences, true_sequences):
             pred_ngrams = get_ngrams(pred, n)
             ref_ngrams_list = [get_ngrams(ref, n) for ref in refs]
             
@@ -363,9 +371,9 @@ def bleu_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n_gram: i
         else:
             precisions.append(matches / total if total > 0 else 0)
     
-    pred_length = sum(len(pred) for pred in y_pred)
+    pred_length = sum(len(pred) for pred in pred_sequences)
     ref_lengths = []
-    for refs in y_true:
+    for refs in true_sequences:
         ref_lengths.append(min(len(ref) for ref in refs))
     closest_ref_length = min(ref_lengths, key=lambda ref_len: abs(ref_len - pred_length))
     
@@ -374,8 +382,11 @@ def bleu_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n_gram: i
     else:
         brevity_penalty = np.exp(1 - closest_ref_length / pred_length) if pred_length > 0 else 0
 
-    bleu = brevity_penalty * np.exp(np.sum(np.log(precisions)) / n_gram)
-    return bleu
+    if all(p == 0 for p in precisions):
+        return 0.0
+
+    bleu = brevity_penalty * np.exp(np.sum(np.log([p if p > 0 else 1e-10 for p in precisions])) / n_gram)
+    return float(bleu)
 
 
 def rouge_n_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n: int = 2) -> float:

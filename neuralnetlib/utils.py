@@ -56,7 +56,7 @@ def progress_bar(current: int, total: int, width: int = 30, message: str = "") -
     sys.stdout.flush()
 
 
-def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, random_state: int = None) -> tuple:
+def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, random_state: int = None, shuffle: bool = True) -> tuple:
     """
     Splits the data into training and test sets.
 
@@ -65,6 +65,7 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, rando
         y (np.ndarray or list): target data
         test_size (float): the proportion of the dataset to include in the test split
         random_state (int): seed for the random number generator
+        shuffle (bool): whether to shuffle the data before splitting
 
     Returns:
         tuple: (x_train, x_test, y_train, y_test)
@@ -73,7 +74,8 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, rando
     y = np.array(y)
     rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
     indices = np.arange(len(x))
-    rng.shuffle(indices)
+    if shuffle:
+        rng.shuffle(indices)
     split_index = int(len(x) * (1 - test_size))
     x_train = x[indices[:split_index]]
     x_test = x[indices[split_index:]]
