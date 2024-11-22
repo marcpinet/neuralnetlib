@@ -84,6 +84,13 @@ def train_test_split(x: np.ndarray, y: np.ndarray, test_size: float = 0.2, rando
     return x_train, x_test, y_train, y_test
 
 
+def log_softmax(x: np.ndarray) -> np.ndarray:
+    max_x = np.max(x, axis=-1, keepdims=True)
+    exp_x = np.exp(x - max_x)
+    sum_exp = np.sum(exp_x, axis=-1, keepdims=True)
+    return x - max_x - np.log(sum_exp)
+
+
 def format_number(number):
     if number == 0:  # Handle the case for 0 directly
         return "0.0"

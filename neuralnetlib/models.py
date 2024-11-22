@@ -15,7 +15,7 @@ from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCro
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, History
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, log_softmax, History
 
 
 class BaseModel(ABC):
@@ -1733,7 +1733,6 @@ class Transformer(BaseModel):
 
                 start_time = time.time()
                 
-                random_state = random_state if random_state is not None else self.random_state
                 indices = np.arange(len(encoder_input))
                 if random_state is not None:
                     rng = np.random.default_rng(random_state if random_state is not None else self.random_state)
@@ -1847,7 +1846,7 @@ class Transformer(BaseModel):
             return history
         
     def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5, 
-                alpha: float = 0.2, min_length: int = 2, temperature: float = 1.0) -> np.ndarray:
+                alpha: float = 0.6, min_length: int = 2, temperature: float = 0.7) -> np.ndarray:
         enc_output = self.encode(inp, training=False)
         
         beam_sequences = [[
@@ -1872,33 +1871,40 @@ class Transformer(BaseModel):
                     look_ahead_mask=self.create_look_ahead_mask(seq.shape[1]),
                     padding_mask=self.create_padding_mask(inp)
                 )
-                predictions = self.output_layer.forward_pass(dec_output)
-                predictions = predictions[:, -1, :] / temperature
+                
+                logits = self.output_layer.forward_pass(dec_output)[:, -1, :] / temperature
+                log_probs = log_softmax(logits[0])
                 
                 top_k = min(beam_size * 2, self.tgt_vocab_size)
-                top_indices = np.argpartition(predictions[0], -top_k)[-top_k:]
-                top_probs = self._softmax(predictions[0][top_indices])
+                top_indices = np.argpartition(log_probs, -top_k)[-top_k:]
                 
-                for idx, prob in zip(top_indices, top_probs):
-                    candidate_score = score - np.log(prob + 1e-10)
-                    candidate_score = candidate_score / ((1 + len(seq[0])) ** alpha)
+                valid_tokens = np.ones(len(top_indices), dtype=bool)
+                valid_tokens[top_indices == self.SOS_IDX] = False
+                if len(seq[0]) < min_length:
+                    valid_tokens[top_indices == self.EOS_IDX] = False
+                    
+                for idx, is_valid in zip(top_indices[valid_tokens], valid_tokens[valid_tokens]):
+                    candidate_score = score - log_probs[idx]
+                    length_penalty = ((5 + len(seq[0]) + 1) / 6) ** alpha
+                    candidate_score = candidate_score / length_penalty
                     
                     candidate_seq = np.concatenate([seq, [[idx]]], axis=1)
                     all_candidates.append((candidate_seq, candidate_score))
             
+            if not all_candidates:
+                break
+                
             ordered = sorted(all_candidates, key=lambda x: x[1])
             beam_sequences.append(ordered[:beam_size])
             
             if all(seq[0, -1] == self.EOS_IDX for seq, _ in beam_sequences[-1]):
                 break
         
-        best_seq = beam_sequences[-1][0][0]
-        return best_seq
-
-    def _softmax(self, x: np.ndarray) -> np.ndarray:
-        x_max = np.max(x, axis=-1, keepdims=True)
-        exp_x = np.exp(x - x_max)
-        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+        best_seq = min(beam_sequences[-1], key=lambda x: x[1])[0]
+        
+        if best_seq[0, -1] == self.EOS_IDX:
+            return best_seq[:, 1:-1]
+        return best_seq[:, 1:]
 
     def evaluate(self, x_test: list[np.ndarray], y_test: np.ndarray, batch_size: int = 32) -> tuple[float, np.ndarray]:
         if isinstance(x_test, list) and len(x_test) == 2:
