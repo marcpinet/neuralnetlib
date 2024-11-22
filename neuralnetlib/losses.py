@@ -175,19 +175,12 @@ class SequenceCrossEntropy(LossFunction):
         self.ignore_tokens = list(ignore_tokens) if ignore_tokens is not None else []
         self.repetition_penalty = repetition_penalty
 
-    def stable_softmax(self, logits: np.ndarray) -> np.ndarray:
-        max_logits = np.max(logits, axis=-1, keepdims=True)
-        exp_shifted = np.exp(logits - max_logits)
-        return exp_shifted / np.sum(exp_shifted, axis=-1, keepdims=True)
-
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_true = np.asarray(y_true, dtype=np.int32)
         y_pred = np.asarray(y_pred, dtype=np.float32)
         
         if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
             raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-        
-        y_pred = self.stable_softmax(y_pred)
         
         ignore_tokens = np.array(self.ignore_tokens)
         if ignore_tokens.size > 0:
@@ -229,8 +222,6 @@ class SequenceCrossEntropy(LossFunction):
         
         if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
             raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-        
-        y_pred = self.stable_softmax(y_pred)
         
         ignore_tokens = np.array(self.ignore_tokens)
         if ignore_tokens.size > 0:
