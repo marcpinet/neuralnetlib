@@ -3040,13 +3040,13 @@ class TransformerEncoderLayer(Layer):
         self.bias_initializer = bias_initializer
 
         key_dim = d_model // num_heads
-        self.attention_key_scale = np.sqrt(key_dim) * 0.6
+        self.attention_key_scale = np.sqrt(key_dim)
         self.attention_output_scale = 1.0
 
         self.attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=key_dim,
-            dropout_rate=attention_dropout * 0.6,
+            dropout_rate=attention_dropout,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
             random_state=random_state
@@ -3055,76 +3055,59 @@ class TransformerEncoderLayer(Layer):
         self.ffn = FeedForward(
             d_ff=d_ff,
             d_model=d_model,
-            dropout_rate=dropout_rate * 0.6,
+            dropout_rate=dropout_rate,
             activation=activation,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
             random_state=random_state
         )
         
-        self.attention_dropout = Dropout(dropout_rate * 0.6, random_state=random_state)
-        self.ffn_dropout = Dropout(dropout_rate * 0.6, random_state=random_state)
+        self.attention_dropout = Dropout(dropout_rate, random_state=random_state)
+        self.ffn_dropout = Dropout(dropout_rate, random_state=random_state)
         
         norm_config = {
-            'epsilon': 1e-5,
+            'epsilon': 1e-6,
             'gamma_init_std': 0.02,
             'beta_init_std': 0.01,
-            'grad_clip': 2.0,
+            'grad_clip': 1.0,
             'random_state': random_state
         }
         
         self.attention_norm = AddNorm(**norm_config)
         self.ffn_norm = AddNorm(**norm_config)
         
-        rng = np.random.default_rng(random_state)
-        self.attention_gate = 0.7 + 0.05 * rng.normal()
-        self.ffn_gate = 1.0
-        
         for key, value in kwargs.items():
             setattr(self, key, value)
             
-    def forward_pass(
-        self, inputs: np.ndarray, mask: np.ndarray = None, training: bool = True
-    ) -> np.ndarray:
+    def forward_pass(self, inputs: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         self.x = inputs
-        
         attn_output = self.attention.forward_pass(self.x, mask=mask, training=training)
-        attn_output = attn_output * self.attention_output_scale
         
         if training:
             attn_output = self.attention_dropout.forward_pass(attn_output, training=True)
             
-        gated_residual = self.x * self.attention_gate
-        self.attn_output = self.attention_norm.forward_pass((attn_output, gated_residual))
+        attn_output = self.attention_norm.forward_pass((attn_output, self.x))
         
-        ffn_output = self.ffn.forward_pass(self.attn_output, training=training)
-        ffn_output = ffn_output * 1.2
+        ffn_output = self.ffn.forward_pass(attn_output, training=training)
         
         if training:
             ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
             
-        gated_attn = self.attn_output * self.ffn_gate
-        output = self.ffn_norm.forward_pass((ffn_output, gated_attn))
+        output = self.ffn_norm.forward_pass((ffn_output, attn_output))
         
         return output
         
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
         ffn_dx = self.ffn_dropout.backward_pass(ffn_norm_dx)
-        ffn_dx = ffn_dx * 1.2
         
         ffn_dx = self.ffn.backward_pass(ffn_dx)
-        
-        ffn_norm_dresidual = ffn_norm_dresidual * self.ffn_gate
         ffn_dx = ffn_dx + ffn_norm_dresidual
         
         attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
         attn_dx = self.attention_dropout.backward_pass(attn_norm_dx)
-        attn_dx = attn_dx * self.attention_output_scale
         
         attn_dx = self.attention.backward_pass(attn_dx)
-        
-        attn_norm_dresidual = attn_norm_dresidual * self.attention_gate
         dx = attn_dx + attn_norm_dresidual
         
         return dx
