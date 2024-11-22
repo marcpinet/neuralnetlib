@@ -2474,6 +2474,7 @@ class MultiHeadAttention(Layer):
         attention_axes: list[int] = None,
         kernel_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
+        normalize_attention: bool = False,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2488,6 +2489,7 @@ class MultiHeadAttention(Layer):
         self.kernel_initializer: str = kernel_initializer
         self.bias_initializer: str = bias_initializer
         self.random_state: int = random_state
+        self.normalize_attention: bool = normalize_attention
 
         self.query_dense: Dense = None
         self.key_dense: Dense = None
@@ -2515,37 +2517,13 @@ class MultiHeadAttention(Layer):
         embedding_dim: int = input_shape[-1]
 
         if self.query_dense is None:
-            self.query_dense = Dense(
-                units=self.num_heads * self.key_dim,
-                weights_init="scaled_normal",
-                bias_init=self.bias_initializer if self.use_bias else None,
-                random_state=self.random_state,
-                init_scale=5.0
-            )
-            
-            self.key_dense = Dense(
-                units=self.num_heads * self.key_dim,
-                weights_init="scaled_normal",
-                bias_init=self.bias_initializer if self.use_bias else None,
-                random_state=self.random_state,
-                init_scale=5.0
-            )
-            
-            self.value_dense = Dense(
-                units=self.num_heads * self.value_dim,
-                weights_init=self.kernel_initializer,
-                bias_init=self.bias_initializer if self.use_bias else None,
-                random_state=self.random_state
-            )
+            self.query_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
+            self.key_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
+            self.value_dense = self.build_dense_layer(self.num_heads * self.value_dim, input_shape)
 
         output_dim: int = self.output_shape if self.output_shape else embedding_dim
         if self.output_dense is None:
-            self.output_dense = Dense(
-                units=output_dim,
-                weights_init=self.kernel_initializer,
-                bias_init=self.bias_initializer if self.use_bias else None,
-                random_state=self.random_state
-            )
+            self.output_dense = self.build_dense_layer(output_dim, input_shape)
 
     def _reshape_for_attention(self, x: np.ndarray, batch_size: int, seq_length: int) -> np.ndarray:
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
@@ -2554,22 +2532,26 @@ class MultiHeadAttention(Layer):
     def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, 
                                         value: np.ndarray, mask: np.ndarray = None,
                                         training: bool = True) -> np.ndarray:
-        query_norm = np.sqrt(np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
-        key_norm = np.sqrt(np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
         
-        query_normalized = query / query_norm
-        key_normalized = key / key_norm
+        if self.normalize_attention:
+            query_norm = np.sqrt(np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
+            key_norm = np.sqrt(np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
+            
+            query_normalized = query / query_norm
+            key_normalized = key / key_norm
         
-        matmul_qk = np.matmul(query_normalized, np.transpose(key_normalized, (0, 1, 3, 2)))
+            matmul_qk = np.matmul(query_normalized, np.transpose(key_normalized, (0, 1, 3, 2)))
+        else:
+            matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
+            
         d_k = key.shape[-1]
         
-        temperature = 0.5
-        scaling_factor = np.sqrt(d_k) / 4
-        scaled_attention_logits = matmul_qk / scaling_factor / temperature
+        scaling_factor = np.sqrt(d_k)
+        scaled_attention_logits = matmul_qk / scaling_factor
         
-        MASKING_VALUE = -1e4
+        MASKING_VALUE = -1e9
         if mask is not None:
-            scaled_attention_logits = np.where(mask, MASKING_VALUE, scaled_attention_logits)
+            scaled_attention_logits += (mask * MASKING_VALUE)
         
         attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
         self.attention_weights = attention_weights

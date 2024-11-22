@@ -320,6 +320,18 @@ def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> 
 
 
 def bleu_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float | None = None, n_gram: int = 4, smooth: bool = False) -> float:
+    """Compute BLEU score for machine translation evaluation.
+    
+    Args:
+        y_pred: Model predictions (batch_size, seq_length, vocab_size) or (batch_size, seq_length)
+        y_true: True sequences (batch_size, seq_length)
+        threshold: Optional threshold parameter (ignored for BLEU score)
+        n_gram: Maximum n-gram length. Defaults to 4.
+        smooth: Whether to apply smoothing. Defaults to False.
+    
+    Returns:
+        float: BLEU score.
+    """
     special_tokens = {0, 1, 2, 3}  # PAD, UNK, SOS, EOS
     weights = [0.25] * n_gram
     
