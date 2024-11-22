@@ -43,6 +43,12 @@ class Metric:
             return mean_absolute_percentage_error
         elif name in ['r2', 'r2_score']:
             return r2_score
+        elif name in ['bleu', 'bleu_score']:
+            return bleu_score
+        elif name in ['rouge-n', 'rouge_n', 'rouge-n-score']:
+            return rouge_n_score
+        elif name in ['rouge-l', 'rouge_l', 'rouge-l-score']:
+            return rouge_l_score
         else:
             raise ValueError(f"Metric {name} is not supported.")
 
@@ -311,3 +317,137 @@ def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> 
     ss_res = np.sum((y_true_classes - y_pred_classes) ** 2)
     ss_tot = np.sum((y_true_classes - np.mean(y_true_classes)) ** 2)
     return 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+
+def bleu_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n_gram: int = 4, smooth: bool = False) -> float:
+    """Compute BLEU score for machine translation evaluation.
+
+    Args:
+        y_pred (list[list[str]]): List of list containing predicted tokens.
+        y_true (list[list[list[str]]]): List of list containing reference tokens.
+        n_gram (int, optional): Maximum n-gram length. Defaults to 4.
+        smooth (bool, optional): Whether to apply smoothing. Defaults to False.
+
+    Returns:
+        float: BLEU score.
+    """
+    def get_ngrams(sequence, n):
+        return [tuple(sequence[i:i + n]) for i in range(len(sequence) - n + 1)]
+    
+    precisions = []
+    for n in range(1, n_gram + 1):
+        matches = 0
+        total = 0
+        for pred, refs in zip(y_pred, y_true):
+            pred_ngrams = get_ngrams(pred, n)
+            ref_ngrams_list = [get_ngrams(ref, n) for ref in refs]
+            
+            pred_count = {}
+            for ngram in pred_ngrams:
+                pred_count[ngram] = pred_count.get(ngram, 0) + 1
+            
+            max_ref_count = {}
+            for ref_ngrams in ref_ngrams_list:
+                ref_count = {}
+                for ngram in ref_ngrams:
+                    ref_count[ngram] = ref_count.get(ngram, 0) + 1
+                for ngram in ref_count:
+                    max_ref_count[ngram] = max(max_ref_count.get(ngram, 0), ref_count[ngram])
+            
+            for ngram in pred_count:
+                matches += min(pred_count[ngram], max_ref_count.get(ngram, 0))
+            total += len(pred_ngrams)
+        
+        if smooth and total == 0:
+            precisions.append(1e-9)
+        else:
+            precisions.append(matches / total if total > 0 else 0)
+    
+    pred_length = sum(len(pred) for pred in y_pred)
+    ref_lengths = []
+    for refs in y_true:
+        ref_lengths.append(min(len(ref) for ref in refs))
+    closest_ref_length = min(ref_lengths, key=lambda ref_len: abs(ref_len - pred_length))
+    
+    if pred_length > closest_ref_length:
+        brevity_penalty = 1
+    else:
+        brevity_penalty = np.exp(1 - closest_ref_length / pred_length) if pred_length > 0 else 0
+
+    bleu = brevity_penalty * np.exp(np.sum(np.log(precisions)) / n_gram)
+    return bleu
+
+
+def rouge_n_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n: int = 2) -> float:
+    """Compute ROUGE-N score for text summarization evaluation.
+
+    Args:
+        y_pred (list[list[str]]): List of list containing predicted tokens.
+        y_true (list[list[list[str]]]): List of list containing reference tokens.
+        n (int, optional): Maximum n-gram length. Defaults to 2.
+
+    Returns:
+        float: ROUGE-N score.
+    """
+    def get_ngrams(sequence, n):
+        return [tuple(sequence[i:i + n]) for i in range(len(sequence) - n + 1)]
+
+    recall_total = 0
+    precision_total = 0
+    for pred, refs in zip(y_pred, y_true):
+        pred_ngrams = get_ngrams(pred, n)
+        ref_ngrams_list = [get_ngrams(ref, n) for ref in refs]
+        
+        pred_count = len(pred_ngrams)
+        max_matches = 0
+        
+        for ref_ngrams in ref_ngrams_list:
+            ref_count = len(ref_ngrams)
+            matches = sum(1 for ngram in pred_ngrams if ngram in ref_ngrams)
+            max_matches = max(max_matches, matches)
+        
+        recall_total += max_matches / ref_count if ref_count > 0 else 0
+        precision_total += max_matches / pred_count if pred_count > 0 else 0
+
+    recall_avg = recall_total / len(y_pred)
+    precision_avg = precision_total / len(y_pred)
+    rouge_n = 2 * (recall_avg * precision_avg) / (recall_avg + precision_avg) if (recall_avg + precision_avg) > 0 else 0
+    return rouge_n
+
+
+def rouge_l_score(y_pred: list[list[str]], y_true: list[list[list[str]]]) -> float:
+    """Compute ROUGE-L score for text summarization evaluation.
+
+    Args:
+        y_pred (list[list[str]]): List of list containing predicted tokens.
+        y_true (list[list[list[str]]]): List of list containing reference tokens.
+
+    Returns:
+        float: ROUGE-L score.
+    """
+    def lcs_length(x, y):
+        dp = np.zeros((len(x) + 1, len(y) + 1), dtype=int)
+        for i in range(1, len(x) + 1):
+            for j in range(1, len(y) + 1):
+                if x[i - 1] == y[j - 1]:
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                else:
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+        return dp[-1][-1]
+
+    recall_total = 0
+    precision_total = 0
+    for pred, refs in zip(y_pred, y_true):
+        lcs_max = 0
+        ref_lengths = []
+        for ref in refs:
+            lcs_max = max(lcs_max, lcs_length(pred, ref))
+            ref_lengths.append(len(ref))
+        
+        recall_total += lcs_max / max(ref_lengths) if max(ref_lengths) > 0 else 0
+        precision_total += lcs_max / len(pred) if len(pred) > 0 else 0
+
+    recall_avg = recall_total / len(y_pred)
+    precision_avg = precision_total / len(y_pred)
+    rouge_l = 2 * (recall_avg * precision_avg) / (recall_avg + precision_avg) if (recall_avg + precision_avg) > 0 else 0
+    return rouge_l
