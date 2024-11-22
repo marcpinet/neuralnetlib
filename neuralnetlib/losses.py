@@ -47,6 +47,8 @@ class LossFunction:
             return KullbackLeiblerDivergence()
         elif name == "sequencecrossentropy" or name == "sce":
             return SequenceCrossEntropy()
+        elif name == "crossentropywithlabelsmoothing" or name == "cels":
+            return CrossEntropyWithLabelSmoothing()
         elif name.startswith("huber") and len(name.split("_")) == 2:
             delta = float(name.split("_")[-1])
             return HuberLoss(delta)
@@ -165,95 +167,48 @@ class KullbackLeiblerDivergence(LossFunction):
 
     def __str__(self):
         return "KullbackLeiblerDivergence"
-    
 
-class SequenceCrossEntropy(LossFunction):
-    def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None, 
-                 repetition_penalty: float = 1.2):
+
+class CrossEntropyWithLabelSmoothing(LossFunction):
+    def __init__(self, label_smoothing: float = 0.1):
         self.label_smoothing = label_smoothing
-        self.epsilon = 1e-10
-        self.ignore_tokens = list(ignore_tokens) if ignore_tokens is not None else []
-        self.repetition_penalty = repetition_penalty
+        self.epsilon = 1e-15
 
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_true = np.asarray(y_true, dtype=np.int32)
-        y_pred = np.asarray(y_pred, dtype=np.float32)
-        
-        if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
-            raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-        
-        ignore_tokens = np.array(self.ignore_tokens)
-        if ignore_tokens.size > 0:
-            is_ignored = np.isin(y_true, ignore_tokens)
-            mask = np.logical_not(is_ignored).astype(np.float32)
-        else:
-            mask = np.ones_like(y_true, dtype=np.float32)
-            
-        if np.sum(mask) <= self.epsilon:
-            return 0.0
-            
-        y_pred_clipped = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
-        
+        y_pred = np.clip(np.asarray(y_pred, dtype=np.float32), self.epsilon, 1 - self.epsilon)
+
+        if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
+            raise ValueError(f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
+
         n_classes = y_pred.shape[-1]
-        smooth_value = self.label_smoothing / (n_classes - 1)
-        smoothed = np.full_like(y_pred, smooth_value, dtype=np.float32)
-        
-        valid_mask = ((y_true >= 0) & (y_true < n_classes) & mask.astype(bool))
-        rows, cols = np.nonzero(valid_mask)
-        smoothed[rows, cols] = smooth_value
-        smoothed[rows, cols, y_true[valid_mask]] = 1.0 - self.label_smoothing
-        
-        if not np.isclose(self.repetition_penalty, 1.0, rtol=1e-09, atol=1e-09):
-            is_repeated = (y_true[:, 1:] == y_true[:, :-1])
-            repeat_mask = mask[:, 1:].astype(bool) & mask[:, :-1].astype(bool) & is_repeated
-            if np.any(repeat_mask):
-                rows, cols = np.nonzero(repeat_mask)
-                smoothed[rows, cols+1] *= self.repetition_penalty
-        
-        element_loss = -smoothed * np.log(y_pred_clipped + self.epsilon)
-        masked_loss = element_loss * mask[..., np.newaxis]
-        
-        normalizer = np.sum(mask) + self.epsilon
-        return np.sum(masked_loss) / normalizer
-    
+        batch_size, seq_length = y_true.shape
+
+        one_hot = np.zeros_like(y_pred)
+        one_hot[np.arange(batch_size)[:, None], np.arange(seq_length), y_true] = 1.0
+
+        smooth_one_hot = (1.0 - self.label_smoothing) * one_hot + self.label_smoothing / n_classes
+
+        loss = -np.sum(smooth_one_hot * np.log(y_pred)) / (batch_size * seq_length)
+        return loss
+
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_true = np.asarray(y_true, dtype=np.int32)
-        y_pred = np.asarray(y_pred, dtype=np.float32)
-        
-        if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
-            raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-        
-        ignore_tokens = np.array(self.ignore_tokens)
-        if ignore_tokens.size > 0:
-            is_ignored = np.isin(y_true, ignore_tokens)
-            mask = np.logical_not(is_ignored).astype(np.float32)
-        else:
-            mask = np.ones_like(y_true, dtype=np.float32)
-            
-        if np.sum(mask) <= self.epsilon:
-            return np.zeros_like(y_pred)
-            
-        y_pred_clipped = np.clip(y_pred, self.epsilon, 1.0 - self.epsilon)
-        
+        y_pred = np.clip(np.asarray(y_pred, dtype=np.float32), self.epsilon, 1 - self.epsilon)
+
+        if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
+            raise ValueError(f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
+
         n_classes = y_pred.shape[-1]
-        smooth_value = self.label_smoothing / (n_classes - 1)
-        smoothed = np.full_like(y_pred, smooth_value, dtype=np.float32)
-        
-        valid_mask = ((y_true >= 0) & (y_true < n_classes) & mask.astype(bool))
-        rows, cols = np.nonzero(valid_mask)
-        smoothed[rows, cols] = smooth_value
-        smoothed[rows, cols, y_true[valid_mask]] = 1.0 - self.label_smoothing
-        
-        if not np.isclose(self.repetition_penalty, 1.0, rtol=1e-09, atol=1e-09):
-            is_repeated = (y_true[:, 1:] == y_true[:, :-1])
-            repeat_mask = mask[:, 1:].astype(bool) & mask[:, :-1].astype(bool) & is_repeated
-            if np.any(repeat_mask):
-                rows, cols = np.nonzero(repeat_mask)
-                smoothed[rows, cols+1] *= self.repetition_penalty
-        
-        normalizer = (1.0 - self.label_smoothing) + self.label_smoothing / (n_classes - 1)
-        grad = -(smoothed / (y_pred_clipped + self.epsilon)) / normalizer
-        masked_grad = grad * mask[..., np.newaxis]
-        
-        normalizer = np.sum(mask) + self.epsilon
-        return masked_grad / normalizer
+        batch_size, seq_length = y_true.shape
+
+        one_hot = np.zeros_like(y_pred)
+        one_hot[np.arange(batch_size)[:, None], np.arange(seq_length), y_true] = 1.0
+
+        smooth_one_hot = (1.0 - self.label_smoothing) * one_hot + self.label_smoothing / n_classes
+
+        grad = -(smooth_one_hot / y_pred) / (batch_size * seq_length)
+        return grad
+
+    def __str__(self):
+        return f"CrossEntropyWithLabelSmoothing(label_smoothing={self.label_smoothing})"

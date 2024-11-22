@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import *
-from neuralnetlib.losses import *
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients
@@ -1489,10 +1489,6 @@ class Transformer(BaseModel):
                 verbose: bool = False) -> None:
         self.loss_function = loss_function if isinstance(loss_function, LossFunction) else LossFunction.from_name(loss_function)
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
-        
-        if isinstance(self.loss_function, SequenceCrossEntropy):
-            special_tokens = [self.PAD_IDX]  # ignore padding token
-            self.loss_function.ignore_tokens = list(set(self.loss_function.ignore_tokens + special_tokens))
         
         if verbose:
             print(str(self))
