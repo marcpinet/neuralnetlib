@@ -167,9 +167,7 @@ class KullbackLeiblerDivergence(LossFunction):
         return "KullbackLeiblerDivergence"
     
 
-import numpy as np
-
-class SequenceCrossEntropy:
+class SequenceCrossEntropy(LossFunction):
     def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None, 
                  repetition_penalty: float = 1.2):
         self.label_smoothing = label_smoothing
