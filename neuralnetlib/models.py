@@ -1915,6 +1915,8 @@ class Transformer(BaseModel):
         decoder_target = y_test
         
         total_loss = 0
+        if batch_size is None:
+            batch_size = len(encoder_input)
         num_batches = int(np.ceil(len(encoder_input) / batch_size))
         predictions_list = []
         
