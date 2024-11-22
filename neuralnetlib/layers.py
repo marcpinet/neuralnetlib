@@ -63,7 +63,7 @@ class Input(Layer):
 
 class Dense(Layer):
     def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros",
-                 random_state: int = None,
+                 random_state: int = None, init_scale: float = 1.0,
                  **kwargs):
         super().__init__()
         self.units = units
@@ -74,6 +74,7 @@ class Dense(Layer):
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
+        self.init_scale = init_scale
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -88,7 +89,10 @@ class Dense(Layer):
         fan_in = input_size
         fan_out = self.units
 
-        if self.weights_init in ["glorot_uniform", "xavier_uniform"]:
+        if self.weights_init == "scaled_normal":
+            stddev = self.init_scale / np.sqrt(fan_in)
+            self.weights = self.rng.normal(0, stddev, (input_size, self.units))
+        elif self.weights_init in ["glorot_uniform", "xavier_uniform"]:
             limit = np.sqrt(6 / (fan_in + fan_out))
             self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
 
@@ -120,7 +124,7 @@ class Dense(Layer):
 
         else:
             raise ValueError(
-                "Invalid weights_init value. Possible values are 'glorot_uniform', 'glorot_normal', "
+                "Invalid weights_init value. Possible values are 'scaled_normal', 'glorot_uniform', 'glorot_normal', "
                 "'he_uniform', 'he_normal', 'lecun_uniform', 'lecun_normal', 'orthogonal'")
 
         if self.bias_init == "zeros":
@@ -2507,33 +2511,65 @@ class MultiHeadAttention(Layer):
             bias_init=self.bias_initializer if self.use_bias else None,
             random_state=self.random_state
         )
-
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
         embedding_dim: int = input_shape[-1]
 
         if self.query_dense is None:
-            self.query_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
-            self.key_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
-            self.value_dense = self.build_dense_layer(self.num_heads * self.value_dim, input_shape)
+            self.query_dense = Dense(
+                units=self.num_heads * self.key_dim,
+                weights_init="scaled_normal",
+                bias_init=self.bias_initializer if self.use_bias else None,
+                random_state=self.random_state,
+                init_scale=5.0
+            )
+            
+            self.key_dense = Dense(
+                units=self.num_heads * self.key_dim,
+                weights_init="scaled_normal",
+                bias_init=self.bias_initializer if self.use_bias else None,
+                random_state=self.random_state,
+                init_scale=5.0
+            )
+            
+            self.value_dense = Dense(
+                units=self.num_heads * self.value_dim,
+                weights_init=self.kernel_initializer,
+                bias_init=self.bias_initializer if self.use_bias else None,
+                random_state=self.random_state
+            )
 
         output_dim: int = self.output_shape if self.output_shape else embedding_dim
         if self.output_dense is None:
-            self.output_dense = self.build_dense_layer(output_dim, input_shape)
+            self.output_dense = Dense(
+                units=output_dim,
+                weights_init=self.kernel_initializer,
+                bias_init=self.bias_initializer if self.use_bias else None,
+                random_state=self.random_state
+            )
 
     def _reshape_for_attention(self, x: np.ndarray, batch_size: int, seq_length: int) -> np.ndarray:
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
     def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, 
-                                    value: np.ndarray, mask: np.ndarray = None,
-                                    training: bool = True) -> np.ndarray:
-        matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
+                                        value: np.ndarray, mask: np.ndarray = None,
+                                        training: bool = True) -> np.ndarray:
+        query_norm = np.sqrt(np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
+        key_norm = np.sqrt(np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
         
-        d_k = key.shape[-1]  
-        scaled_attention_logits = matmul_qk / np.sqrt(d_k)
+        query_normalized = query / query_norm
+        key_normalized = key / key_norm
         
+        matmul_qk = np.matmul(query_normalized, np.transpose(key_normalized, (0, 1, 3, 2)))
+        d_k = key.shape[-1]
+        
+        temperature = 0.5
+        scaling_factor = np.sqrt(d_k) / 4
+        scaled_attention_logits = matmul_qk / scaling_factor / temperature
+        
+        MASKING_VALUE = -1e4
         if mask is not None:
-            scaled_attention_logits = np.where(mask, float('-inf'), scaled_attention_logits)
+            scaled_attention_logits = np.where(mask, MASKING_VALUE, scaled_attention_logits)
         
         attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
         self.attention_weights = attention_weights
@@ -2543,7 +2579,12 @@ class MultiHeadAttention(Layer):
         return output
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
-        max_x = np.max(x, axis=-1, keepdims=True)
+        if mask is not None:
+            x_masked = np.where(mask, -np.inf, x)
+        else:
+            x_masked = x
+        max_x = np.max(x_masked, axis=-1, keepdims=True)
+        
         exp_x = np.exp(x - max_x)
         
         if mask is not None:
@@ -2551,8 +2592,7 @@ class MultiHeadAttention(Layer):
         
         sum_x = np.sum(exp_x, axis=-1, keepdims=True)
         
-        valid_positions = (sum_x > 0).astype(np.float32)
-        sum_x = np.where(valid_positions > 0, sum_x, 1.0)
+        sum_x = np.where(sum_x > 0, sum_x, 1.0)
         
         return exp_x / sum_x
 
@@ -2578,6 +2618,7 @@ class MultiHeadAttention(Layer):
         V = self.value_dense.forward_pass(value)
         
         self.reshaped_query = self._reshape_for_attention(Q, batch_size, query.shape[1])
+        
         self.reshaped_key = self._reshape_for_attention(K, batch_size, key.shape[1])
         self.reshaped_value = self._reshape_for_attention(V, batch_size, value.shape[1])
         
