@@ -167,22 +167,30 @@ class KullbackLeiblerDivergence(LossFunction):
         return "KullbackLeiblerDivergence"
     
 
-class SequenceCrossEntropy(LossFunction):
+import numpy as np
+
+class SequenceCrossEntropy:
     def __init__(self, label_smoothing: float = 0.1, ignore_tokens: list = None, 
                  repetition_penalty: float = 1.2):
-        super().__init__()
         self.label_smoothing = label_smoothing
         self.epsilon = 1e-10
         self.ignore_tokens = list(ignore_tokens) if ignore_tokens is not None else []
         self.repetition_penalty = repetition_penalty
-        
+
+    def stable_softmax(self, logits: np.ndarray) -> np.ndarray:
+        max_logits = np.max(logits, axis=-1, keepdims=True)
+        exp_shifted = np.exp(logits - max_logits)
+        return exp_shifted / np.sum(exp_shifted, axis=-1, keepdims=True)
+
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_true = np.asarray(y_true, dtype=np.int32)
         y_pred = np.asarray(y_pred, dtype=np.float32)
         
         if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
             raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-            
+        
+        y_pred = self.stable_softmax(y_pred)
+        
         ignore_tokens = np.array(self.ignore_tokens)
         if ignore_tokens.size > 0:
             is_ignored = np.isin(y_true, ignore_tokens)
@@ -223,7 +231,9 @@ class SequenceCrossEntropy(LossFunction):
         
         if y_true.ndim != 2 or y_pred.ndim != 3 or y_pred.shape[:2] != y_true.shape:
             raise ValueError(f"Shape mismatch: y_true: {y_true.shape}, y_pred: {y_pred.shape}")
-            
+        
+        y_pred = self.stable_softmax(y_pred)
+        
         ignore_tokens = np.array(self.ignore_tokens)
         if ignore_tokens.size > 0:
             is_ignored = np.isin(y_true, ignore_tokens)
