@@ -1492,7 +1492,7 @@ class Transformer(BaseModel):
         self.optimizer = optimizer if isinstance(optimizer, Optimizer) else Optimizer.from_name(optimizer)
         
         if isinstance(self.loss_function, SequenceCrossEntropy):
-            special_tokens = [self.PAD_IDX, self.UNK_IDX, self.SOS_IDX, self.EOS_IDX]
+            special_tokens = [self.PAD_IDX]  # ignore padding token
             self.loss_function.ignore_tokens = list(set(self.loss_function.ignore_tokens + special_tokens))
         
         if verbose:
