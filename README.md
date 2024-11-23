@@ -8,7 +8,9 @@ I made it to challenge myself and to learn more about deep neural networks, how 
 
 The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in a week.
 
-I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder), [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder) and [Transformers](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)) (WIP).
+I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder), [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder) and [Transformers](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)).
+
+Regarding the Transformers, I just basically reimplement the [Attention is All You Need](https://arxiv.org/abs/1706.03762) paper, but I had some issues with the gradients and the normalization of the attention weights. So, I decided to leave it as it is for now. It theorically works but needs a huge amount of data that can't be trained on a CPU. You can however see what each layers produce and how the attention weights are calculated [here](examples/generation/transformer-text-generation/transformer-debug.ipynb).
 
 This project will be maintained as long as I have ideas to improve it, and as long as I have time to work on it.
 
