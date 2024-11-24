@@ -1130,7 +1130,7 @@ class Embedding(Layer):
 
 
 class BatchNormalization(Layer):
-    def __init__(self, momentum: float = 0.99, epsilon: float = 1e-8, **kwargs):
+    def __init__(self, momentum: float = 0.9, epsilon: float = 1e-5, **kwargs):
         self.gamma = None
         self.beta = None
         self.d_gamma = None
@@ -1157,36 +1157,44 @@ class BatchNormalization(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         if self.gamma is None:
             self.initialize_weights(input_data.shape[1:])
+            
+        input_data = np.clip(input_data, -10, 10)
 
         if training:
             mean = np.mean(input_data, axis=0)
-            var = np.var(input_data, axis=0)
-            self.running_mean = self.momentum * \
-                                self.running_mean + (1 - self.momentum) * mean
-            self.running_var = self.momentum * \
-                               self.running_var + (1 - self.momentum) * var
+            var = np.var(input_data, axis=0) + self.epsilon
+            
+            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
+            self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
         else:
             mean = self.running_mean
             var = self.running_var
 
         self.input_centered = input_data - mean
-        self.input_normalized = self.input_centered / \
-                                np.sqrt(var + self.epsilon)
-        return self.gamma * self.input_normalized + self.beta
+        std = np.sqrt(var + self.epsilon)
+        self.input_normalized = np.clip(self.input_centered / std, -3, 3)
+        
+        return np.clip(self.gamma * self.input_normalized + self.beta, -10, 10)
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         N = output_error.shape[0]
+        
+        output_error = np.clip(output_error, -1, 1)
+        
         self.d_gamma = np.sum(output_error * self.input_normalized, axis=0)
         self.d_beta = np.sum(output_error, axis=0)
+        
+        self.d_gamma = np.clip(self.d_gamma / N, -1, 1)
+        self.d_beta = np.clip(self.d_beta / N, -1, 1)
 
-        d_input_normalized = output_error * self.gamma
-        d_var = np.sum(d_input_normalized * self.input_centered, axis=0) * -0.5 * (
-                self.input_centered / (self.input_centered.var(axis=0) + self.epsilon) ** 1.5)
-        d_mean = np.sum(d_input_normalized, axis=0) * -1 / np.sqrt(
-            self.input_centered.var(axis=0) + self.epsilon) - 2 * d_var * np.mean(self.input_centered, axis=0)
-        d_input = d_input_normalized / np.sqrt(
-            self.input_centered.var(axis=0) + self.epsilon) + 2 * d_var * self.input_centered / N + d_mean / N
-        return d_input
+        d_input = (1. / N) * self.gamma * (
+            (self.running_var + self.epsilon) ** (-1. / 2.)
+        ) * (
+            N * output_error - np.sum(output_error, axis=0)
+            - self.input_normalized * np.sum(output_error * self.input_normalized, axis=0)
+        )
+        
+        return np.clip(d_input, -1, 1)
 
     def get_config(self) -> dict:
         return {
