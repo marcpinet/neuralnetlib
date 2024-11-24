@@ -277,10 +277,12 @@ class MinMaxScaler:
         self.feature_range = feature_range
         self.min_ = None
         self.scale_ = None
+        self.EPSILON = 1e-8
 
     def fit(self, X: np.ndarray) -> None:
         self.min_ = np.min(X, axis=0)
         self.scale_ = np.max(X, axis=0) - self.min_
+        self.scale_ = np.where(self.scale_ == 0, self.EPSILON, self.scale_)
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         if self.min_ is None or self.scale_ is None:

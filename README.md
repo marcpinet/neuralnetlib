@@ -8,7 +8,7 @@ I made it to challenge myself and to learn more about deep neural networks, how 
 
 The big part of this project, meaning the [Multilayer Perceptron (MLP)](https://en.wikipedia.org/wiki/Multilayer_perceptron) part, was made in a week.
 
-I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder), [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder) and [Transformers](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)).
+I then decided to push it even further by adding [Convolutional Neural Networks (CNN)](https://en.wikipedia.org/wiki/Convolutional_neural_network),  [Recurrent Neural Networks (RNN)](https://en.wikipedia.org/wiki/Recurrent_neural_network), [Autoencoders](https://en.wikipedia.org/wiki/Autoencoder), [Variational Autoencoders (VAE)](https://en.wikipedia.org/wiki/Variational_autoencoder), [GANs](https://en.wikipedia.org/wiki/Generative_adversarial_network) and [Transformers](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)).
 
 Regarding the Transformers, I just basically reimplement the [Attention is All You Need](https://arxiv.org/abs/1706.03762) paper, but I had some issues with the gradients and the normalization of the attention weights. So, I decided to leave it as it is for now. It theorically works but needs a huge amount of data that can't be trained on a CPU. You can however see what each layers produce and how the attention weights are calculated [here](examples/generation/transformer-text-generation/transformer-debug.ipynb).
 
@@ -16,7 +16,7 @@ This project will be maintained as long as I have ideas to improve it, and as lo
 
 ## 📦 Features
 
-- Many models architectures (sequential, functional, autoencoder) 🏗
+- Many models architectures (sequential, functional, autoencoder, transformer, gan) 🏗
 - Many layers (dense, dropout, conv1d/2d, pooling1d/2d, flatten, embedding, batchnormalization, textvectorization, lstm, gru, attention and more) 🧠
 - Many activation functions (sigmoid, tanh, relu, leaky relu, softmax, linear, elu, selu) 📈
 - Many loss functions (mean squared error, mean absolute error, categorical crossentropy, binary crossentropy, huber loss) 📉
@@ -178,12 +178,12 @@ And test your changes on the examples.
 
 ## 🎯 TODO
 
-- [ ] Add more model architecture support (like transformers, gan, etc)
+- [ ] Add BPE (Byte Pair Encoding) tokenizer
+- [ ] Add more preprocessing tools
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more callbacks
 - [ ] Add more layers
-- [ ] Add more preprocessing tools
-- [ ] Add BPE (Byte Pair Encoding) tokenizer
+- [ ] Add more model architecture support
 - [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
 

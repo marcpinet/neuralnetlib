@@ -141,7 +141,7 @@ class Sequential(BaseModel):
                 X = padded_X
 
         for layer in self.layers:
-            if isinstance(layer, (Dropout, LSTM, Bidirectional, GRU)):
+            if isinstance(layer, (Dropout, BatchNormalization, LSTM, Bidirectional, GRU)):
                 X = layer.forward_pass(X, training)
             else:
                 X = layer.forward_pass(X)
@@ -152,69 +152,95 @@ class Sequential(BaseModel):
         self.predictions = X
         return X
 
-    def backward_pass(self, error: np.ndarray, gan: bool = False):
+    def backward_pass(self, error: np.ndarray, gan: bool = False, return_gradient: bool = False):
         if gan:
-            for layer in reversed(self.layers):
+            input_gradient = None
+            for i, layer in enumerate(reversed(self.layers)):
                 error = layer.backward_pass(error)
                 error = clip_gradients(error)
-
-            return error
+                
+                if i == len(self.layers) - 1:
+                    input_gradient = error
+                    
+                if not return_gradient:
+                    layer_idx = len(self.layers) - 1 - i
+                    
+                    if isinstance(layer, LSTM):
+                        cell = layer.cell
+                        for grad_pair in [(cell.dWf, cell.dbf), (cell.dWi, cell.dbi),
+                                        (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
+                            weight_grad, bias_grad = grad_pair
+                            self.optimizer.update(layer_idx, grad_pair[0], clip_gradients(weight_grad),
+                                                grad_pair[1], clip_gradients(bias_grad))
+                    
+                    elif isinstance(layer, GRU):
+                        cell = layer.cell
+                        self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz),
+                                            cell.bz, clip_gradients(cell.dbz))
+                        self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr),
+                                            cell.br, clip_gradients(cell.dbr))
+                        self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh),
+                                            cell.bh, clip_gradients(cell.dbh))
+                    
+                    elif hasattr(layer, 'weights'):
+                        clipped_weights_grad = clip_gradients(layer.d_weights)
+                        if hasattr(layer, 'd_bias'):
+                            clipped_bias_grad = clip_gradients(layer.d_bias)
+                            self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad,
+                                                layer.bias, clipped_bias_grad)
+                        else:
+                            self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad)
+            
+            return input_gradient if return_gradient else error
         
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
-                if (type(layer.activation_function).__name__ == "Softmax" and
-                        isinstance(self.loss_function, CategoricalCrossentropy)):
-                    error = self.predictions - self.y_true
-
-                elif (type(layer.activation_function).__name__ == "Sigmoid" and
-                      isinstance(self.loss_function, BinaryCrossentropy)):
-                    error = (self.predictions - self.y_true) / (self.predictions *
-                                                                (1 - self.predictions) + 1e-15)
-
-                elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
-                    y_true_one_hot = np.zeros_like(self.predictions)
-                    y_true_one_hot[np.arange(len(self.y_true)), self.y_true] = 1
-                    error = self.predictions - y_true_one_hot
+                if not gan:
+                    if (type(layer.activation_function).__name__ == "Softmax" and
+                            isinstance(self.loss_function, CategoricalCrossentropy)):
+                        error = self.predictions - self.y_true
+                    elif (type(layer.activation_function).__name__ == "Sigmoid" and
+                        isinstance(self.loss_function, BinaryCrossentropy)):
+                        error = (self.predictions - self.y_true) / (self.predictions *
+                                                                    (1 - self.predictions) + 1e-15)
+                    elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
+                        y_true_one_hot = np.zeros_like(self.predictions)
+                        y_true_one_hot[np.arange(len(self.y_true)), self.y_true] = 1
+                        error = self.predictions - y_true_one_hot
             else:
                 error = clip_gradients(error)
                 error = layer.backward_pass(error)
-
-            layer_idx = len(self.layers) - 1 - i
-
-            if isinstance(layer, LSTM):
-                cell = layer.cell
-                for grad_pair in [(cell.dWf, cell.dbf), (cell.dWi, cell.dbi),
-                                  (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
-                    weight_grad, bias_grad = grad_pair
-                    clipped_weight_grad = clip_gradients(weight_grad)
-                    clipped_bias_grad = clip_gradients(bias_grad)
-
-                self.optimizer.update(layer_idx, cell.Wf, clipped_weight_grad,
-                                      cell.bf, clipped_bias_grad)
-                self.optimizer.update(layer_idx, cell.Wi, clip_gradients(cell.dWi),
-                                      cell.bi, clip_gradients(cell.dbi))
-                self.optimizer.update(layer_idx, cell.Wc, clip_gradients(cell.dWc),
-                                      cell.bc, clip_gradients(cell.dbc))
-                self.optimizer.update(layer_idx, cell.Wo, clip_gradients(cell.dWo),
-                                      cell.bo, clip_gradients(cell.dbo))
-
-            elif isinstance(layer, GRU):
-                cell = layer.cell
-                self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz),
-                                      cell.bz, clip_gradients(cell.dbz))
-                self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr),
-                                      cell.br, clip_gradients(cell.dbr))
-                self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh),
-                                      cell.bh, clip_gradients(cell.dbh))
-
-            elif hasattr(layer, 'weights'):
-                clipped_weights_grad = clip_gradients(layer.d_weights)
-                if hasattr(layer, 'd_bias'):
-                    clipped_bias_grad = clip_gradients(layer.d_bias)
-                    self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad,
-                                          layer.bias, clipped_bias_grad)
-                else:
-                    self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad)
+            
+            if not return_gradient:
+                layer_idx = len(self.layers) - 1 - i
+                
+                if isinstance(layer, LSTM):
+                    cell = layer.cell
+                    for grad_pair in [(cell.dWf, cell.dbf), (cell.dWi, cell.dbi),
+                                    (cell.dWc, cell.dbc), (cell.dWo, cell.dbo)]:
+                        weight_grad, bias_grad = grad_pair
+                        self.optimizer.update(layer_idx, grad_pair[0], clip_gradients(weight_grad),
+                                            grad_pair[1], clip_gradients(bias_grad))
+                
+                elif isinstance(layer, GRU):
+                    cell = layer.cell
+                    self.optimizer.update(layer_idx, cell.Wz, clip_gradients(cell.dWz),
+                                        cell.bz, clip_gradients(cell.dbz))
+                    self.optimizer.update(layer_idx, cell.Wr, clip_gradients(cell.dWr),
+                                        cell.br, clip_gradients(cell.dbr))
+                    self.optimizer.update(layer_idx, cell.Wh, clip_gradients(cell.dWh),
+                                        cell.bh, clip_gradients(cell.dbh))
+                
+                elif hasattr(layer, 'weights'):
+                    clipped_weights_grad = clip_gradients(layer.d_weights)
+                    if hasattr(layer, 'd_bias'):
+                        clipped_bias_grad = clip_gradients(layer.d_bias)
+                        self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad,
+                                            layer.bias, clipped_bias_grad)
+                    else:
+                        self.optimizer.update(layer_idx, layer.weights, clipped_weights_grad)
+        
+        return error
 
     def train_on_batch(self, x_batch: np.ndarray, y_batch: np.ndarray) -> float:
         self.y_true = y_batch
@@ -2066,38 +2092,39 @@ class GAN(BaseModel):
         latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
         return latent_points
 
-    def train_on_batch( self, real_samples: np.ndarray, n_gen_samples: int | None = None) -> tuple[float, float]:
+    def train_on_batch(self, real_samples: np.ndarray, n_gen_samples: int | None = None) -> tuple[float, float]:
         if n_gen_samples is None:
             n_gen_samples = real_samples.shape[0]
 
-        latent_points = self._generate_latent_points(n_gen_samples)
-        generated_samples = self.generator.forward_pass(latent_points)
-
-        y_real = np.ones((len(real_samples), 1)) * 0.9  # label smoothing
-        y_fake = np.zeros((n_gen_samples, 1)) * 0.1  # label smoothing
-
+        y_real = np.ones((len(real_samples), 1)) * 0.9
         disc_real_output = self.discriminator.forward_pass(real_samples)
         d_loss_real = self.discriminator_loss(y_real, disc_real_output)
         d_error_real = self.discriminator_loss.derivative(y_real, disc_real_output)
-        self.discriminator.backward_pass(d_error_real, gan=True)
-
+        
+        latent_points = self._generate_latent_points(n_gen_samples)
+        generated_samples = self.generator.forward_pass(latent_points, training=False)
+        y_fake = np.zeros((n_gen_samples, 1)) + 0.1
         disc_fake_output = self.discriminator.forward_pass(generated_samples)
         d_loss_fake = self.discriminator_loss(y_fake, disc_fake_output)
         d_error_fake = self.discriminator_loss.derivative(y_fake, disc_fake_output)
-        self.discriminator.backward_pass(d_error_fake, gan=True)
-
+        
+        total_d_error = 0.5 * (d_error_real + d_error_fake)
+        total_d_error = np.clip(total_d_error, -1, 1)
+        self.discriminator.backward_pass(total_d_error, gan=True)
+        
         discriminator_loss = 0.5 * (d_loss_real + d_loss_fake)
 
         latent_points = self._generate_latent_points(n_gen_samples)
-        y_gan = np.ones((n_gen_samples, 1))
-
+        y_gan = np.ones((n_gen_samples, 1)) * 0.9
+        
         generated_samples = self.generator.forward_pass(latent_points)
         discriminator_output = self.discriminator.forward_pass(generated_samples)
-
+        
         generator_loss = self.generator_loss(y_gan, discriminator_output)
         g_error = self.generator_loss.derivative(y_gan, discriminator_output)
-
-        d_error = self.discriminator.backward_pass(g_error, gan=True)
+        g_error = np.clip(g_error, -1, 1)
+        
+        d_error = self.discriminator.backward_pass(g_error, gan=True, return_gradient=True)
         self.generator.backward_pass(d_error, gan=True)
 
         return discriminator_loss, generator_loss
@@ -2146,6 +2173,9 @@ class GAN(BaseModel):
             x_train_shuffled = shuffle(x_train, random_state=random_state)
             d_error = 0
             g_error = 0
+            
+            metric_values = {f'discriminator_{metric.name}': 0.0 for metric in (metrics or [])}
+            metric_values.update({f'generator_{metric.name}': 0.0 for metric in (metrics or [])})
 
             if batch_size is not None:
                 num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
@@ -2155,6 +2185,17 @@ class GAN(BaseModel):
                     d_error += d_loss
                     g_error += g_loss
 
+                    metrics_str = ''
+                    if metrics is not None:
+                        latent_points = self._generate_latent_points(len(x_batch))
+                        generated_samples = self.generator.forward_pass(latent_points, training=False)
+
+                        for metric in metrics:
+                            metric_value = metric(generated_samples, x_batch)
+                            metric_values[f'generator_{metric.name}'] += metric_value
+                            metric_values[f'discriminator_{metric.name}'] += metric_value
+                            metrics_str += f'{metric.name}: {format_number(metric_value)} - '
+
                     if verbose:
                         progress_bar(
                             j / batch_size + 1,
@@ -2163,33 +2204,46 @@ class GAN(BaseModel):
                                 f'Epoch {epoch + 1}/{epochs} - '
                                 f'd_loss: {format_number(d_error / (j / batch_size + 1))} - '
                                 f'g_loss: {format_number(g_error / (j / batch_size + 1))} - '
+                                f'{metrics_str[:-3]} - '
                                 f'{time.time() - start_time:.2f}s'
                             )
                         )
 
                 d_error /= num_batches
                 g_error /= num_batches
+                for k in metric_values:
+                    metric_values[k] /= num_batches
+                    
             else:
-                d_error, g_error = self.train_on_batch(x_train, n_gen_samples)
+                d_error, g_loss = self.train_on_batch(x_train, n_gen_samples)
+                
+                if metrics is not None:
+                    latent_points = self._generate_latent_points(len(x_train))
+                    generated_samples = self.generator.forward_pass(latent_points, training=False)
+                    
+                    for metric in metrics:
+                        metric_value = metric(generated_samples, x_train)
+                        metric_values[f'generator_{metric.name}'] = metric_value
+                        metric_values[f'discriminator_{metric.name}'] = metric_value
 
                 if verbose:
-                    progress_bar(
-                        1,
-                        1,
-                        message=(
-                            f'Epoch {epoch + 1}/{epochs} - '
-                            f'd_loss: {format_number(d_error)} - '
-                            f'g_loss: {format_number(g_error)} - '
-                            f'{time.time() - start_time:.2f}s'
-                        )
-                    )
+                    progress_bar(1, 1, message=(
+                        f'Epoch {epoch + 1}/{epochs} - '
+                        f'd_loss: {format_number(d_error)} - '
+                        f'g_loss: {format_number(g_error)} - '
+                        f'{time.time() - start_time:.2f}s'
+                    ))
 
             history['discriminator_loss'].append(d_error)
             history['generator_loss'].append(g_error)
+            
+            for k, v in metric_values.items():
+                history[k].append(v)
 
             logs = {
                 'discriminator_loss': d_error,
-                'generator_loss': g_error
+                'generator_loss': g_error,
+                **metric_values
             }
 
             if validation_data is not None:
