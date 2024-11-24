@@ -30,13 +30,22 @@ def dict_with_list_to_dict_with_ndarray(d: dict) -> dict:
     return d
 
 
-def shuffle(x: np.ndarray, y: np.ndarray, random_state: int = None) -> tuple:
+def shuffle(x: np.ndarray, y: np.ndarray = None, random_state: int = None) -> tuple:
     """Shuffles the data along the first axis."""
-    x = np.array(x)
-    y = np.array(y)
     rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-    indices = rng.permutation(len(x))
-    return x[indices], y[indices]
+    
+    n_samples = x.shape[0]
+    indices = rng.permutation(n_samples)
+    
+    x = np.array(x)
+    shuffled_x = x[indices]
+    
+    if y is not None:
+        y = np.array(y)
+        shuffled_y = y[indices]
+        return shuffled_x, shuffled_y
+    
+    return shuffled_x
 
 
 def progress_bar(current: int, total: int, width: int = 30, message: str = "") -> None:

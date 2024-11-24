@@ -1,5 +1,4 @@
 import numpy as np
-from typing import List, Dict, Any, Union
 
 from neuralnetlib.metrics import Metric
 from neuralnetlib.layers import Layer
@@ -7,7 +6,7 @@ from neuralnetlib.layers import Layer
 
 class ModelWeightManager:
     @staticmethod
-    def get_model_weights(model) -> List[np.ndarray]:
+    def get_model_weights(model) -> list[np.ndarray]:
         """Extract weights from any model type."""
         weights = []
         
@@ -63,7 +62,7 @@ class ModelWeightManager:
         return weights
 
     @staticmethod
-    def set_model_weights(model, weights: List[np.ndarray]) -> None:
+    def set_model_weights(model, weights: list[np.ndarray]) -> None:
         """Restore weights to any model type."""
         weight_idx = 0
         
@@ -153,10 +152,10 @@ class EarlyStopping(Callback):
         self.min_delta: float = min_delta
         self.restore_best_weights: bool = restore_best_weights
         self.start_from_epoch: int = start_from_epoch
-        self.monitor: Union[Metric, str] = Metric(monitor) if monitor != 'loss' else 'loss'
+        self.monitor = Metric(monitor) if monitor != 'loss' else 'loss'
         self.mode: str = mode
         self.baseline: float | None = baseline
-        self.best_weights: List[np.ndarray] | None = None
+        self.best_weights = None
         self.best_metric: float | None = None
         self.patience_counter: int = 0
         self.stop_training: bool = False

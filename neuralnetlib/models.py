@@ -149,9 +149,17 @@ class Sequential(BaseModel):
         if self.enable_padding and padded_shape != original_shape:
             X = X[:original_shape[0]]
 
+        self.predictions = X
         return X
 
-    def backward_pass(self, error: np.ndarray):
+    def backward_pass(self, error: np.ndarray, gan: bool = False):
+        if gan:
+            for layer in reversed(self.layers):
+                error = layer.backward_pass(error)
+                error = clip_gradients(error)
+
+            return error
+        
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
                 if (type(layer.activation_function).__name__ == "Softmax" and
@@ -1982,3 +1990,349 @@ class Transformer(BaseModel):
                 f"  dropout_rate={self.dropout_rate},\n"
                 f"  max_sequence_length={self.max_sequence_length}\n"
                 f")")
+
+
+class GAN(BaseModel):
+    def __init__(
+        self,
+        latent_dim: int = 100,
+        gradient_clip_threshold: float = 5.0,
+        enable_padding: bool = False,
+        padding_size: int = 32,
+        random_state: int | None = None
+    ):
+        super().__init__(gradient_clip_threshold, enable_padding, padding_size, random_state)
+        
+        self.latent_dim = latent_dim
+        self.generator = None
+        self.discriminator = None
+        self.generator_optimizer = None
+        self.discriminator_optimizer = None
+        self.generator_loss = None
+        self.discriminator_loss = None
+
+    def compile(
+        self,
+        generator: 'Sequential',
+        discriminator: 'Sequential',
+        generator_optimizer: Optimizer | str,
+        discriminator_optimizer: Optimizer | str,
+        loss_function: LossFunction | str = 'binary_crossentropy',
+        verbose: bool = False
+    ):
+        self.generator = generator
+        self.discriminator = discriminator
+        
+        self.generator_optimizer = (
+            generator_optimizer if isinstance(generator_optimizer, Optimizer) 
+            else Optimizer.from_name(generator_optimizer)
+        )
+        self.discriminator_optimizer = (
+            discriminator_optimizer if isinstance(discriminator_optimizer, Optimizer)
+            else Optimizer.from_name(discriminator_optimizer)
+        )
+        
+        self.generator_loss = (
+            loss_function if isinstance(loss_function, LossFunction)
+            else LossFunction.from_name(loss_function)
+        )
+        self.discriminator_loss = (
+            loss_function if isinstance(loss_function, LossFunction)
+            else LossFunction.from_name(loss_function)
+        )
+        
+        self.generator.loss_function = self.generator_loss
+        self.generator.optimizer = self.generator_optimizer
+        self.discriminator.loss_function = self.discriminator_loss
+        self.discriminator.optimizer = self.discriminator_optimizer
+
+        if verbose:
+            print(str(self))
+
+    def forward_pass(self, latent_vectors: np.ndarray, training: bool = True) -> np.ndarray:
+        if self.generator is None:
+            raise ValueError("Model must be compiled before forward pass")
+        
+        return self.generator.forward_pass(latent_vectors, training)
+
+    def backward_pass(self, error: np.ndarray):
+        if self.generator is None:
+            raise ValueError("Model must be compiled before backward pass")
+        
+        self.generator.backward_pass(error)
+
+    def _generate_latent_points(self, n_samples: int) -> np.ndarray:
+        rng = np.random.default_rng(self.random_state)
+        latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
+        return latent_points
+
+    def train_on_batch( self, real_samples: np.ndarray, n_gen_samples: int | None = None) -> tuple[float, float]:
+        if n_gen_samples is None:
+            n_gen_samples = real_samples.shape[0]
+
+        latent_points = self._generate_latent_points(n_gen_samples)
+        generated_samples = self.generator.forward_pass(latent_points)
+
+        y_real = np.ones((len(real_samples), 1)) * 0.9  # label smoothing
+        y_fake = np.zeros((n_gen_samples, 1)) * 0.1  # label smoothing
+
+        disc_real_output = self.discriminator.forward_pass(real_samples)
+        d_loss_real = self.discriminator_loss(y_real, disc_real_output)
+        d_error_real = self.discriminator_loss.derivative(y_real, disc_real_output)
+        self.discriminator.backward_pass(d_error_real, gan=True)
+
+        disc_fake_output = self.discriminator.forward_pass(generated_samples)
+        d_loss_fake = self.discriminator_loss(y_fake, disc_fake_output)
+        d_error_fake = self.discriminator_loss.derivative(y_fake, disc_fake_output)
+        self.discriminator.backward_pass(d_error_fake, gan=True)
+
+        discriminator_loss = 0.5 * (d_loss_real + d_loss_fake)
+
+        latent_points = self._generate_latent_points(n_gen_samples)
+        y_gan = np.ones((n_gen_samples, 1))
+
+        generated_samples = self.generator.forward_pass(latent_points)
+        discriminator_output = self.discriminator.forward_pass(generated_samples)
+
+        generator_loss = self.generator_loss(y_gan, discriminator_output)
+        g_error = self.generator_loss.derivative(y_gan, discriminator_output)
+
+        d_error = self.discriminator.backward_pass(g_error, gan=True)
+        self.generator.backward_pass(d_error, gan=True)
+
+        return discriminator_loss, generator_loss
+
+    def fit(
+        self,
+        x_train: np.ndarray,
+        epochs: int,
+        batch_size: int | None = None,
+        n_gen_samples: int | None = None,
+        verbose: bool = True,
+        metrics: list | None = None,
+        random_state: int | None = None,
+        validation_data: tuple | None = None,
+        callbacks: list = []
+    ) -> dict:
+        history = History({
+            'discriminator_loss': [],
+            'generator_loss': [],
+            'val_discriminator_loss': [],
+            'val_generator_loss': []
+        })
+
+        x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
+
+        if metrics is not None:
+            metrics: list[Metric] = [Metric(m) for m in metrics]
+            for metric in metrics:
+                history[f'discriminator_{metric.name}'] = []
+                history[f'generator_{metric.name}'] = []
+                if validation_data is not None:
+                    history[f'val_discriminator_{metric.name}'] = []
+                    history[f'val_generator_{metric.name}'] = []
+
+        if callbacks is None:
+            callbacks = []
+
+        for callback in callbacks:
+            callback.on_train_begin()
+
+        for epoch in range(epochs):
+            for callback in callbacks:
+                callback.on_epoch_begin(epoch)
+
+            start_time = time.time()
+            x_train_shuffled = shuffle(x_train, random_state=random_state)
+            d_error = 0
+            g_error = 0
+
+            if batch_size is not None:
+                num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
+                for j in range(0, x_train.shape[0], batch_size):
+                    x_batch = x_train_shuffled[j:j + batch_size]
+                    d_loss, g_loss = self.train_on_batch(x_batch, n_gen_samples)
+                    d_error += d_loss
+                    g_error += g_loss
+
+                    if verbose:
+                        progress_bar(
+                            j / batch_size + 1,
+                            num_batches,
+                            message=(
+                                f'Epoch {epoch + 1}/{epochs} - '
+                                f'd_loss: {format_number(d_error / (j / batch_size + 1))} - '
+                                f'g_loss: {format_number(g_error / (j / batch_size + 1))} - '
+                                f'{time.time() - start_time:.2f}s'
+                            )
+                        )
+
+                d_error /= num_batches
+                g_error /= num_batches
+            else:
+                d_error, g_error = self.train_on_batch(x_train, n_gen_samples)
+
+                if verbose:
+                    progress_bar(
+                        1,
+                        1,
+                        message=(
+                            f'Epoch {epoch + 1}/{epochs} - '
+                            f'd_loss: {format_number(d_error)} - '
+                            f'g_loss: {format_number(g_error)} - '
+                            f'{time.time() - start_time:.2f}s'
+                        )
+                    )
+
+            history['discriminator_loss'].append(d_error)
+            history['generator_loss'].append(g_error)
+
+            logs = {
+                'discriminator_loss': d_error,
+                'generator_loss': g_error
+            }
+
+            if validation_data is not None:
+                x_val = validation_data
+                x_val = np.array(x_val)
+                val_d_loss, val_g_loss = self.evaluate(x_val, batch_size)
+                history['val_discriminator_loss'].append(val_d_loss)
+                history['val_generator_loss'].append(val_g_loss)
+                logs['val_discriminator_loss'] = val_d_loss
+                logs['val_generator_loss'] = val_g_loss
+
+                if verbose:
+                    val_metrics_str = (
+                        f' - val_d_loss: {format_number(val_d_loss)} '
+                        f'- val_g_loss: {format_number(val_g_loss)}'
+                    )
+                    print(val_metrics_str, end='')
+
+            stop_training = False
+            for callback in callbacks:
+                if callback.on_epoch_end(epoch, {**logs, 'model': self}):
+                    stop_training = True
+                    break
+
+            if verbose:
+                print()
+
+            if stop_training:
+                break
+
+        for callback in callbacks:
+            callback.on_train_end()
+
+        if verbose:
+            print()
+
+        return history
+
+    def predict(self, n_samples: int, temperature: float = 1.0) -> np.ndarray:
+        latent_points = self._generate_latent_points(n_samples)
+        return self.generator.predict(latent_points, temperature)
+
+    def evaluate(
+        self,
+        x_test: np.ndarray,
+        batch_size: int = 32,
+        n_gen_samples: int | None = None
+    ) -> tuple[float, float]:
+        if n_gen_samples is None:
+            n_gen_samples = len(x_test)
+
+        latent_points = self._generate_latent_points(n_gen_samples)
+        generated_samples = self.generator.forward_pass(latent_points, training=False)
+
+        y_real = np.ones((len(x_test), 1))
+        y_fake = np.zeros((n_gen_samples, 1))
+
+        d_loss_real = self.discriminator_loss(
+            y_real,
+            self.discriminator.forward_pass(x_test, training=False)
+        )
+
+        d_loss_fake = self.discriminator_loss(
+            y_fake,
+            self.discriminator.forward_pass(generated_samples, training=False)
+        )
+
+        discriminator_loss = 0.5 * (d_loss_real + d_loss_fake)
+
+        latent_points = self._generate_latent_points(n_gen_samples)
+        y_gan = np.ones((n_gen_samples, 1))
+
+        generated_samples = self.generator.forward_pass(latent_points, training=False)
+        discriminator_output = self.discriminator.forward_pass(generated_samples, training=False)
+
+        generator_loss = self.generator_loss(y_gan, discriminator_output)
+
+        return discriminator_loss, generator_loss
+
+    def save(self, filename: str):
+        model_state = {
+            'type': 'GAN',
+            'latent_dim': self.latent_dim,
+            'gradient_clip_threshold': self.gradient_clip_threshold,
+            'enable_padding': self.enable_padding,
+            'padding_size': self.padding_size,
+            'random_state': self.random_state,
+            'generator': self.generator.save(filename + '_generator') if self.generator else None,
+            'discriminator': self.discriminator.save(filename + '_discriminator') if self.discriminator else None,
+            'generator_optimizer': self.generator_optimizer.get_config() if self.generator_optimizer else None,
+            'discriminator_optimizer': self.discriminator_optimizer.get_config() if self.discriminator_optimizer else None,
+            'generator_loss': self.generator_loss.get_config() if self.generator_loss else None,
+            'discriminator_loss': self.discriminator_loss.get_config() if self.discriminator_loss else None
+        }
+
+        with open(filename, 'w') as f:
+            json.dump(model_state, f, indent=4)
+
+    @classmethod
+    def load(cls, filename: str) -> 'GAN':
+        with open(filename, 'r') as f:
+            model_state = json.load(f)
+
+        model = cls(
+            latent_dim=model_state['latent_dim'],
+            gradient_clip_threshold=model_state['gradient_clip_threshold'],
+            enable_padding=model_state['enable_padding'],
+            padding_size=model_state['padding_size'],
+            random_state=model_state['random_state']
+        )
+
+        if model_state.get('generator'):
+            model.generator = Sequential.load(filename + '_generator')
+
+        if model_state.get('discriminator'):
+            model.discriminator = Sequential.load(filename + '_discriminator')
+
+        if model_state.get('generator_optimizer'):
+            model.generator_optimizer = Optimizer.from_config(model_state['generator_optimizer'])
+
+        if model_state.get('discriminator_optimizer'):
+            model.discriminator_optimizer = Optimizer.from_config(model_state['discriminator_optimizer'])
+
+        if model_state.get('generator_loss'):
+            model.generator_loss = LossFunction.from_config(model_state['generator_loss'])
+
+        if model_state.get('discriminator_loss'):
+            model.discriminator_loss = LossFunction.from_config(model_state['discriminator_loss'])
+
+        return model
+
+    def __str__(self) -> str:
+        model_summary = (
+            f'GAN(latent_dim={self.latent_dim}, '
+            f'gradient_clip_threshold={self.gradient_clip_threshold}, '
+            f'enable_padding={self.enable_padding}, '
+            f'padding_size={self.padding_size}, '
+            f'random_state={self.random_state})\n'
+        )
+        model_summary += '-------------------------------------------------\n'
+        model_summary += 'Generator:\n'
+        model_summary += str(self.generator) if self.generator else "Not compiled yet\n"
+        model_summary += '-------------------------------------------------\n'
+        model_summary += 'Discriminator:\n'
+        model_summary += str(self.discriminator) if self.discriminator else "Not compiled yet\n"
+        return model_summary

@@ -63,7 +63,7 @@ class Input(Layer):
 
 class Dense(Layer):
     def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros",
-                 random_state: int = None, init_scale: float = 1.0,
+                 random_state: int = None, init_scale: float = 1.0, input_dim: int = None,
                  **kwargs):
         super().__init__()
         self.units = units
@@ -75,6 +75,7 @@ class Dense(Layer):
         self.bias_init = bias_init
         self.random_state = random_state
         self.init_scale = init_scale
+        self.input_dim = input_dim
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -146,6 +147,11 @@ class Dense(Layer):
         self.input_shape = input_data.shape
         self.input = input_data
 
+        if len(input_data.shape) == 1 and self.input_dim:
+            batch_size = input_data.shape[0]
+            input_data = input_data.reshape(batch_size, input_data = input_data.reshape(batch_size, self.input_dim))
+            self.input = input_data
+        
         if len(input_data.shape) == 3:
             batch_size, timesteps, features = input_data.shape
             input_reshaped = input_data.reshape(-1, features)
@@ -154,13 +160,13 @@ class Dense(Layer):
                 self.initialize_weights(features)
 
             output = np.dot(input_reshaped, self.weights) + self.bias
-
             return output.reshape(batch_size, timesteps, self.units)
 
         if self.weights is None:
             self.initialize_weights(input_data.shape[1])
 
-        return np.dot(input_data, self.weights) + self.bias
+        output = np.dot(input_data, self.weights) + self.bias
+        return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if len(output_error.shape) == 3:
@@ -173,8 +179,14 @@ class Dense(Layer):
             self.d_bias = np.sum(output_error_reshaped, axis=0, keepdims=True)
 
             return input_error.reshape(batch_size, timesteps, -1)
-
+            
         input_error = np.dot(output_error, self.weights.T)
+        
+        if len(self.input.shape) == 1:
+            self.input = self.input.reshape(-1, 1)
+        if len(output_error.shape) == 1:
+            output_error = output_error.reshape(-1, 1)
+
         self.d_weights = np.dot(self.input.T, output_error)
         self.d_bias = np.sum(output_error, axis=0, keepdims=True)
         return input_error

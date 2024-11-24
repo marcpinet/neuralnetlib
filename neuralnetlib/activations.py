@@ -28,7 +28,7 @@ class ActivationFunction:
         elif name == 'Linear':
             return Linear()
         elif name == 'LeakyReLU':
-            return LeakyReLU()
+            return LeakyReLU(alpha=config['alpha'])
         elif name == 'ELU':
             return ELU()
         elif name == 'SELU':
@@ -47,6 +47,9 @@ class Sigmoid(ActivationFunction):
     def derivative(self, x: np.ndarray) -> np.ndarray:
         activated_x = self(x)
         return activated_x * (1 - activated_x)
+    
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
 
 
 class ReLU(ActivationFunction):
@@ -55,6 +58,9 @@ class ReLU(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, 0.0)
+    
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
 
 
 class Tanh(ActivationFunction):
@@ -64,6 +70,8 @@ class Tanh(ActivationFunction):
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return 1 - np.square(self(x))
 
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
 
 class Softmax(ActivationFunction):
     def __call__(self, x: np.ndarray) -> np.ndarray:
@@ -72,6 +80,9 @@ class Softmax(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         raise NotImplementedError("Derivative of Softmax is not implemented. It is not needed for backpropagation.")
+    
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
 
 
 class Linear(ActivationFunction):
@@ -80,16 +91,29 @@ class Linear(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.ones_like(x)
+    
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
 
 
 class LeakyReLU(ActivationFunction):
-    LEAKY_SLOPE = 0.01
+    def __init__(self, alpha: float = 0.01):
+        self.alpha = alpha
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        return np.maximum(x, x * LeakyReLU.LEAKY_SLOPE)
+        return np.maximum(x, x * self.alpha)
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
-        return np.where(x > 0, 1.0, LeakyReLU.LEAKY_SLOPE)
+        return np.where(x > 0, 1.0, self.alpha)
+    
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            'alpha': self.alpha
+        }
+        
+    def __str__(self):
+        return f"{self.__class__.__name__}(alpha={self.alpha})"
 
 
 class ELU(ActivationFunction):
@@ -98,6 +122,12 @@ class ELU(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, np.exp(x))
+    
+    def get_config(self) -> dict:
+        return {"name": self.__class__.__name__}
+    
+    def __str__(self):
+        return self.__class__.__name__
 
 
 class SELU(ActivationFunction):
@@ -117,9 +147,13 @@ class SELU(ActivationFunction):
 
     def get_config(self) -> dict:
         return {
+            "name": self.__class__.__name__,
             'alpha': self.alpha,
             'scale': self.scale
         }
+        
+    def __str__(self):
+        return f"{self.__class__.__name__}(alpha={self.alpha}, scale={self.scale})"
         
         
 class GELU(ActivationFunction):
@@ -134,3 +168,6 @@ class GELU(ActivationFunction):
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
+
+    def __str__(self):
+        return self.__class__.__name__
