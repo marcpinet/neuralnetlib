@@ -1067,3 +1067,56 @@ class ImageDataGenerator:
             else:
                 x = np.clip(x + shift, 0, 1)
         return x
+
+
+class SpectralNorm:
+    def __init__(self, n_power_iterations: int = 1, random_state: int = None):
+        self.n_power_iterations = n_power_iterations
+        self.u_dict = {}
+        self.v_dict = {}
+        self.rng = np.random.default_rng(random_state if random_state is not None else time_ns())
+    
+    def __call__(self, W: np.ndarray) -> np.ndarray:
+        if W is None:
+            return None
+            
+        W = W + np.full_like(W, 1e-12)
+            
+        original_shape = W.shape
+        
+        if len(original_shape) == 1:
+            W = W.reshape(-1, 1)
+            
+        if W.size < 2:
+            return W.reshape(original_shape)
+            
+        height, width = W.shape
+        
+        key = (height, width)
+        
+        if key not in self.u_dict:
+            self.u_dict[key] = self.rng.normal(0, 1, (height, 1))
+            self.u_dict[key] = self.u_dict[key] / (np.linalg.norm(self.u_dict[key]) + 1e-12)
+            self.v_dict[key] = self.rng.normal(0, 1, (width, 1))
+            self.v_dict[key] = self.v_dict[key] / (np.linalg.norm(self.v_dict[key]) + 1e-12)
+            
+        u = self.u_dict[key]
+        v = self.v_dict[key]
+            
+        for _ in range(self.n_power_iterations):
+            v = W.T @ u
+            v = v / (np.linalg.norm(v) + 1e-12)
+            u = W @ v
+            u = u / (np.linalg.norm(u) + 1e-12)
+            
+        self.u_dict[key] = u
+        self.v_dict[key] = v
+            
+        sigma = float(u.T @ W @ v)
+        normalized_W = W / (sigma + 1e-12)
+        
+        return normalized_W.reshape(original_shape)
+
+    def reset(self):
+        self.u_dict.clear()
+        self.v_dict.clear()

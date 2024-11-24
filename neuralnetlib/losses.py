@@ -27,6 +27,10 @@ class LossFunction:
             return HuberLoss(config['delta'])
         elif config['name'] == 'KullbackLeiblerDivergence':
             return KullbackLeiblerDivergence()
+        elif config['name'] == 'CrossEntropyWithLabelSmoothing':
+            return CrossEntropyWithLabelSmoothing(config['label_smoothing'])
+        elif config['name'] == 'Wasserstein':
+            return Wasserstein()
         else:
             raise ValueError(f'Unknown loss function: {config["name"]}')
 
@@ -45,10 +49,10 @@ class LossFunction:
             return MeanAbsoluteError()
         elif name == "kld" or name == "kullbackleiblerdivergence":
             return KullbackLeiblerDivergence()
-        elif name == "sequencecrossentropy" or name == "sce":
-            return SequenceCrossEntropy()
         elif name == "crossentropywithlabelsmoothing" or name == "cels":
             return CrossEntropyWithLabelSmoothing()
+        elif name == "Wasserstein" or name == "wasserstein" or name == "wass":
+            return Wasserstein()
         elif name.startswith("huber") and len(name.split("_")) == 2:
             delta = float(name.split("_")[-1])
             return HuberLoss(delta)
@@ -212,3 +216,14 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
 
     def __str__(self):
         return f"CrossEntropyWithLabelSmoothing(label_smoothing={self.label_smoothing})"
+
+
+class Wasserstein(LossFunction):
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        return np.mean(y_true * y_pred)
+        
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        return y_true
+    
+    def __str__(self):
+        return "Wasserstein"

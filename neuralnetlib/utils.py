@@ -3,6 +3,7 @@ import platform
 import subprocess
 import sys
 import time
+import shutil
 
 import numpy as np
 
@@ -61,6 +62,7 @@ def progress_bar(current: int, total: int, width: int = 30, message: str = "") -
     progress = current / total
     bar = '=' * int(width * progress) + '-' * (width - int(width * progress))
     percent = int(100 * progress)
+    sys.stdout.write('\r' + ' ' * shutil.get_terminal_size().columns)
     sys.stdout.write(f'\r[{bar}] {percent}% {message}')
     sys.stdout.flush()
 
@@ -148,3 +150,121 @@ def is_display_available_windows():
         return bool(display_devices)
     except Exception:
         return False
+
+
+class GradientDebugger:
+    def __init__(self, clip_threshold: float = 1.0):
+        self.stats_history = []
+        self.clip_threshold = clip_threshold
+        self.running_mean_norm = None
+        self.running_std_norm = None
+        self.beta = 0.9
+        
+    def adaptive_clip_gradients(self, gradient: np.ndarray) -> np.ndarray:
+        if gradient is None:
+            return None
+            
+        grad_norm = np.linalg.norm(gradient)
+        if self.running_mean_norm is None:
+            self.running_mean_norm = grad_norm
+            self.running_std_norm = 1.0
+        else:
+            self.running_mean_norm = self.beta * self.running_mean_norm + (1 - self.beta) * grad_norm
+            self.running_std_norm = (self.beta * self.running_std_norm + 
+                                   (1 - self.beta) * abs(grad_norm - self.running_mean_norm))
+        
+        adaptive_threshold = self.running_mean_norm + 2 * self.running_std_norm
+        clip_norm = min(self.clip_threshold * adaptive_threshold, 10.0)
+        
+        if grad_norm > clip_norm:
+            return gradient * (clip_norm / grad_norm)
+        return gradient
+
+    def compute_gradient_stats(self, gradient: np.ndarray) -> dict:
+        if gradient is None or not isinstance(gradient, np.ndarray):
+            return self._empty_stats()
+            
+        flat_grad = gradient.flatten()
+        grad_norm = float(np.linalg.norm(flat_grad))
+        
+        stats = {
+            'mean': float(np.mean(flat_grad)),
+            'std': float(np.std(flat_grad)),
+            'min': float(np.min(flat_grad)),
+            'max': float(np.max(flat_grad)),
+            'norm': grad_norm,
+            'zeros_pct': float(np.sum(np.abs(flat_grad) < 1e-8) / len(flat_grad) * 100),
+            'is_valid': bool(not np.any(np.isnan(flat_grad)) and not np.any(np.isinf(flat_grad))),
+            'relative_norm': grad_norm / self.running_mean_norm if self.running_mean_norm else 1.0
+        }
+        
+        hist, _ = np.histogram(flat_grad, bins=10)
+        stats['distribution'] = hist.tolist()
+        
+        return stats
+
+    def _empty_stats(self) -> dict:
+        return {
+            'mean': 0.0, 'std': 0.0, 'min': 0.0, 'max': 0.0,
+            'norm': 0.0, 'zeros_pct': 100.0, 'is_valid': False,
+            'relative_norm': 0.0, 'distribution': [0] * 10
+        }
+
+    def log_gradient_stats(self, name: str, gradient: np.ndarray, step: int):
+        stats = self.compute_gradient_stats(gradient)
+        stats['step'] = step
+        stats['name'] = name
+        self.stats_history.append(stats)
+        
+        self._check_gradient_health(name, stats, step)
+
+    def _check_gradient_health(self, name: str, stats: dict, step: int):
+        warnings = []
+        
+        if not stats['is_valid']:
+            warnings.append("Invalid gradients detected")
+        
+        if stats['norm'] > 100:
+            warnings.append(f"Large gradient norm ({stats['norm']:.2f})")
+            
+        if stats['zeros_pct'] > 90:
+            warnings.append(f"High percentage of zeros ({stats['zeros_pct']:.1f}%)")
+            
+        if stats['relative_norm'] > 5.0:
+            warnings.append(f"Gradient norm {stats['relative_norm']:.1f}x larger than running average")
+            
+        if warnings:
+            print(f"WARNING in {name} at step {step}:")
+            for warning in warnings:
+                print(f"- {warning}")
+
+    def get_summary(self, last_n: int = None) -> dict:
+        if not self.stats_history:
+            return {}
+            
+        history = self.stats_history[-last_n:] if last_n else self.stats_history
+        
+        grouped = {}
+        for entry in history:
+            name = entry['name']
+            if name not in grouped:
+                grouped[name] = []
+            grouped[name].append(entry)
+            
+        summary = {}
+        for name, entries in grouped.items():
+            norms = [e['norm'] for e in entries]
+            relative_norms = [e['relative_norm'] for e in entries]
+            
+            summary[name] = {
+                'mean_norm': np.mean(norms),
+                'std_norm': np.std(norms),
+                'mean_relative_norm': np.mean(relative_norms),
+                'std_relative_norm': np.std(relative_norms),
+                'mean_zeros_pct': np.mean([e['zeros_pct'] for e in entries]),
+                'invalid_count': sum(1 for e in entries if not e['is_valid']),
+                'norm_trend': np.polyfit(range(len(norms)), norms, 1)[0],
+                'samples': len(entries)
+            }
+            
+        return summary
