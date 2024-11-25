@@ -2306,10 +2306,6 @@ class GAN(BaseModel):
                     )
                     print(val_metrics_str, end='')
 
-            if epoch % save_interval == 0:
-                weights = self.save_weights(epoch)
-                self.saved_weights_through_epochs.append(weights)
-                
             stop_training = False
 
             for callback in callbacks:
