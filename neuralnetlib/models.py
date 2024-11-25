@@ -2114,24 +2114,29 @@ class GAN(BaseModel):
         n_critic: int = 5
     ) -> tuple[float, float]:
         if n_gen_samples is None:
-            n_gen_samples = real_samples.shape[0]
-
+            n_gen_samples = len(real_samples) // 2
+            
         self._ensure_initialized(real_samples)
         
         d_loss_total = 0
+        real_batch_size = len(real_samples)
+        half_batch = real_batch_size // 2
         
         for _ in range(n_critic):
-            latent_points = self._generate_latent_points(n_gen_samples)
+            rng = np.random.default_rng(self.random_state)
+            batch_real = real_samples[rng.choice(real_batch_size, half_batch, replace=False)]
+            
+            latent_points = self._generate_latent_points(half_batch)
             generated_samples = self.generator.forward_pass(latent_points, training=True)
             
             self._apply_spectral_norm(self.discriminator)
             
-            disc_real_output = self.discriminator.forward_pass(real_samples, training=True)
+            disc_real_output = self.discriminator.forward_pass(batch_real, training=True)
             disc_fake_output = self.discriminator.forward_pass(generated_samples, training=True)
             
             d_loss_real = -np.mean(disc_real_output)
             d_loss_fake = np.mean(disc_fake_output)
-            gradient_penalty = self._gradient_penalty(real_samples, generated_samples)
+            gradient_penalty = self._gradient_penalty(batch_real, generated_samples)
             d_loss = d_loss_real + d_loss_fake + gradient_penalty
             
             d_grad_real = self._process_gradients(
