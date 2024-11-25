@@ -1076,11 +1076,26 @@ class SpectralNorm:
         self.v_dict = {}
         self.rng = np.random.default_rng(random_state if random_state is not None else time_ns())
     
+    def _get_uv_key(self, W: np.ndarray) -> tuple:
+        return tuple(W.shape)
+    
+    def _initialize_uv(self, W: np.ndarray, key: tuple):
+        if len(W.shape) == 1:
+            height = W.shape[0]
+            width = 1
+            W = W.reshape(-1, 1)
+        else:
+            height, width = W.shape
+            
+        self.u_dict[key] = self.rng.normal(0, 1, (height, 1))
+        self.u_dict[key] = self.u_dict[key] / np.linalg.norm(self.u_dict[key])
+        
+        self.v_dict[key] = self.rng.normal(0, 1, (width, 1))
+        self.v_dict[key] = self.v_dict[key] / np.linalg.norm(self.v_dict[key])
+
     def __call__(self, W: np.ndarray) -> np.ndarray:
         if W is None:
             return None
-            
-        W = W + np.full_like(W, 1e-12)
             
         original_shape = W.shape
         
@@ -1090,15 +1105,10 @@ class SpectralNorm:
         if W.size < 2:
             return W.reshape(original_shape)
             
-        height, width = W.shape
-        
-        key = (height, width)
+        key = self._get_uv_key(W)
         
         if key not in self.u_dict:
-            self.u_dict[key] = self.rng.normal(0, 1, (height, 1))
-            self.u_dict[key] = self.u_dict[key] / (np.linalg.norm(self.u_dict[key]) + 1e-12)
-            self.v_dict[key] = self.rng.normal(0, 1, (width, 1))
-            self.v_dict[key] = self.v_dict[key] / (np.linalg.norm(self.v_dict[key]) + 1e-12)
+            self._initialize_uv(W, key)
             
         u = self.u_dict[key]
         v = self.v_dict[key]
@@ -1118,5 +1128,6 @@ class SpectralNorm:
         return normalized_W.reshape(original_shape)
 
     def reset(self):
+        """Reset stored u,v vectors"""
         self.u_dict.clear()
         self.v_dict.clear()

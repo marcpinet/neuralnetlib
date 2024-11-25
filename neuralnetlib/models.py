@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import *
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy, WassersteinLoss
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy, Wasserstein
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients, SpectralNorm
@@ -2041,9 +2041,6 @@ class GAN(BaseModel):
             else LossFunction.from_name(loss_function)
         )
         
-        if isinstance(self.generator_loss, WassersteinLoss):
-            self.generator_loss.for_discriminator = False
-        
         self.generator.loss_function = self.generator_loss
         self.generator.optimizer = self.generator_optimizer
         self.discriminator.loss_function = self.discriminator_loss
@@ -2068,20 +2065,13 @@ class GAN(BaseModel):
         rng = np.random.default_rng(self.random_state)
         latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
         return latent_points
-    
-    def variance_regularization(self, fake_samples, target_variance):
-        variance = np.var(fake_samples, axis=0)
-        return np.mean((variance - target_variance) ** 2)
 
     def _apply_spectral_norm(self, model: 'Sequential'):
         if not self.use_spectral_norm:
             return
-                
+            
         for layer in model.layers:
-            if hasattr(layer, 'weights') and layer.weights is not None:
-                if layer.weights is None:
-                    continue
-                    
+            if hasattr(layer, 'weights'):
                 layer.weights = self.spectral_norm(layer.weights)
 
     def _gradient_penalty(self, real_samples: np.ndarray, fake_samples: np.ndarray) -> float:
@@ -2090,30 +2080,22 @@ class GAN(BaseModel):
             
         rng = np.random.default_rng(self.random_state)
         batch_size = real_samples.shape[0]
-        
         alpha = rng.uniform(0, 1, (batch_size, 1))
         
-        interpolated = (
-            alpha * real_samples + 
-            (1 - alpha) * fake_samples
-        )
+        interpolated = alpha * real_samples + (1 - alpha) * fake_samples
         
         disc_interpolated = self.discriminator.forward_pass(interpolated)
         gradients = self.discriminator.backward_pass(
             np.ones_like(disc_interpolated),
             compute_only=True
         )
-        gradients_norm = np.sqrt(np.sum(np.square(gradients)) + 1e-12)
         
-        return 0.1 * np.mean(np.square(gradients_norm - 1.0))
+        gradients_norm = np.sqrt(np.sum(np.square(gradients)))
+        return self.gp_weight * np.mean(np.square(gradients_norm - 1.0))
 
     def _process_gradients(self, gradients: np.ndarray, name: str) -> np.ndarray:
-        if np.any(np.isnan(gradients)) or np.any(np.isinf(gradients)):
-            gradients = np.nan_to_num(gradients, nan=0.0, posinf=0.0, neginf=0.0)
         self.gradient_debugger.log_gradient_stats(name, gradients, self._train_step)
-        processed_grads = self.gradient_debugger.adaptive_clip_gradients(gradients)
-        processed_grads = np.clip(processed_grads, -1e3, 1e3)
-        return processed_grads
+        return self.gradient_debugger.adaptive_clip_gradients(gradients)
     
     def _ensure_initialized(self, input_data: np.ndarray):
         if not hasattr(self.generator, '_initialized'):
@@ -2129,26 +2111,16 @@ class GAN(BaseModel):
         self, 
         real_samples: np.ndarray, 
         n_gen_samples: int | None = None,
-        n_critics: int = 5
+        n_critic: int = 5
     ) -> tuple[float, float]:
-        """Train GAN on a batch of real samples"""
         if n_gen_samples is None:
             n_gen_samples = real_samples.shape[0]
-            
-        real_samples = (real_samples - real_samples.min()) / (real_samples.max() - real_samples.min())
-        if self.normalize_to_neg_one:
-            real_samples = real_samples * 2 - 1
-
-        latent_points = self._generate_latent_points(n_gen_samples)
-        generated_samples = self.generator.forward_pass(latent_points, training=True)
 
         self._ensure_initialized(real_samples)
         
-        scale_factor = 0.1
-        
         d_loss_total = 0
         
-        for _ in range(n_critics):
+        for _ in range(n_critic):
             latent_points = self._generate_latent_points(n_gen_samples)
             generated_samples = self.generator.forward_pass(latent_points, training=True)
             
@@ -2157,37 +2129,37 @@ class GAN(BaseModel):
             disc_real_output = self.discriminator.forward_pass(real_samples, training=True)
             disc_fake_output = self.discriminator.forward_pass(generated_samples, training=True)
             
-            d_loss_real = -scale_factor * np.mean(disc_real_output)
-            d_loss_fake = scale_factor * np.mean(disc_fake_output)
+            d_loss_real = -np.mean(disc_real_output)
+            d_loss_fake = np.mean(disc_fake_output)
             gradient_penalty = self._gradient_penalty(real_samples, generated_samples)
-            d_loss = d_loss_real + d_loss_fake + self.gp_weight * gradient_penalty
+            d_loss = d_loss_real + d_loss_fake + gradient_penalty
             
             d_grad_real = self._process_gradients(
-                -scale_factor * np.ones_like(disc_real_output),
+                -np.ones_like(disc_real_output),
                 'd_grad_real'
             )
             d_grad_fake = self._process_gradients(
-                scale_factor * np.ones_like(disc_fake_output),
+                np.ones_like(disc_fake_output),
                 'd_grad_fake'
             )
             
             d_grad_combined = self._process_gradients(
-                d_grad_real + d_grad_fake,
+                0.5 * (d_grad_real + d_grad_fake),
                 'd_grad_combined'
             )
             self.discriminator.backward_pass(d_grad_combined, gan=True)
             d_loss_total += d_loss
             
-        d_loss_avg = d_loss_total / n_critics
+        d_loss_avg = d_loss_total / n_critic
         
         latent_points = self._generate_latent_points(n_gen_samples)
         generated_samples = self.generator.forward_pass(latent_points)
         disc_output = self.discriminator.forward_pass(generated_samples)
         
-        g_loss = -scale_factor * np.mean(disc_output)
+        g_loss = -np.mean(disc_output)
         
         g_grad = self._process_gradients(
-            -scale_factor * np.ones_like(disc_output),
+            -np.ones_like(disc_output),
             'g_grad'
         )
         
