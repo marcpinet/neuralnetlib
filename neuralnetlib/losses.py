@@ -1,4 +1,5 @@
 import numpy as np
+from neuralnetlib.metrics import mmd_score
 
 
 class LossFunction:

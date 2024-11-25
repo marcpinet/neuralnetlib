@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import *
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy, WassersteinLoss
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients, SpectralNorm
@@ -2041,6 +2041,9 @@ class GAN(BaseModel):
             else LossFunction.from_name(loss_function)
         )
         
+        if isinstance(self.generator_loss, WassersteinLoss):
+            self.generator_loss.for_discriminator = False
+        
         self.generator.loss_function = self.generator_loss
         self.generator.optimizer = self.generator_optimizer
         self.discriminator.loss_function = self.discriminator_loss
@@ -2065,6 +2068,10 @@ class GAN(BaseModel):
         rng = np.random.default_rng(self.random_state)
         latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
         return latent_points
+    
+    def variance_regularization(self, fake_samples, target_variance):
+        variance = np.var(fake_samples, axis=0)
+        return np.mean((variance - target_variance) ** 2)
 
     def _apply_spectral_norm(self, model: 'Sequential'):
         if not self.use_spectral_norm:
@@ -2127,6 +2134,13 @@ class GAN(BaseModel):
         """Train GAN on a batch of real samples"""
         if n_gen_samples is None:
             n_gen_samples = real_samples.shape[0]
+            
+        real_samples = (real_samples - real_samples.min()) / (real_samples.max() - real_samples.min())
+        if self.normalize_to_neg_one:
+            real_samples = real_samples * 2 - 1
+
+        latent_points = self._generate_latent_points(n_gen_samples)
+        generated_samples = self.generator.forward_pass(latent_points, training=True)
 
         self._ensure_initialized(real_samples)
         
@@ -2320,7 +2334,12 @@ class GAN(BaseModel):
                     )
                     print(val_metrics_str, end='')
 
+            if epoch % save_interval == 0:
+                weights = self.save_weights(epoch)
+                self.saved_weights_through_epochs.append(weights)
+                
             stop_training = False
+
             for callback in callbacks:
                 if callback.on_epoch_end(epoch, {**logs, 'model': self}):
                     stop_training = True
@@ -2448,3 +2467,20 @@ class GAN(BaseModel):
         model_summary += 'Discriminator:\n'
         model_summary += str(self.discriminator) if self.discriminator else "Not compiled yet\n"
         return model_summary
+
+    def save_weights(self, epoch: int):
+        weights = {
+            'generator': [layer.weights.copy() if hasattr(layer, 'weights') else None 
+                         for layer in self.generator.layers],
+            'biases': [layer.bias.copy() if hasattr(layer, 'bias') else None 
+                      for layer in self.generator.layers],
+            'epoch': epoch
+        }
+        return weights
+    
+    def load_weights(self, weights):
+        for layer, w, b in zip(self.generator.layers, weights['generator'], weights['biases']):
+            if hasattr(layer, 'weights'):
+                layer.weights = w.copy()
+            if hasattr(layer, 'bias'):
+                layer.bias = b.copy()

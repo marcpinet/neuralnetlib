@@ -474,38 +474,28 @@ def rouge_l_score(y_pred: list[list[str]], y_true: list[list[list[str]]]) -> flo
     return rouge_l
 
 
-def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = 1.0, threshold: float | None = None) -> float:
-    """Compute Maximum Mean Discrepancy (MMD) between two distributions.
-    
-    Args:
-        y_pred: Generated samples
-        y_true: Real samples
-        sigma: Bandwidth parameter for the Gaussian kernel
-        threshold: Not used, kept for compatibility with other metrics
-        
-    Returns:
-        float: MMD score (lower is better)
-    """
-    # Reshape inputs to 2D
+def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None) -> float:
     y_pred = y_pred.reshape(len(y_pred), -1)
     y_true = y_true.reshape(len(y_true), -1)
     
-    def gaussian_kernel(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def gaussian_kernel(x: np.ndarray, y: np.ndarray, sigma: float) -> np.ndarray:
         x_norm = np.sum(x ** 2, axis=1).reshape(-1, 1)
         y_norm = np.sum(y ** 2, axis=1).reshape(1, -1)
         dist_matrix = x_norm + y_norm - 2 * np.dot(x, y.T)
         return np.exp(-dist_matrix / (2 * sigma ** 2))
     
-    # Calculate kernel means
+    if sigma is None:
+        combined = np.vstack((y_pred, y_true))
+        pairwise_dists = np.linalg.norm(combined[:, None] - combined, axis=2)
+        sigma = np.median(pairwise_dists)
+    
     n = len(y_pred)
     m = len(y_true)
     
-    # Calculate K(x,x'), K(y,y'), and K(x,y)
-    k_xx = gaussian_kernel(y_pred, y_pred)
-    k_yy = gaussian_kernel(y_true, y_true)
-    k_xy = gaussian_kernel(y_pred, y_true)
+    k_xx = gaussian_kernel(y_pred, y_pred, sigma)
+    k_yy = gaussian_kernel(y_true, y_true, sigma)
+    k_xy = gaussian_kernel(y_pred, y_true, sigma)
     
-    # Calculate MMD
     xx_term = (np.sum(k_xx) - np.sum(np.diag(k_xx))) / (n * (n - 1)) if n > 1 else 0
     yy_term = (np.sum(k_yy) - np.sum(np.diag(k_yy))) / (m * (m - 1)) if m > 1 else 0
     xy_term = np.sum(k_xy) / (n * m)
