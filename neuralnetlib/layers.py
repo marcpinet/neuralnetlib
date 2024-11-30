@@ -2740,7 +2740,7 @@ class PositionalEncoding(Layer):
         embedding_dim: int,
         warmup_steps: int = 1000,
         initial_scale: float = 0.1,
-        final_scale: float = 1.0,
+        final_scale: float = 0.2,
         scale_embeddings: bool = True,
         trainable: bool = False,
         random_state: int = None,
@@ -2761,14 +2761,8 @@ class PositionalEncoding(Layer):
         
         self.base_scale_factor = 1.0 if not scale_embeddings else 1.0 / np.sqrt(embedding_dim)
         
-        self.weights = None
-        self.d_weights = None
-        self.seq_length = None
-        
         if trainable:
-            self.rng = np.random.default_rng(
-                random_state if random_state is not None else int(time.time_ns())
-            )
+            self.rng = np.random.default_rng(random_state)
             self.initialize_weights()
         else:
             self._build_sinusoidal_encoding()
@@ -2797,7 +2791,7 @@ class PositionalEncoding(Layer):
             
             noise = self.rng.normal(
                 0, 
-                0.02, 
+                0.01, 
                 self.weights.shape
             )
             self.weights = self.weights + noise
@@ -2811,43 +2805,42 @@ class PositionalEncoding(Layer):
         return self.initial_scale + (self.final_scale - self.initial_scale) * progress
     
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-            batch_size, seq_len, _ = input_data.shape
+        batch_size, seq_len, _ = input_data.shape
+        
+        if seq_len > self.max_sequence_length:
+            raise ValueError(f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}")
+        
+        input_norm = np.sqrt(np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
+        normalized_input = input_data / input_norm
+        
+        pos_encoding = self.weights[:, :seq_len, :]
+        if batch_size > 1:
+            pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
+        
+        if self.trainable:
+            self.current_scale = self.get_warmup_scale()
+        else:
+            self.current_scale = self.final_scale
             
-            if seq_len > self.max_sequence_length:
-                raise ValueError(
-                    f"Input sequence length {seq_len} exceeds maximum length {self.max_sequence_length}"
-                )
-            
-            pos_encoding = self.weights[:, :seq_len, :]
-            
-            if batch_size > 1:
-                pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
-            
-            if self.trainable:
-                self.current_scale = self.get_warmup_scale()
-            else:
-                self.current_scale = self.final_scale
-                
-            effective_scale = self.current_scale * self.base_scale_factor if self.scale_embeddings else self.current_scale
-            
-            input_norm = np.sqrt(np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
-            normalized_input = input_data / input_norm
-            output = normalized_input + (pos_encoding * effective_scale)
-            
-            self.metadata = {
-                'step': self.current_step,
-                'scale': self.current_scale,
-                'effective_scale': effective_scale,
-                'embedding_contribution': np.mean(np.abs(pos_encoding * effective_scale)) / np.mean(np.abs(input_data))
-            }
-            
-            return output
+        effective_scale = self.current_scale * self.base_scale_factor
+        
+        scaled_pe = pos_encoding * effective_scale
+        output = normalized_input + scaled_pe
+        
+        self.metadata = {
+            'step': self.current_step,
+            'scale': self.current_scale,
+            'effective_scale': effective_scale,
+            'embedding_contribution': np.mean(np.abs(scaled_pe)) / np.mean(np.abs(normalized_input))
+        }
+        
+        return output
     
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.trainable:
             _, seq_len, _ = output_error.shape
             
-            effective_scale = self.current_scale * self.base_scale_factor if self.scale_embeddings else self.current_scale
+            effective_scale = self.current_scale * self.base_scale_factor
             scaled_error = output_error * effective_scale
             
             self.d_weights[:, :seq_len, :] += np.sum(scaled_error, axis=0, keepdims=True)
@@ -2973,11 +2966,12 @@ class FeedForward(Layer):
 class AddNorm(Layer):
     def __init__(
         self,
-        epsilon: float = 1e-6,
+        epsilon: float = 1e-5,
         gamma_init_std: float = 0.05,
         beta_init_std: float = 0.01,
-        grad_clip: float = 3.0,
-        warmup_steps: int = 1000,
+        grad_clip: float = 1.0,
+        grad_scale: float = 0.1,
+        warmup_steps: int = 2000,
         random_state: int = None,
         **kwargs
     ) -> None:
@@ -2986,6 +2980,7 @@ class AddNorm(Layer):
         self.gamma_init_std = gamma_init_std
         self.beta_init_std = beta_init_std
         self.grad_clip = grad_clip
+        self.grad_scale = grad_scale
         self.warmup_steps = warmup_steps
         self.random_state = random_state
         
@@ -3064,8 +3059,10 @@ class AddNorm(Layer):
         batch_size = output_error.shape[0]
         self.step += 1
         
-        d_gamma_raw = np.sum(output_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
-        d_beta_raw = np.sum(output_error, axis=(0, 1), keepdims=True)
+        scaled_error = output_error * self.grad_scale
+        
+        d_gamma_raw = np.sum(scaled_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
+        d_beta_raw = np.sum(scaled_error, axis=(0, 1), keepdims=True)
         
         scale = 1.0 / (batch_size * output_error.shape[1])
         d_gamma = d_gamma_raw * scale
@@ -3076,15 +3073,24 @@ class AddNorm(Layer):
         self.d_gamma = self.normalize_gradients(d_gamma)
         self.d_beta = self.normalize_gradients(d_beta)
         
-        d_normalized = output_error * self.gamma
+        d_normalized = scaled_error * self.gamma
         
-        d_variance = -0.5 * np.sum(d_normalized * self.output_before_gamma, 
-                                 axis=-1, keepdims=True) / self.std
-        d_mean = -np.sum(d_normalized / self.std, axis=-1, keepdims=True)
+        d_variance = np.clip(
+            -0.5 * np.sum(d_normalized * self.output_before_gamma, axis=-1, keepdims=True) / self.std,
+            -self.grad_clip, self.grad_clip
+        )
         
-        d_input = (d_normalized / self.std + 
-                  2.0 * d_variance * self.output_before_gamma / N +
-                  d_mean / N)
+        d_mean = np.clip(
+            -np.sum(d_normalized / self.std, axis=-1, keepdims=True),
+            -self.grad_clip, self.grad_clip
+        )
+        
+        d_input = np.clip(
+            (d_normalized / self.std + 
+             2.0 * d_variance * self.output_before_gamma / N +
+             d_mean / N),
+            -self.grad_clip, self.grad_clip
+        )
         
         return d_input, d_input
         
