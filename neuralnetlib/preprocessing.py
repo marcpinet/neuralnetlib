@@ -398,27 +398,29 @@ class TSNE:
 
 
 class Tokenizer:
-    def __init__(self, num_words: int | None = None, 
+    def __init__(self, 
+                 num_words: int | None = None, 
                  filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
-                 lower: bool = True, split: str = ' ', 
-                 char_level: bool = False, 
+                 lower: bool = True, 
+                 split: str = ' ', 
+                 mode: str = 'word',
+                 bpe_merges: int = None,
                  pad_token: str = "<PAD>",
                  unk_token: str = "<UNK>",
                  sos_token: str = "<SOS>",
                  eos_token: str = "<EOS>") -> None:
-        """
-        Initialize Tokenizer with special tokens at fixed positions:
-        - PAD_TOKEN: Always at index 0
-        - UNK_TOKEN: Always at index 1
-        - SOS_TOKEN: Always at index 2
-        - EOS_TOKEN: Always at index 3
-        Regular vocabulary starts at index 4
-        """
         self.num_words = num_words
         self.filters = filters
         self.lower = lower
         self.split = split
-        self.char_level = char_level
+        self.mode = mode
+        self.bpe_merges = bpe_merges
+        
+        if mode not in ['char', 'word', 'bpe']:
+            raise ValueError("Mode must be one of 'char', 'word', or 'bpe'")
+        
+        if mode == 'bpe' and bpe_merges is None:
+            raise ValueError("bpe_merges must be specified when using BPE mode")
         
         self.SPECIAL_TOKENS = {
             'PAD': (pad_token, 0),
@@ -427,99 +429,179 @@ class Tokenizer:
             'EOS': (eos_token, 3)
         }
         
-        self.pad_token = self.SPECIAL_TOKENS['PAD'][0]
-        self.unk_token = self.SPECIAL_TOKENS['UNK'][0]
-        self.sos_token = self.SPECIAL_TOKENS['SOS'][0]
-        self.eos_token = self.SPECIAL_TOKENS['EOS'][0]
-        
-        self.PAD_IDX = self.SPECIAL_TOKENS['PAD'][1]
-        self.UNK_IDX = self.SPECIAL_TOKENS['UNK'][1]
-        self.SOS_IDX = self.SPECIAL_TOKENS['SOS'][1]
-        self.EOS_IDX = self.SPECIAL_TOKENS['EOS'][1]
+        for token_name, (token_text, token_idx) in self.SPECIAL_TOKENS.items():
+            setattr(self, f"{token_name}_IDX", token_idx)
+            setattr(self, f"{token_name.lower()}_token", token_text)
         
         self.word_counts = {}
         self.word_index = {}
         self.index_word = {}
         self.word_docs = {}
         self.document_count = 0
+        self.bpe_cache = {}
         
         for token, (text, idx) in self.SPECIAL_TOKENS.items():
             self.word_index[text] = idx
             self.index_word[idx] = text
-
-    def preprocess_text(self, text):
+            
+    def preprocess_text(self, text: str) -> str:
         text = re.sub(r"([!\"#$%&()*+,-./:;<=>?@\[\]^_`{|}~])", r" \1 ", text)
         text = re.sub(r"(\b\w)'(\w)", r"\1' \2", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
-
-    def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
-        """
-        Fit tokenizer on texts, keeping special tokens at their fixed positions.
-        Regular vocabulary starts at index FIRST_REGULAR_IDX (4).
-        Hyphenated words as single tokens.
-        """
-        FIRST_REGULAR_IDX = len(self.SPECIAL_TOKENS)
+        
+    def get_pairs(self, word: list[str]) -> set[tuple[str, str]]:
+        """Get all adjacent pairs in the word"""
+        pairs = set()
+        prev_char = word[0]
+        for char in word[1:]:
+            pairs.add((prev_char, char))
+            prev_char = char
+        return pairs
+        
+    def learn_bpe(self, texts: list[str], cache: bool = True) -> dict:
+        vocab = defaultdict(int)
+        pairs = defaultdict(int)
         
         for text in texts:
-            text = self.preprocess_text(text) if preprocess_ponctuation else text
+            for word in text.split():
+                if self.lower:
+                    word = word.lower()
+                chars = list(word)
+                vocab[tuple(chars)] += 1
+                
+                word_pairs = self.get_pairs(chars)
+                for pair in word_pairs:
+                    pairs[pair] += vocab[tuple(chars)]
+        
+        merges = {}
+        for i in range(self.bpe_merges):
+            if not pairs:
+                break
+            best_pair = max(pairs.items(), key=lambda x: x[1])[0]
+            merges[best_pair] = i
+            
+            new_vocab = {}
+            for word, freq in vocab.items():
+                word = list(word)
+                while True:
+                    changes = 0
+                    for j in range(len(word)-1):
+                        if tuple(word[j:j+2]) == best_pair:
+                            word[j:j+2] = [''.join(best_pair)]
+                            changes += 1
+                    if changes == 0:
+                        break
+                new_vocab[tuple(word)] = freq
+            vocab = new_vocab
+            
+            pairs = defaultdict(int)
+            for word, freq in vocab.items():
+                word_pairs = self.get_pairs(list(word))
+                for pair in word_pairs:
+                    pairs[pair] += freq
+                    
+        self.bpe_merges = merges
+        return vocab
+
+    def bpe_encode(self, text: str) -> list[str]:
+        if not self.bpe_merges:
+            return list(text)
+            
+        if self.lower:
+            text = text.lower()
+            
+        if text in self.bpe_cache:
+            return self.bpe_cache[text]
+            
+        word = list(text)
+        pairs = self.get_pairs(word)
+        
+        while pairs:
+            bigram = min(pairs, key=lambda pair: self.bpe_merges.get(pair, float('inf')))
+            if bigram not in self.bpe_merges:
+                break
+                
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i < len(word)-1 and tuple(word[i:i+2]) == bigram:
+                    new_word.append(''.join(bigram))
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            word = new_word
+            pairs = self.get_pairs(word)
+            
+        self.bpe_cache[text] = word
+        return word
+
+    def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
+        FIRST_REGULAR_IDX = len(self.SPECIAL_TOKENS)
+        
+        processed_texts = [self.preprocess_text(text) if preprocess_ponctuation else text 
+                         for text in texts]
+        
+        if self.mode == 'bpe':
+            self.learn_bpe(processed_texts)
+        
+        for text in processed_texts:
             self.document_count += 1
             
-            if self.char_level:
-                seq = text
+            if self.mode == 'char':
+                seq = list(text)
+            elif self.mode == 'bpe':
+                seq = []
+                for word in text.split():
+                    seq.extend(self.bpe_encode(word))
             else:
-                seq = text.split(self.split) if isinstance(text, str) else text
+                seq = text.split(self.split)
                 
             for w in seq:
                 if self.lower:
                     w = w.lower()
                 if w in self.filters:
                     continue
-                    
                 if w in [token for token, _ in self.SPECIAL_TOKENS.values()]:
                     continue
                     
-                if w in self.word_counts:
-                    self.word_counts[w] += 1
-                else:
-                    self.word_counts[w] = 1
-                    
-                if w in self.word_docs:
-                    self.word_docs[w] += 1
-                else:
-                    self.word_docs[w] = 1
-
-        wcounts = [(w, c) for w, c in self.word_counts.items()]
-        wcounts.sort(key=lambda x: x[1], reverse=True)
+                self.word_counts[w] = self.word_counts.get(w, 0) + 1
+                self.word_docs[w] = self.word_docs.get(w, 0) + 1
+        
+        wcounts = sorted(self.word_counts.items(), key=lambda x: x[1], reverse=True)
         sorted_voc = [wc[0] for wc in wcounts]
-
+        
         next_index = FIRST_REGULAR_IDX
         for w in sorted_voc:
             if w not in self.word_index:
                 self.word_index[w] = next_index
                 next_index += 1
-
+        
         if self.num_words is not None:
-            keep_tokens = {
-                w: i for w, i in self.word_index.items() 
-                if (i < self.num_words or 
-                    w in [token for token, _ in self.SPECIAL_TOKENS.values()])
-            }
+            keep_tokens = {w: i for w, i in self.word_index.items() 
+                         if (i < self.num_words or 
+                             w in [token for token, _ in self.SPECIAL_TOKENS.values()])}
             self.word_index = keep_tokens
-
+            
         self.index_word = {i: w for w, i in self.word_index.items()}
 
-    def texts_to_sequences(self, texts: list[str], preprocess_ponctuation: bool = False,
-                        add_special_tokens: bool = True) -> list[list[int]]:
+    def texts_to_sequences(self, texts: list[str], 
+                         preprocess_ponctuation: bool = False,
+                         add_special_tokens: bool = True) -> list[list[int]]:
         sequences = []
         for text in texts:
             if preprocess_ponctuation:
                 text = self.preprocess_text(text)
             
-            if self.char_level:
-                seq = text
+            if self.mode == 'char':
+                seq = list(text)
+            elif self.mode == 'bpe':
+                seq = []
+                for word in text.split():
+                    seq.extend(self.bpe_encode(word))
             else:
-                seq = text.split(self.split) if isinstance(text, str) else text
+                seq = text.split(self.split)
             
             vect = []
             for w in seq:
@@ -533,11 +615,11 @@ class Tokenizer:
                         if w in {self.pad_token, self.unk_token, self.sos_token, self.eos_token}:
                             vect.append(i)
                         else:
-                            vect.append(self.word_index[self.unk_token])
+                            vect.append(self.UNK_IDX)
                     else:
                         vect.append(i)
                 else:
-                    if '-' in w and not self.char_level:
+                    if '-' in w and self.mode == 'word':
                         subwords = w.split('-')
                         for idx, subw in enumerate(subwords):
                             if idx > 0:
@@ -561,13 +643,12 @@ class Tokenizer:
             vect = []
             for num in seq:
                 word = self.index_word.get(num)
-                if word is not None:
-                    if word not in {self.pad_token}:
-                        vect.append(word)
+                if word is not None and word not in {self.pad_token}:
+                    vect.append(word)
                 else:
                     vect.append(self.unk_token)
             
-            if self.char_level:
+            if self.mode == 'char':
                 yield ''.join(vect)
             else:
                 yield ' '.join(vect)
@@ -577,32 +658,14 @@ class Tokenizer:
             return min(len(self.word_index), self.num_words)
         return len(self.word_index)
 
-    def encode_special_tokens(self, sequences: list[list[int]], 
-                            add_sos: bool = True, 
-                            add_eos: bool = True) -> list[list[int]]:
-        result = []
-        sos_id = self.word_index[self.sos_token]
-        eos_id = self.word_index[self.eos_token]
-        
-        for seq in sequences:
-            new_seq = []
-            if add_sos:
-                new_seq.append(sos_id)
-            new_seq.extend(seq)
-            if add_eos:
-                new_seq.append(eos_id)
-            result.append(new_seq)
-        
-        return result
-
     def get_config(self) -> dict:
         return {
             'num_words': self.num_words,
             'filters': self.filters,
             'lower': self.lower,
             'split': self.split,
-            'char_level': self.char_level,
-            'unk_token': self.unk_token,
+            'mode': self.mode,
+            'bpe_merges': self.bpe_merges if hasattr(self, 'bpe_merges') else None,
             'document_count': self.document_count,
         }
 
