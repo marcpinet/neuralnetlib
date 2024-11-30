@@ -2108,88 +2108,87 @@ class GAN(BaseModel):
             self.discriminator._initialized = True
             
     def train_on_batch(
-        self, 
-        real_samples: np.ndarray, 
-        n_gen_samples: int | None = None,
-        n_critic: int = 5
+        self,
+        real_samples: np.ndarray,
+        batch_size: int,
+        n_critic: int = 1
     ) -> tuple[float, float]:
-        if n_gen_samples is None:
-            n_gen_samples = len(real_samples) // 2
-            
-        self._ensure_initialized(real_samples)
+        rng = np.random.default_rng(self.random_state)
         
         d_loss_total = 0
-        real_batch_size = len(real_samples)
-        half_batch = real_batch_size // 2
-        
         for _ in range(n_critic):
-            rng = np.random.default_rng(self.random_state)
-            batch_real = real_samples[rng.choice(real_batch_size, half_batch, replace=False)]
+            idx = rng.choice(len(real_samples), batch_size, replace=False)
+            real_batch = real_samples[idx]
             
-            latent_points = self._generate_latent_points(half_batch)
-            generated_samples = self.generator.forward_pass(latent_points, training=True)
+            noise = rng.standard_normal(size=(batch_size, self.latent_dim))
+            fake_batch = self.generator.forward_pass(noise, training=False)
             
-            self._apply_spectral_norm(self.discriminator)
+            combined_batch = np.concatenate([real_batch, fake_batch])
+            combined_labels = np.zeros((2 * batch_size, 1))
+            combined_labels[:batch_size] = 1.0
             
-            disc_real_output = self.discriminator.forward_pass(batch_real, training=True)
-            disc_fake_output = self.discriminator.forward_pass(generated_samples, training=True)
+            self.discriminator.y_true = combined_labels
+            predictions = self.discriminator.forward_pass(combined_batch, training=True)
+            d_loss = self.discriminator_loss(combined_labels, predictions)
+            d_grad = self.discriminator_loss.derivative(combined_labels, predictions)
+            self.discriminator.backward_pass(d_grad)
             
-            d_loss_real = -np.mean(disc_real_output)
-            d_loss_fake = np.mean(disc_fake_output)
-            gradient_penalty = self._gradient_penalty(batch_real, generated_samples)
-            d_loss = d_loss_real + d_loss_fake + gradient_penalty
-            
-            d_grad_real = self._process_gradients(
-                -np.ones_like(disc_real_output),
-                'd_grad_real'
-            )
-            d_grad_fake = self._process_gradients(
-                np.ones_like(disc_fake_output),
-                'd_grad_fake'
-            )
-            
-            d_grad_combined = self._process_gradients(
-                0.5 * (d_grad_real + d_grad_fake),
-                'd_grad_combined'
-            )
-            self.discriminator.backward_pass(d_grad_combined, gan=True)
             d_loss_total += d_loss
-            
+        
         d_loss_avg = d_loss_total / n_critic
         
-        latent_points = self._generate_latent_points(n_gen_samples)
-        generated_samples = self.generator.forward_pass(latent_points)
-        disc_output = self.discriminator.forward_pass(generated_samples)
+        noise = rng.standard_normal(size=(batch_size, self.latent_dim))
+        fake_samples = self.generator.forward_pass(noise, training=True)
         
-        g_loss = -np.mean(disc_output)
+        target_labels = np.ones((batch_size, 1))
         
-        g_grad = self._process_gradients(
-            -np.ones_like(disc_output),
-            'g_grad'
-        )
+        disc_predictions = self.discriminator.forward_pass(fake_samples, training=False)
+        self.discriminator.y_true = target_labels
+        g_loss = self.generator_loss(target_labels, disc_predictions)
+        g_grad = self.generator_loss.derivative(target_labels, disc_predictions)
         
-        d_error = self._process_gradients(
-            self.discriminator.backward_pass(g_grad, gan=True),
-            'g_through_d_grad'
-        )
-        self.generator.backward_pass(d_error, gan=True)
+        d_grad = self.discriminator.backward_pass(g_grad, compute_only=True)
+        self.generator.backward_pass(d_grad, gan=True)
         
-        self._train_step += 1
         return d_loss_avg, g_loss
 
     def fit(
         self,
         x_train: np.ndarray,
-        epochs: int,
+        epochs: int = 100,
         batch_size: int | None = None,
-        n_gen_samples: int | None = None,
+        n_critic: int = 5,
         verbose: bool = True,
         metrics: list | None = None,
         random_state: int | None = None,
         validation_data: tuple | None = None,
         callbacks: list = [],
-        n_critics: int = 5
+        plot_generated: bool = False,
+        plot_interval: int = 1,
+        fixed_noise: np.ndarray | None = None,
+        n_gen_samples: int | None = None
     ) -> dict:
+        """
+        Train the GAN on the provided training data.
+        
+        Args:
+            x_train: Training data
+            epochs: Number of training epochs
+            batch_size: Size of mini-batches
+            n_critic: Number of discriminator updates per generator update
+            verbose: Whether to print training progress
+            metrics: List of metrics to evaluate the model
+            random_state: Random seed for shuffling
+            validation_data: Tuple of validation data
+            callbacks: List of callback objects
+            plot_generated: Whether to plot generated samples during training
+            plot_interval: How often to plot samples (if plot_generated=True)
+            fixed_noise: Fixed noise vectors for consistent sample generation
+            n_gen_samples: Number of samples to generate for metrics evaluation
+            
+        Returns:
+            Dictionary containing the training history
+        """
         history = History({
             'discriminator_loss': [],
             'generator_loss': [],
@@ -2208,6 +2207,10 @@ class GAN(BaseModel):
                     history[f'val_discriminator_{metric.name}'] = []
                     history[f'val_generator_{metric.name}'] = []
 
+        if plot_generated and fixed_noise is None:
+            rng = np.random.default_rng(self.random_state)
+            fixed_noise = rng.standard_normal(size=(64, self.latent_dim))
+        
         if callbacks is None:
             callbacks = []
 
@@ -2219,7 +2222,7 @@ class GAN(BaseModel):
                 callback.on_epoch_begin(epoch)
 
             start_time = time.time()
-            x_train_shuffled = shuffle(x_train, random_state=random_state)
+            x_train_shuffled = shuffle(x_train, random_state=random_state if random_state is not None else self.random_state)
             d_error = 0
             g_error = 0
             
@@ -2230,14 +2233,14 @@ class GAN(BaseModel):
                 num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
                 for j in range(0, x_train.shape[0], batch_size):
                     x_batch = x_train_shuffled[j:j + batch_size]
-                    d_loss, g_loss = self.train_on_batch(x_batch, n_gen_samples, n_critics)
+                    d_loss, g_loss = self.train_on_batch(x_batch, min(batch_size, len(x_batch)), n_critic)
                     d_error += d_loss
                     g_error += g_loss
 
                     metrics_str = ''
                     if metrics is not None:
-                        latent_points = self._generate_latent_points(len(x_batch))
-                        generated_samples = self.generator.forward_pass(latent_points, training=False)
+                        noise = self._generate_latent_points(len(x_batch))
+                        generated_samples = self.forward_pass(noise, training=False)
 
                         for metric in metrics:
                             metric_value = metric(generated_samples, x_batch)
@@ -2264,11 +2267,11 @@ class GAN(BaseModel):
                     metric_values[k] /= num_batches
                     
             else:
-                d_error, g_loss = self.train_on_batch(x_train, n_gen_samples, n_critics)
+                d_error, g_error = self.train_on_batch(x_train, len(x_train), n_critic)
                 
                 if metrics is not None:
-                    latent_points = self._generate_latent_points(len(x_train))
-                    generated_samples = self.generator.forward_pass(latent_points, training=False)
+                    noise = self._generate_latent_points(len(x_train) if n_gen_samples is None else n_gen_samples)
+                    generated_samples = self.forward_pass(noise, training=False)
                     
                     for metric in metrics:
                         metric_value = metric(generated_samples, x_train)
@@ -2296,7 +2299,7 @@ class GAN(BaseModel):
             }
 
             if validation_data is not None:
-                x_val = validation_data
+                x_val = validation_data[0] if isinstance(validation_data, tuple) else validation_data
                 x_val = np.array(x_val)
                 val_d_loss, val_g_loss = self.evaluate(x_val, batch_size)
                 history['val_discriminator_loss'].append(val_d_loss)
@@ -2310,9 +2313,11 @@ class GAN(BaseModel):
                         f'- val_g_loss: {format_number(val_g_loss)}'
                     )
                     print(val_metrics_str, end='')
+            
+            if plot_generated and (epoch + 1) % plot_interval == 0:
+                self._plot_samples(fixed_noise, epoch + 1)
 
             stop_training = False
-
             for callback in callbacks:
                 if callback.on_epoch_end(epoch, {**logs, 'model': self}):
                     stop_training = True
@@ -2331,6 +2336,19 @@ class GAN(BaseModel):
             print()
 
         return history
+
+    def _plot_samples(self, noise: np.ndarray, epoch: int):
+        generated = self.forward_pass(noise, training=False)
+        
+        sample = generated[0].reshape(28, 28)
+        
+        plt.figure(figsize=(4, 4))
+        plt.imshow(sample, cmap='gray_r', interpolation='nearest')
+        plt.axis('off')
+        plt.tight_layout()
+        
+        plt.savefig(f'video{str(epoch).zfill(2)}.png')
+        plt.close()
 
     def predict(self, n_samples: int, temperature: float = 1.0) -> np.ndarray:
         latent_points = self._generate_latent_points(n_samples)
