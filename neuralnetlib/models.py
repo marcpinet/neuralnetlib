@@ -2002,7 +2002,9 @@ class GAN(BaseModel):
         random_state: int | None = None,
         use_spectral_norm: bool = True,
         use_gradient_penalty: bool = True,
-        gp_weight: float = 10.0
+        gp_weight: float = 10.0,
+        image_height: int | None = None,
+        image_width: int | None = None,
     ):
         super().__init__(gradient_clip_threshold, enable_padding, padding_size, random_state)
         
@@ -2016,21 +2018,71 @@ class GAN(BaseModel):
         self.use_spectral_norm = use_spectral_norm
         self.use_gradient_penalty = use_gradient_penalty
         self.gp_weight = gp_weight
+        self._image_height = image_height
+        self._image_width = image_width
+        
         self.spectral_norm = SpectralNorm()
         self._train_step = 0
         self.gradient_debugger = GradientDebugger(clip_threshold=gradient_clip_threshold)
+
+    @property
+    def image_dimensions(self) -> tuple[int, int]:
+        if self._image_height is None or self._image_width is None:
+            if self.generator is None:
+                raise ValueError("The image dimensions are not defined and the generator is not compiled.")
+            return self._infer_dimensions_from_generator()
+        return self._image_height, self._image_width
+
+    def _infer_dimensions_from_generator(self) -> tuple[int, int]:
+        last_dense = None
+        for layer in self.generator.layers:
+            if isinstance(layer, Dense):
+                last_dense = layer
         
+        if last_dense is None:
+            raise ValueError("Generator must contain at least one Dense layer.")
+        
+        n_pixels = last_dense.units
+        
+        height = int(np.sqrt(n_pixels))
+        while n_pixels % height != 0:
+            height -= 1
+        width = n_pixels // height
+        
+        return height, width
+    
     def compile(
         self,
         generator: 'Sequential',
         discriminator: 'Sequential',
         generator_optimizer: Optimizer | str,
         discriminator_optimizer: Optimizer | str,
-        loss_function: LossFunction | str = 'binary_crossentropy',
+        loss_function: LossFunction | str = 'bce',
         verbose: bool = False
     ):
         self.generator = generator
         self.discriminator = discriminator
+        
+        if self._image_height is None or self._image_width is None:
+            self._image_height, self._image_width = self._infer_dimensions_from_generator()
+            if verbose:
+                print(f"Inferred image dimensions: {self._image_height}x{self._image_width}")
+
+        last_dense = None
+        for layer in generator.layers:
+            if isinstance(layer, Dense):
+                last_dense = layer
+
+        if last_dense is None:
+            raise ValueError("The generator must contain at least one Dense layer.")
+
+        expected_size = self._image_height * self._image_width
+        if last_dense.units != expected_size:
+            raise ValueError(
+                f"The generator must produce images of size {expected_size} "
+                f"({self._image_height}x{self._image_width}), "
+                f"but the last Dense layer produces {last_dense.units} units."
+            )
         
         self.generator_optimizer = (
             generator_optimizer if isinstance(generator_optimizer, Optimizer) 
@@ -2349,7 +2401,8 @@ class GAN(BaseModel):
     def _plot_samples(self, noise: np.ndarray, epoch: int):
         generated = self.forward_pass(noise, training=False)
         
-        sample = generated[0].reshape(28, 28)
+        height, width = self.image_dimensions
+        sample = generated[0].reshape(height, width)
         
         plt.figure(figsize=(4, 4))
         plt.imshow(sample, cmap='gray_r', interpolation='nearest')
