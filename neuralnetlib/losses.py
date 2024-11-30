@@ -212,7 +212,7 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
 
         smooth_one_hot = (1.0 - self.label_smoothing) * one_hot + self.label_smoothing / n_classes
 
-        grad = -(smooth_one_hot / y_pred) / (batch_size * seq_length)
+        grad = -smooth_one_hot * (1.0 / (y_pred + self.epsilon)) / (batch_size * seq_length)
         return grad
 
     def __str__(self):

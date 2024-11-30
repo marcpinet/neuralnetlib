@@ -15,7 +15,7 @@ from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCro
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients, SpectralNorm
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, log_softmax, History, GradientDebugger
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, log_softmax, softmax, History, GradientDebugger
 
 
 class BaseModel(ABC):
@@ -1848,11 +1848,12 @@ class Transformer(BaseModel):
                 alpha: float = 0.6, min_length: int = 2, temperature: float = 0.7) -> np.ndarray:
         enc_output = self.encode(inp, training=False)
         
-        beam_sequences = [[
-            (np.array([[self.SOS_IDX]]), 0.0)
-        ]]
+        input_length = np.sum(inp[0] != self.PAD_IDX)
+        adaptive_max_length = min(max_length, input_length * 2)
         
-        for i in range(max_length - 1):
+        beam_sequences = [[(np.array([[self.SOS_IDX]]), 0.0)]]
+        
+        for i in range(adaptive_max_length - 1):
             all_candidates = []
             
             for sequences in beam_sequences[-1]:
@@ -1863,6 +1864,9 @@ class Transformer(BaseModel):
                         all_candidates.append((seq, score))
                     continue
                     
+                if len(seq[0]) > input_length * 1.5:
+                    score -= (len(seq[0]) - input_length * 1.5) * 0.1
+                    
                 dec_output = self.decode(
                     seq,
                     enc_output, 
@@ -1871,8 +1875,13 @@ class Transformer(BaseModel):
                     padding_mask=self.create_padding_mask(inp)
                 )
                 
-                logits = self.output_layer.forward_pass(dec_output)[:, -1, :] / temperature
-                log_probs = log_softmax(logits[0])
+                logits = self.output_layer.forward_pass(dec_output)[:, -1, :]
+                
+                invalid_tokens = np.array([self.PAD_IDX, self.SOS_IDX, self.UNK_IDX])
+                
+                logits[:, invalid_tokens] = -np.inf
+                
+                log_probs = log_softmax(logits[0] / temperature)
                 
                 top_k = min(beam_size * 2, self.tgt_vocab_size)
                 top_indices = np.argpartition(log_probs, -top_k)[-top_k:]
@@ -1883,7 +1892,7 @@ class Transformer(BaseModel):
                     valid_tokens[top_indices == self.EOS_IDX] = False
                     
                 for idx, is_valid in zip(top_indices[valid_tokens], valid_tokens[valid_tokens]):
-                    candidate_score = score - log_probs[idx]
+                    candidate_score = score + log_probs[idx]
                     length_penalty = ((5 + len(seq[0]) + 1) / 6) ** alpha
                     candidate_score = candidate_score / length_penalty
                     

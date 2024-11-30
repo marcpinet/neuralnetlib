@@ -1055,12 +1055,20 @@ class Embedding(Layer):
 
     def initialize_weights(self):
         self.rng = np.random.default_rng(self.random_state)
-
+        
         scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
         self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
         
-        special_token_indices = [0, 1, 2, 3]
-        self.weights[special_token_indices] *= 0.1
+        self.weights[0] = np.zeros(self.output_dim)
+        
+        for idx in [1, 2, 3]:  # UNK, SOS, EOS
+            special_vector = self.rng.normal(0, scale / 2, self.output_dim)  
+            self.weights[idx] = special_vector
+        
+        epsilon = 1e-8
+        norms = np.linalg.norm(self.weights[4:], axis=1, keepdims=True)
+        norms = np.maximum(norms, epsilon)
+        self.weights[4:] = self.weights[4:] / norms * np.sqrt(self.output_dim)
         
         self.bias = np.zeros((1, 1, self.output_dim))
         self.d_weights = np.zeros_like(self.weights)
@@ -1089,18 +1097,28 @@ class Embedding(Layer):
         input_indices = self.clipped_input[:batch_size, :seq_length]
         flattened_output = output_error[:batch_size, :seq_length]
         
-        token_counts = np.bincount(input_indices.flatten(), minlength=self.input_dim)
+        mask = (input_indices != 0)
+        
+        token_counts = np.bincount(
+            input_indices[mask].flatten(), 
+            minlength=self.input_dim
+        )
         token_counts = np.maximum(token_counts, 1)
         
         for b in range(batch_size):
             grad_batch = flattened_output[b]
             indices_batch = input_indices[b]
+            
+            valid_indices = indices_batch != 0
+            grad_batch = grad_batch[valid_indices]
+            indices_batch = indices_batch[valid_indices]
+            
             grad_batch = grad_batch / token_counts[indices_batch, np.newaxis]
             np.add.at(grad_weights, indices_batch, grad_batch)
         
-        grad_norm = np.linalg.norm(grad_weights)
+        grad_norm = np.linalg.norm(grad_weights[1:])
         if grad_norm > 1.0:
-            grad_weights = grad_weights / grad_norm
+            grad_weights[1:] = grad_weights[1:] / grad_norm
         
         self.d_weights = grad_weights
         self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
@@ -2519,8 +2537,9 @@ class MultiHeadAttention(Layer):
         self.key_dense: Dense = None
         self.value_dense: Dense = None
         self.output_dense: Dense = None
-
         self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+        
+        self.scale = 1.0 / np.sqrt(self.key_dim)
         
         self.attention_weights: np.ndarray | None = None
 
@@ -2586,19 +2605,16 @@ class MultiHeadAttention(Layer):
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
         if mask is not None:
-            x_masked = np.where(mask, -np.inf, x)
-        else:
-            x_masked = x
-        max_x = np.max(x_masked, axis=-1, keepdims=True)
-        
-        exp_x = np.exp(x - max_x)
-        
-        if mask is not None:
+            x_masked = np.where(mask, -1e9, x)
+            max_x = np.max(x_masked, axis=-1, keepdims=True)
+            exp_x = np.exp(x_masked - max_x)
             exp_x = np.where(mask, 0.0, exp_x)
+        else:
+            max_x = np.max(x, axis=-1, keepdims=True)
+            exp_x = np.exp(x - max_x)
         
         sum_x = np.sum(exp_x, axis=-1, keepdims=True)
-        
-        sum_x = np.where(sum_x > 0, sum_x, 1.0)
+        sum_x = np.maximum(sum_x, 1e-6)
         
         return exp_x / sum_x
 
@@ -2653,26 +2669,17 @@ class MultiHeadAttention(Layer):
         d_attention_output = normalize_gradient(d_attention_output)
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
         
-        if self.attention_weights.shape != (batch_size, self.num_heads, query_seq_length, key_value_seq_length):
-            raise ValueError(f"Attention weights shape {self.attention_weights.shape} doesn't match expected shape {(batch_size, self.num_heads, query_seq_length, key_value_seq_length)}")
+        d_attention = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
+        attention_probs = self.attention_weights
+        d_attention_probs = d_attention * (attention_probs - np.power(attention_probs, 2))
         
-        d_values = np.matmul(
-            np.transpose(self.attention_weights, (0, 1, 3, 2)),
-            d_attention_output
-        )
+        d_values = np.matmul(attention_probs.transpose(0, 1, 3, 2), d_attention_output)
+        d_query = np.matmul(d_attention_probs, self.reshaped_key)
+        d_key = np.matmul(d_attention_probs.transpose(0, 1, 3, 2), self.reshaped_query)
+        
         d_values = normalize_gradient(d_values)
-        
-        d_weights = np.matmul(
-            d_attention_output,
-            np.transpose(self.reshaped_value, (0, 1, 3, 2))
-        )
-        d_weights = normalize_gradient(d_weights)
-        
-        d_query = normalize_gradient(np.matmul(d_weights, self.reshaped_key))
-        d_key = normalize_gradient(np.matmul(
-            np.transpose(d_weights, (0, 1, 3, 2)),
-            self.reshaped_query
-        ))
+        d_query = normalize_gradient(d_query)
+        d_key = normalize_gradient(d_key)
         
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
@@ -2823,7 +2830,9 @@ class PositionalEncoding(Layer):
                 
             effective_scale = self.current_scale * self.base_scale_factor if self.scale_embeddings else self.current_scale
             
-            output = input_data + (pos_encoding * effective_scale)
+            input_norm = np.sqrt(np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
+            normalized_input = input_data / input_norm
+            output = normalized_input + (pos_encoding * effective_scale)
             
             self.metadata = {
                 'step': self.current_step,
@@ -2880,7 +2889,8 @@ class FeedForward(Layer):
         d_model: int,
         dropout_rate: float = 0.1,
         activation: str = 'gelu',
-        kernel_initializer: str = "glorot_uniform",
+        kernel_initializer: str = "he_normal",
+        output_initializer: str = "glorot_uniform",
         bias_initializer: str = "zeros",
         random_state: int = None,
         **kwargs
@@ -2891,6 +2901,7 @@ class FeedForward(Layer):
         self.dropout_rate: float = dropout_rate
         self.activation_name: str = activation
         self.kernel_initializer: str = kernel_initializer
+        self.output_initializer: str = output_initializer
         self.bias_initializer: str = bias_initializer
         self.random_state: int = random_state
 
@@ -2903,7 +2914,7 @@ class FeedForward(Layer):
         
         self.dense2 = Dense(
             units=d_model,
-            weights_init=kernel_initializer,
+            weights_init=output_initializer,
             bias_init=bias_initializer,
             random_state=random_state
         )

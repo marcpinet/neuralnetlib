@@ -102,6 +102,10 @@ def log_softmax(x: np.ndarray) -> np.ndarray:
     return x - max_x - np.log(sum_exp)
 
 
+def softmax(x: np.ndarray) -> np.ndarray:
+    return np.exp(log_softmax(x))
+
+
 def format_number(number):
     if number == 0:  # Handle the case for 0 directly
         return "0.0"
