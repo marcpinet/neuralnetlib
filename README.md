@@ -178,7 +178,6 @@ And test your changes on the examples.
 
 ## 🎯 TODO
 
-- [ ] Add BPE (Byte Pair Encoding) tokenizer
 - [ ] Add more preprocessing tools
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Add more callbacks
