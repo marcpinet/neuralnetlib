@@ -25,7 +25,6 @@ def one_hot_encode(indices: np.ndarray, num_classes: int) -> np.ndarray:
     return one_hot
 
 
-
 def apply_threshold(y_pred: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     """Applies a threshold to the predictions. Typically used for binary classification."""
     return (y_pred > threshold).astype(int)
@@ -1194,3 +1193,110 @@ class SpectralNorm:
         """Reset stored u,v vectors"""
         self.u_dict.clear()
         self.v_dict.clear()
+
+
+class Strategy(Enum):
+    MEAN = "mean"
+    MEDIAN = "median"
+    MODE = "mode"
+    CONSTANT = "constant"
+    RANDOM = "random"
+
+
+class Imputer:
+    def __init__(self, strategy: str = "mean", fill_value: float = None, add_indicator: bool = False, random_state: int = None):
+        if isinstance(strategy, str):
+            strategy = Strategy(strategy)
+        
+        self.strategy: Strategy = strategy
+        self.fill_value: float = fill_value
+        self.add_indicator: bool = add_indicator
+        self.random_state: int = random_state
+        self.statistics_: dict[int, float] = {}
+        self.indicators_: dict[int, np.ndarray] = {}
+        self.is_1d_: bool = False
+        
+        if strategy == Strategy.RANDOM and random_state is not None:
+            np.random.seed(random_state)
+            
+    def _compute_mode(self, column: np.ndarray) -> float:
+        unique_vals, counts = np.unique(column[~np.isnan(column)], return_counts=True)
+        return unique_vals[np.argmax(counts)]
+
+    def _compute_statistics(self, X: np.ndarray, column_idx: int) -> float:
+        non_missing = X[~np.isnan(X[:, column_idx]), column_idx]
+        
+        if len(non_missing) == 0:
+            raise ValueError(f"Column {column_idx} has no non-missing values")
+            
+        if self.strategy == Strategy.MEAN:
+            return float(np.mean(non_missing))
+        elif self.strategy == Strategy.MEDIAN:
+            return float(np.median(non_missing))
+        elif self.strategy == Strategy.MODE:
+            return float(self._compute_mode(non_missing))
+        elif self.strategy == Strategy.CONSTANT:
+            return self.fill_value
+        elif self.strategy == Strategy.RANDOM:
+            self.random_params_[column_idx] = non_missing
+            return None
+
+    def fit(self, X: np.ndarray) -> "Imputer":
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+            
+        self.is_1d_ = X.ndim == 1
+        if self.is_1d_:
+            X = X.reshape(-1, 1)
+            
+        self.random_params_: dict[int, np.ndarray] = {}
+        
+        if self.add_indicator:
+            self.indicators_ = {
+                i: np.isnan(X[:, i]) for i in range(X.shape[1])
+            }
+        
+        for i in range(X.shape[1]):
+            self.statistics_[i] = self._compute_statistics(X, i)
+                
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        if not isinstance(X, np.ndarray):
+            X = np.array(X)
+            
+        is_1d = X.ndim == 1
+        if is_1d:
+            X = X.reshape(-1, 1)
+            
+        X_imputed = X.copy()
+        
+        if self.strategy in [Strategy.MEAN, Strategy.MEDIAN, Strategy.MODE, Strategy.CONSTANT]:
+            for i in range(X.shape[1]):
+                mask = np.isnan(X[:, i])
+                X_imputed[mask, i] = self.statistics_[i]
+                
+        elif self.strategy == Strategy.RANDOM:
+            for i in range(X.shape[1]):
+                mask = np.isnan(X[:, i])
+                n_missing = np.sum(mask)
+                if n_missing > 0:
+                    rng = np.random.default_rng(self.random_state)
+                    random_values = rng.choice(
+                        self.random_params_[i],
+                        size=n_missing,
+                        replace=True
+                    )
+                    X_imputed[mask, i] = random_values
+        
+        if self.add_indicator:
+            indicators = np.array([self.indicators_[i] for i in range(X.shape[1])]).T
+            X_imputed = np.hstack([X_imputed, indicators.astype(int)])
+        
+        if is_1d and not self.add_indicator:
+            X_imputed = X_imputed.ravel()
+            
+        return X_imputed
+
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        return self.fit(X).transform(X)
