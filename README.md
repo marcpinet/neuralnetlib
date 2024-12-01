@@ -180,16 +180,11 @@ And test your changes on the examples.
 ## 🎯 TODO
 
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
-- [ ] Add more callbacks
-- [ ] Add more layers
-- [ ] Add more model architecture support
-- [ ] Add cuDNN support to allow the use of GPUs
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
-- [ ] Add more preprocessing tools
+- [ ] Add cuDNN support to allow the use of GPUs
 
 ## 🐞 Know issues
 
-- [ ] The transformer has gradient issues (normalization and often constant attention weights after a few epochs)
 - [ ] The save feature of some very rare cases (layers/models) aren't working properly (I just need to read my old code again)
 
 
