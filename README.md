@@ -2,7 +2,7 @@
 
 ## 📝 Description
 
-This is a handmade deep learning framework library, made in python, **using numpy as its only external dependency**.
+This is a handmade machine and deep learning framework library, made in python, **using numpy as its only external dependency**.
 
 I made it to challenge myself and to learn more about deep neural networks, how they work _in depth_.
 
@@ -23,6 +23,7 @@ This project will be maintained as long as I have ideas to improve it, and as lo
 - Many optimizers (sgd, momentum, rmsprop, adam) 📊
 - Supports binary classification, multiclass classification, regression and text generation 📚
 - Preprocessing tools (tokenizer, pca, ngram, standardscaler, pad_sequences, one_hot_encode and more) 🛠
+- Machine learning tools (isolation forest, kmeans, pca, t-sne, k-means) 🧮
 - Callbacks and regularizers (early stopping, l1/l2 regularization) 📉
 - Save and load models 📁
 - Simple to use 📚

@@ -109,3 +109,73 @@ class KMeans:
         for i, centroid in enumerate(self.cluster_centers_):
             distances[:, i] = np.sum((X - centroid) ** 2, axis=1)
         return distances
+
+
+class DBSCAN:
+    def __init__(self, eps=0.5, min_samples=5, metric='euclidean'):
+        self.eps = eps
+        self.min_samples = min_samples
+        self.metric = metric
+        self.labels_ = None
+        self.core_sample_indices_ = None
+        self.components_ = None
+        self.n_clusters_ = 0
+        
+    def _get_neighbors(self, X, sample_idx):
+        if self.metric == 'euclidean':
+            distances = np.sum((X - X[sample_idx]) ** 2, axis=1)
+            return np.nonzero(distances <= self.eps ** 2)[0]
+        else:
+            raise ValueError("Only euclidean metric is supported")
+            
+    def fit(self, X):
+        n_samples = X.shape[0]
+        self.labels_ = np.full(n_samples, -1)
+        
+        visited = np.zeros(n_samples, dtype=bool)
+        core_samples = np.zeros(n_samples, dtype=bool)
+        
+        cluster_label = 0
+        
+        for i in range(n_samples):
+            if visited[i]:
+                continue
+                
+            visited[i] = True
+            neighbors = self._get_neighbors(X, i)
+            
+            if len(neighbors) < self.min_samples:
+                self.labels_[i] = -1
+                continue
+                
+            core_samples[i] = True
+            self.labels_[i] = cluster_label
+            
+            neighbors = list(neighbors)
+            j = 0
+            while j < len(neighbors):
+                neighbor = neighbors[j]
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    new_neighbors = self._get_neighbors(X, neighbor)
+                    
+                    if len(new_neighbors) >= self.min_samples:
+                        core_samples[neighbor] = True
+                        neighbors.extend(set(new_neighbors) - set(neighbors))
+                        
+                if self.labels_[neighbor] == -1:
+                    self.labels_[neighbor] = cluster_label
+                    
+                j += 1
+                
+            cluster_label += 1
+            
+        self.core_sample_indices_ = np.nonzero(core_samples)[0]
+        self.components_ = X[core_samples]
+        self.n_clusters_ = cluster_label
+        
+        return self
+        
+    def fit_predict(self, X):
+        self.fit(X)
+        return self.labels_
