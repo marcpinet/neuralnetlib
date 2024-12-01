@@ -417,3 +417,179 @@ class AdaBoost:
     
     def score_samples(self, X):
         return np.sum([stump.alpha * stump.predict(X) for stump in self.stumps], axis=0)
+
+
+import numpy as np
+from enum import Enum
+
+class GBMTask(Enum):
+    REGRESSION = "regression"
+    BINARY_CLASSIFICATION = "binary_classification"
+
+class DecisionTree:
+    def __init__(self, max_depth=3, min_samples_split=2):
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.root = None
+        
+    class Node:
+        def __init__(self):
+            self.feature = None
+            self.threshold = None
+            self.value = None
+            self.left = None
+            self.right = None
+
+    def _best_split(self, X, y):
+        m = X.shape[0]
+        if m < self.min_samples_split:
+            return None, None, None
+            
+        best_gain = -float('inf')
+        best_feature = None
+        best_threshold = None
+        
+        S = np.sum((y - np.mean(y)) ** 2)
+        
+        for feature in range(X.shape[1]):
+            thresholds = np.unique(X[:, feature])
+            if len(thresholds) <= 1:
+                continue
+                
+            thresholds = (thresholds[:-1] + thresholds[1:]) / 2
+            
+            for threshold in thresholds:
+                left_mask = X[:, feature] <= threshold
+                right_mask = ~left_mask
+                
+                if np.sum(left_mask) < 1 or np.sum(right_mask) < 1:
+                    continue
+                    
+                gain = S - (
+                    np.sum((y[left_mask] - np.mean(y[left_mask])) ** 2) +
+                    np.sum((y[right_mask] - np.mean(y[right_mask])) ** 2)
+                )
+                
+                if gain > best_gain:
+                    best_gain = gain
+                    best_feature = feature
+                    best_threshold = threshold
+                    
+        return best_feature, best_threshold, best_gain
+
+    def _build_tree(self, X, y, depth=0):
+        node = self.Node()
+        
+        if depth >= self.max_depth:
+            node.value = np.mean(y)
+            return node
+            
+        feature, threshold, gain = self._best_split(X, y)
+        
+        if feature is None or gain <= 0:
+            node.value = np.mean(y)
+            return node
+            
+        left_mask = X[:, feature] <= threshold
+        right_mask = ~left_mask
+        
+        node.feature = feature
+        node.threshold = threshold
+        node.left = self._build_tree(X[left_mask], y[left_mask], depth + 1)
+        node.right = self._build_tree(X[right_mask], y[right_mask], depth + 1)
+        
+        return node
+        
+    def _predict_sample(self, x, node):
+        if node.value is not None:
+            return node.value
+            
+        if x[node.feature] <= node.threshold:
+            return self._predict_sample(x, node.left)
+        return self._predict_sample(x, node.right)
+
+    def fit(self, X, y):
+        self.root = self._build_tree(X, y)
+        return self
+        
+    def predict(self, X):
+        return np.array([self._predict_sample(x, self.root) for x in X])
+
+class GradientBoostingMachine:
+    def __init__(self, task=GBMTask.REGRESSION, n_estimators=100, learning_rate=0.1, 
+                 max_depth=3, min_samples_split=2, subsample=1.0, random_state=None):
+        self.task = task if isinstance(task, GBMTask) else GBMTask(task)
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.subsample = subsample
+        self.rng = np.random.default_rng(random_state)
+        
+        self.trees = []
+        self.initial_prediction = None
+        
+    def _sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+        
+    def _compute_residuals(self, y_true, y_pred):
+        if self.task == GBMTask.REGRESSION:
+            return y_true - y_pred
+        else:
+            p = self._sigmoid(y_pred)
+            return y_true - p
+            
+    def _sample_indices(self, n_samples):
+        if self.subsample == 1:
+            return np.arange(n_samples)
+        n_subsamples = int(n_samples * self.subsample)
+        return self.rng.choice(n_samples, size=n_subsamples, replace=False)
+        
+    def fit(self, X, y):
+        n_samples = X.shape[0]
+        
+        if self.task == GBMTask.REGRESSION:
+            self.initial_prediction = np.mean(y)
+        else:
+            y = np.where(y <= 0, 0, 1)
+            self.initial_prediction = np.log(np.mean(y) / (1 - np.mean(y)))
+            
+        F = np.full(n_samples, self.initial_prediction)
+        
+        for _ in range(self.n_estimators):
+            residuals = self._compute_residuals(y, F)
+            indices = self._sample_indices(n_samples)
+            
+            tree = DecisionTree(
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split
+            )
+            tree.fit(X[indices], residuals[indices])
+            self.trees.append(tree)
+            
+            predictions = tree.predict(X)
+            F += self.learning_rate * predictions
+        
+        return self
+        
+    def predict(self, X):
+        predictions = np.full(X.shape[0], self.initial_prediction)
+        
+        for tree in self.trees:
+            predictions += self.learning_rate * tree.predict(X)
+            
+        if self.task == GBMTask.BINARY_CLASSIFICATION:
+            return (self._sigmoid(predictions) >= 0.5).astype(int)
+        return predictions
+        
+    def predict_proba(self, X):
+        if self.task != GBMTask.BINARY_CLASSIFICATION:
+            raise ValueError("predict_proba is only available for binary classification")
+            
+        predictions = np.full(X.shape[0], self.initial_prediction)
+        
+        for tree in self.trees:
+            predictions += self.learning_rate * tree.predict(X)
+            
+        proba = self._sigmoid(predictions)
+        return np.vstack([1 - proba, proba]).T
