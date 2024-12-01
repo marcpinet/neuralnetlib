@@ -9,3 +9,4 @@ from . import preprocessing
 from . import regularizers
 from . import utils
 from . import ensemble
+from . import cluster
