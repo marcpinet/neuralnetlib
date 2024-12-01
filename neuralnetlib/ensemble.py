@@ -316,3 +316,104 @@ class RandomForest:
                 mode_predictions.append(values[np.argmax(counts)])
             return np.array(mode_predictions)
         return np.mean(predictions, axis=0)
+
+
+import numpy as np
+
+class DecisionStump:
+    def __init__(self):
+        self.feature_idx = None
+        self.threshold = None
+        self.polarity = 1
+        self.alpha = None
+        
+    def predict(self, X):
+        n_samples = X.shape[0]
+        X_column = X[:, self.feature_idx]
+        predictions = np.ones(n_samples)
+        if self.polarity == 1:
+            predictions[X_column <= self.threshold] = -1
+        else:
+            predictions[X_column > self.threshold] = -1
+        return predictions
+
+
+class AdaBoost:
+    def __init__(self, n_estimators=50, random_state=None):
+        self.n_estimators = n_estimators
+        self.stumps = []
+        self.rng = np.random.default_rng(random_state)
+        
+    def _build_stump(self, X, y, weights):
+        n_samples, n_features = X.shape
+        min_error = float('inf')
+        best_stump = DecisionStump()
+        
+        for feature_idx in range(n_features):
+            feature_values = X[:, feature_idx]
+            thresholds = np.unique(feature_values)
+            
+            if len(thresholds) == 1:
+                continue
+                
+            thresholds = (thresholds[:-1] + thresholds[1:]) / 2
+            
+            for threshold in thresholds:
+                polarity_error = np.zeros(2)
+                predictions = np.ones(n_samples)
+                
+                # 1
+                predictions[feature_values <= threshold] = -1
+                polarity_error[0] = np.sum(weights[predictions != y])
+                
+                # -1
+                predictions = np.ones(n_samples)
+                predictions[feature_values > threshold] = -1
+                polarity_error[1] = np.sum(weights[predictions != y])
+                
+                error = np.min(polarity_error)
+                if error < min_error:
+                    min_error = error
+                    best_stump.feature_idx = feature_idx
+                    best_stump.threshold = threshold
+                    best_stump.polarity = 1 if polarity_error[0] < polarity_error[1] else -1
+        
+        eps = 1e-10
+        best_stump.alpha = 0.5 * np.log((1.0 - min_error + eps) / (min_error + eps))
+        return best_stump, min_error
+    
+    def fit(self, X, y):
+        n_samples = X.shape[0]
+        
+        y = np.where(y <= 0, -1, 1)
+        weights = np.ones(n_samples) / n_samples
+        
+        self.stumps = []
+        
+        for _ in range(self.n_estimators):
+            stump, error = self._build_stump(X, y, weights)
+            
+            if error > 0.5:
+                break
+                
+            predictions = stump.predict(X)
+            weights *= np.exp(-stump.alpha * y * predictions)
+            weights /= np.sum(weights)
+            
+            self.stumps.append(stump)
+            
+            if error < 1e-10:
+                break
+                
+        return self
+    
+    def predict(self, X):
+        return np.sign(self.score_samples(X))
+    
+    def predict_proba(self, X):
+        scores = self.score_samples(X)
+        proba = 1 / (1 + np.exp(-2 * scores))
+        return np.vstack([1 - proba, proba]).T
+    
+    def score_samples(self, X):
+        return np.sum([stump.alpha * stump.predict(X) for stump in self.stumps], axis=0)
