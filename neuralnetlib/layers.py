@@ -1518,6 +1518,8 @@ class LSTMCell(Layer):
         
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
+        
+        self.grad_stats = {'forward': {}, 'backward': {}}
 
         self.Wf = None
         self.Uf = None
@@ -1542,7 +1544,7 @@ class LSTMCell(Layer):
         # Forget gate
         self.Wf = self.orthogonal_init((input_dim, self.units))
         self.Uf = self.orthogonal_init((self.units, self.units))
-        self.bf = np.ones((1, self.units))
+        self.bf = np.zeros((1, self.units))
 
         # Input gate
         self.Wi = self.orthogonal_init((input_dim, self.units))
@@ -1558,6 +1560,8 @@ class LSTMCell(Layer):
         self.Wo = self.orthogonal_init((input_dim, self.units))
         self.Uo = self.orthogonal_init((self.units, self.units))
         self.bo = np.zeros((1, self.units))
+        
+        self.l2_reg = 0.01
 
         # Initialize gradients
         self._init_gradients()
@@ -1579,7 +1583,7 @@ class LSTMCell(Layer):
             self.dWo = np.zeros_like(self.Wo)
             self.dUo = np.zeros_like(self.Uo)
             self.dbo = np.zeros_like(self.bo)
-
+        
     def forward(self, x_t: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.Wf is None:
             self.initialize_weights(x_t.shape[1])
@@ -1591,17 +1595,22 @@ class LSTMCell(Layer):
         self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev, self.Uf) + self.bf
         self.f_t = self.sigmoid(self.f_gate_input)
 
+        # Input gate
         self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev, self.Ui) + self.bi
         self.i_t = self.sigmoid(self.i_gate_input)
 
+        # Cell gate
         self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev, self.Uc) + self.bc
         self.c_tilde = np.tanh(self.c_gate_input)
-
+        
+        # Cell state
         self.c_t = self.f_t * c_prev + self.i_t * self.c_tilde
 
+        # Output gate
         self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev, self.Uo) + self.bo
         self.o_t = self.sigmoid(self.o_gate_input)
 
+        # Hidden state
         self.c_t_tanh = np.tanh(self.c_t)
         self.h_t = self.o_t * self.c_t_tanh
 
@@ -1635,18 +1644,20 @@ class LSTMCell(Layer):
         c_t = self.cache['c_t']
         c_t_tanh = self.cache['c_t_tanh']
 
-        do = dh_next * c_t_tanh
-        dc = dc_next + dh_next * o_t * (1 - c_t_tanh ** 2)
+        do = dh_next * self.c_t_tanh
+        dc = dc_next + dh_next * self.o_t * (1 - self.c_t_tanh ** 2)
 
-        do_input = do * o_t * (1 - o_t)
-        self.dWo += np.dot(x_t.T, do_input)
-        self.dUo += np.dot(h_prev.T, do_input)
-        self.dbo += np.sum(do_input, axis=0, keepdims=True)
-
-        dc_prev = dc * f_t
-        df = dc * c_prev
-        di = dc * c_tilde
-        dc_tilde = dc * i_t
+        # Output gate gradients
+        do_input = do * self.o_t * (1 - self.o_t)
+        self.dWo = np.dot(self.x_t.T, do_input)
+        self.dUo = np.dot(self.h_prev.T, do_input)
+        self.dbo = np.sum(do_input, axis=0, keepdims=True)
+        
+        # Cell state gradients
+        dc_prev = dc * self.f_t
+        df = dc * self.c_prev
+        di = dc * self.c_tilde
+        dc_tilde = dc * self.i_t
 
         df_input = df * f_t * (1 - f_t)
         self.dWf += np.dot(x_t.T, df_input)
@@ -1746,6 +1757,8 @@ class LSTM(Layer):
         self.last_c = None
         self.cache = None
         self.input_shape = None
+        self.initialized = False
+        self.gradient_norms = []
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -1757,7 +1770,9 @@ class LSTM(Layer):
         np.ndarray, np.ndarray, np.ndarray]:
         if x.ndim != 3:
             raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
-
+        if not self.initialized:
+            self.cell = LSTMCell(self.units)
+            self.initialized = True
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
 
@@ -1827,6 +1842,12 @@ class LSTM(Layer):
                                  np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
 
         global_norm = np.sqrt(squared_norm_sum)
+        
+        self.cell.dWf += self.cell.l2_reg * self.cell.Wf
+        self.cell.dWi += self.cell.l2_reg * self.cell.Wi
+        self.cell.dWc += self.cell.l2_reg * self.cell.Wc
+        self.cell.dWo += self.cell.l2_reg * self.cell.Wo
+        
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
         if scaling_factor < 1.0:
             dx *= scaling_factor
