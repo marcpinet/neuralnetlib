@@ -11,11 +11,11 @@ from abc import ABC, abstractmethod
 from neuralnetlib.activations import ActivationFunction
 from neuralnetlib.callbacks import EarlyStopping
 from neuralnetlib.layers import *
-from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy, Wasserstein
+from neuralnetlib.losses import LossFunction, CategoricalCrossentropy, BinaryCrossentropy, SparseCategoricalCrossentropy
 from neuralnetlib.metrics import Metric
 from neuralnetlib.optimizers import Optimizer
 from neuralnetlib.preprocessing import PCA, pad_sequences, clip_gradients, SpectralNorm
-from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, log_softmax, softmax, History, GradientDebugger
+from neuralnetlib.utils import shuffle, progress_bar, is_interactive, is_display_available, format_number, log_softmax, train_test_split, History, GradientDebugger
 
 
 class BaseModel(ABC):
@@ -229,6 +229,7 @@ class Sequential(BaseModel):
             metrics: list | None = None,
             random_state: int | None = None,
             validation_data: tuple | None = None,
+            validation_split: float | None = None,
             callbacks: list = [],
             plot_decision_boundary: bool = False) -> dict:
         """
@@ -254,6 +255,13 @@ class Sequential(BaseModel):
             'loss': [],
             'val_loss': []
         })
+        
+        if validation_split is not None and validation_data is not None:
+            raise ValueError("Cannot specify both validation_data and validation_split")
+        elif validation_split is not None:
+            x_train, x_test, y_train, y_test = train_test_split(x_train, y_train, test_size=validation_split,
+                                                                random_state=random_state if random_state is not None else self.random_state)
+            validation_data = (x_test, y_test)
 
         if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
@@ -1097,12 +1105,19 @@ class Autoencoder(BaseModel):
             metrics: list | None = None,
             random_state: int | None = None,
             validation_data: tuple | None = None,
+            validation_split: float | None = None,
             callbacks: list = []) -> dict:
 
         history = History({
             'loss': [],
             'val_loss': []
         })
+        
+        if validation_data is not None and validation_split is not None:
+            raise ValueError("Cannot specify both validation_data and validation_split")
+        elif validation_data is None and validation_split is not None:
+            x_train, x_val = train_test_split(x_train, test_size=validation_split, random_state=random_state)
+            validation_data = (x_val, x_val)
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
 
@@ -1705,12 +1720,19 @@ class Transformer(BaseModel):
                 metrics: list | None = None,
                 random_state: int | None = None,
                 validation_data: tuple | None = None,
+                validation_split: float | None = None,
                 callbacks: list = []) -> dict:
 
             history = History({
                 'loss': [],
                 'val_loss': []
             })
+            
+            if validation_data is not None and validation_split is not None:
+                raise ValueError("Cannot specify both validation_data and validation_split")
+            elif validation_data is None and validation_split is not None:
+                x_val, y_val = train_test_split(x_train, test_size=validation_split, random_state=random_state)
+                validation_data = (x_val, y_val)
                 
             encoder_input, decoder_input, decoder_target = self.prepare_data(x_train, y_train)
 
@@ -2223,6 +2245,7 @@ class GAN(BaseModel):
         metrics: list | None = None,
         random_state: int | None = None,
         validation_data: tuple | None = None,
+        validation_split: float | None = None,
         callbacks: list = [],
         plot_generated: bool = False,
         plot_interval: int = 1,
@@ -2256,6 +2279,12 @@ class GAN(BaseModel):
             'val_discriminator_loss': [],
             'val_generator_loss': []
         })
+        
+        if validation_data is not None and validation_split is not None:
+            raise ValueError("Cannot specify both validation_data and validation_split")
+        elif validation_data is None and validation_split is not None:
+            x_train, x_val = train_test_split(x_train, test_size=validation_split, random_state=random_state)
+            validation_data = (x_val, None)
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
 
