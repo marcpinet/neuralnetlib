@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from neuralnetlib.losses import MeanSquaredError, BinaryCrossentropy, CategoricalCrossentropy, MeanAbsoluteError, \
-    HuberLoss
+    Huber
 
 
 class TestLossFunctions(unittest.TestCase):
@@ -41,7 +41,7 @@ class TestLossFunctions(unittest.TestCase):
         self.assertAlmostEqual(calculated_loss, expected_loss)
 
     def test_huber_loss(self):
-        huber = HuberLoss(delta=1.0)
+        huber = Huber(delta=1.0)
         y_true = np.array([1, 2, 3])
         y_pred = np.array([1, 2, 4])
         error = y_true - y_pred

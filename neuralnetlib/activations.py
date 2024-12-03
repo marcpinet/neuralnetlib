@@ -17,26 +17,13 @@ class ActivationFunction:
     @staticmethod
     def from_config(config: dict):
         name = config['name']
-        if name == 'Sigmoid':
-            return Sigmoid()
-        elif name == 'ReLU':
-            return ReLU()
-        elif name == 'Tanh':
-            return Tanh()
-        elif name == 'Softmax':
-            return Softmax()
-        elif name == 'Linear':
-            return Linear()
-        elif name == 'LeakyReLU':
-            return LeakyReLU(alpha=config['alpha'])
-        elif name == 'ELU':
-            return ELU()
-        elif name == 'SELU':
-            return SELU(alpha=config['alpha'], scale=config['scale'])
-        elif name == 'GELU':
-            return GELU()
-        else:
-            raise ValueError(f'Unknown activation function: {name}')
+        
+        for activation_class in ActivationFunction.__subclasses__():
+            if activation_class.__name__ == name:
+                constructor_params = {k: v for k, v in config.items() if k != 'name'}
+                return activation_class(**constructor_params)
+                
+        raise ValueError(f'Unknown activation function: {name}')
 
 
 class Sigmoid(ActivationFunction):

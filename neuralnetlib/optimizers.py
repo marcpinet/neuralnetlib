@@ -16,16 +16,14 @@ class Optimizer:
 
     @staticmethod
     def from_config(config: dict):
-        if config['name'] == 'SGD':
-            return SGD.from_config(config)
-        elif config['name'] == 'Momentum':
-            return Momentum.from_config(config)
-        elif config['name'] == 'RMSprop':
-            return RMSprop.from_config(config)
-        elif config['name'] == 'Adam':
-            return Adam.from_config(config)
-        else:
-            raise ValueError(f"Unknown optimizer name: {config['name']}")
+        optimizer_name = config['name']
+        
+        for optimizer_class in Optimizer.__subclasses__():
+            if optimizer_class.__name__ == optimizer_name:
+                constructor_params = {k: v for k, v in config.items() if k != 'name'}
+                return optimizer_class(**constructor_params)
+                
+        raise ValueError(f"No optimizer found for the name: {optimizer_name}")
 
     @staticmethod
     def from_name(name: str) -> "Optimizer":
