@@ -32,6 +32,8 @@ class LossFunction:
             return CrossEntropyWithLabelSmoothing(config['label_smoothing'])
         elif config['name'] == 'Wasserstein':
             return Wasserstein()
+        elif config['name'] == 'FocalLoss':
+            return FocalLoss(config['gamma'], config['alpha'])
         else:
             raise ValueError(f'Unknown loss function: {config["name"]}')
 
@@ -54,6 +56,8 @@ class LossFunction:
             return CrossEntropyWithLabelSmoothing()
         elif name == "Wasserstein" or name == "wasserstein" or name == "wass":
             return Wasserstein()
+        elif name == "focalloss" or name == "focal" or name == "fl":
+            return FocalLoss()
         elif name.startswith("huber") and len(name.split("_")) == 2:
             delta = float(name.split("_")[-1])
             return HuberLoss(delta)
@@ -228,3 +232,53 @@ class Wasserstein(LossFunction):
     
     def __str__(self):
         return "Wasserstein"
+
+
+class FocalLoss(LossFunction):
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        ce_loss = -y_true * np.log(y_pred) - (1 - y_true) * np.log(1 - y_pred)
+        
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        modulating_factor = np.power(1 - p_t, self.gamma)
+        
+        alpha_factor = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
+        
+        focal_loss = alpha_factor * modulating_factor * ce_loss
+        
+        return np.mean(focal_loss)
+
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        
+        alpha_factor = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
+        
+        modulating_factor = np.power(1 - p_t, self.gamma)
+        d_modulating_factor = -self.gamma * np.power(1 - p_t, self.gamma - 1)
+        
+        d_ce = y_true / y_pred - (1 - y_true) / (1 - y_pred)
+        
+        derivative = alpha_factor * (
+            modulating_factor * d_ce + 
+            d_modulating_factor * (-y_true * np.log(y_pred) - (1 - y_true) * np.log(1 - y_pred))
+        )
+        
+        return derivative / y_true.shape[0]
+
+    def __str__(self):
+        return f"FocalLoss(gamma={self.gamma}, alpha={self.alpha})"
+
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            "gamma": self.gamma,
+            "alpha": self.alpha
+        }
