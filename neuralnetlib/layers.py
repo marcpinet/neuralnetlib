@@ -213,9 +213,10 @@ class Dense(Layer):
 
 
 class Activation(Layer):
-    def __init__(self, activation_function: ActivationFunction):
+    def __init__(self, activation_function: ActivationFunction | str):
         super().__init__()
-        self.activation_function = activation_function
+        self.activation_function = activation_function if isinstance(
+            activation_function, ActivationFunction) else ActivationFunction.from_name(activation_function)
 
     def __str__(self) -> str:
         name = type(self.activation_function).__name__
