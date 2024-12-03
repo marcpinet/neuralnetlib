@@ -185,8 +185,7 @@ And test your changes on the examples.
 
 ## 🐞 Know issues
 
-- [ ] The save feature of some very rare cases (layers/models) aren't working properly (I just need to read my old code again)
-
+Nothing yet! Feel free to open an issue if you find one.
 
 ## ✍️ Authors
 
