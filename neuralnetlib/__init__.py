@@ -8,5 +8,4 @@ from . import optimizers
 from . import preprocessing
 from . import regularizers
 from . import utils
-from . import ensemble
-from . import cluster
+from . import learners
