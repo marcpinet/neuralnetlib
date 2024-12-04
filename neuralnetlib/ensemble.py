@@ -1,5 +1,4 @@
 import numpy as np
-from enum import Enum
 
 
 class IsolationTree:
@@ -122,13 +121,8 @@ class IsolationForest:
         return self.fit(X).predict(X)
 
 
-class TreeType(Enum):
-    CLASSIFIER = "classifier"
-    REGRESSOR = "regressor"
-
-
 class DecisionTree:
-    def __init__(self, tree_type: TreeType = TreeType.CLASSIFIER, max_depth: int = None, 
+    def __init__(self, tree_type: str = "classifier", max_depth: int = None, 
                  min_samples_split: int = 2, min_samples_leaf: int = 1, 
                  max_features: int = None, random_state: int = None):
         self.tree_type = tree_type
@@ -161,7 +155,7 @@ class DecisionTree:
         best_feature = None
         best_threshold = None
         
-        current_metric = self._gini(y) if self.tree_type == TreeType.CLASSIFIER else self._mse(y)
+        current_metric = self._gini(y) if self.tree_type == "classifier" else self._mse(y)
         
         for feature in features:
             thresholds = np.unique(X[:, feature])
@@ -173,7 +167,7 @@ class DecisionTree:
                 if np.sum(left_mask) < self.min_samples_leaf or np.sum(right_mask) < self.min_samples_leaf:
                     continue
                 
-                if self.tree_type == TreeType.CLASSIFIER:
+                if self.tree_type == "classifier":
                     left_metric = self._gini(y[left_mask])
                     right_metric = self._gini(y[right_mask])
                 else:
@@ -200,7 +194,7 @@ class DecisionTree:
         if (self.max_depth is not None and depth >= self.max_depth) or \
            n_samples < self.min_samples_split or \
            n_samples < 2 * self.min_samples_leaf:
-            if self.tree_type == TreeType.CLASSIFIER:
+            if self.tree_type == "classifier":
                 unique, counts = np.unique(y, return_counts=True)
                 node.prediction = unique[np.argmax(counts)]
             else:
@@ -213,7 +207,7 @@ class DecisionTree:
         feature, threshold = self._best_split(X, y, features)
         
         if feature is None:
-            if self.tree_type == TreeType.CLASSIFIER:
+            if self.tree_type == "classifier":
                 unique, counts = np.unique(y, return_counts=True)
                 node.prediction = unique[np.argmax(counts)]
             else:
@@ -238,7 +232,7 @@ class DecisionTree:
         return self._predict_single(x, node.right)
     
     def fit(self, X, y):
-        if self.tree_type == TreeType.CLASSIFIER:
+        if self.tree_type == "classifier":
             self.n_classes = len(np.unique(y))
             y = y.astype(int)
             
@@ -247,13 +241,13 @@ class DecisionTree:
         
     def predict(self, X):
         predictions = np.array([self._predict_single(x, self.root) for x in X])
-        if self.tree_type == TreeType.CLASSIFIER:
+        if self.tree_type == "classifier":
             return predictions.astype(int)
         return predictions
 
 
 class RandomForest:
-    def __init__(self, n_estimators: int = 100, tree_type: TreeType = TreeType.CLASSIFIER, 
+    def __init__(self, n_estimators: int = 100, tree_type: str = "classifier", 
                  max_depth: int = None, min_samples_split: int = 2, min_samples_leaf: int = 1,
                  max_features: str | int = "sqrt", bootstrap: bool = True, 
                  random_state: int = None):
@@ -281,7 +275,7 @@ class RandomForest:
         n_samples, n_features = X.shape
         max_features = self._get_max_features(n_features)
         
-        if self.tree_type == TreeType.CLASSIFIER:
+        if self.tree_type == "classifier":
             y = y.astype(int)
             self.classes_ = np.unique(y)
         
@@ -309,7 +303,7 @@ class RandomForest:
         
     def predict(self, X):
         predictions = np.array([tree.predict(X) for tree in self.trees])
-        if self.tree_type == TreeType.CLASSIFIER:
+        if self.tree_type == "classifier":
             mode_predictions = []
             for sample_pred in predictions.T:
                 values, counts = np.unique(sample_pred.astype(int), return_counts=True)
@@ -317,8 +311,6 @@ class RandomForest:
             return np.array(mode_predictions)
         return np.mean(predictions, axis=0)
 
-
-import numpy as np
 
 class DecisionStump:
     def __init__(self):
@@ -419,14 +411,7 @@ class AdaBoost:
         return np.sum([stump.alpha * stump.predict(X) for stump in self.stumps], axis=0)
 
 
-import numpy as np
-from enum import Enum
-
-class GBMTask(Enum):
-    REGRESSION = "regression"
-    BINARY_CLASSIFICATION = "binary_classification"
-
-class DecisionTree:
+class DecisionTreeGBM:
     def __init__(self, max_depth=3, min_samples_split=2):
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
@@ -516,9 +501,9 @@ class DecisionTree:
         return np.array([self._predict_sample(x, self.root) for x in X])
 
 class GradientBoostingMachine:
-    def __init__(self, task=GBMTask.REGRESSION, n_estimators=100, learning_rate=0.1, 
+    def __init__(self, task="regression", n_estimators=100, learning_rate=0.1, 
                  max_depth=3, min_samples_split=2, subsample=1.0, random_state=None):
-        self.task = task if isinstance(task, GBMTask) else GBMTask(task)
+        self.task = task
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
         self.max_depth = max_depth
@@ -533,7 +518,7 @@ class GradientBoostingMachine:
         return 1 / (1 + np.exp(-x))
         
     def _compute_residuals(self, y_true, y_pred):
-        if self.task == GBMTask.REGRESSION:
+        if self.task == "regression":
             return y_true - y_pred
         else:
             p = self._sigmoid(y_pred)
@@ -548,7 +533,7 @@ class GradientBoostingMachine:
     def fit(self, X, y):
         n_samples = X.shape[0]
         
-        if self.task == GBMTask.REGRESSION:
+        if self.task == "regression":
             self.initial_prediction = np.mean(y)
         else:
             y = np.where(y <= 0, 0, 1)
@@ -560,7 +545,7 @@ class GradientBoostingMachine:
             residuals = self._compute_residuals(y, F)
             indices = self._sample_indices(n_samples)
             
-            tree = DecisionTree(
+            tree = DecisionTreeGBM(
                 max_depth=self.max_depth,
                 min_samples_split=self.min_samples_split
             )
@@ -578,12 +563,12 @@ class GradientBoostingMachine:
         for tree in self.trees:
             predictions += self.learning_rate * tree.predict(X)
             
-        if self.task == GBMTask.BINARY_CLASSIFICATION:
+        if self.task == "binary_classification":
             return (self._sigmoid(predictions) >= 0.5).astype(int)
         return predictions
         
     def predict_proba(self, X):
-        if self.task != GBMTask.BINARY_CLASSIFICATION:
+        if self.task != "binary_classification":
             raise ValueError("predict_proba is only available for binary classification")
             
         predictions = np.full(X.shape[0], self.initial_prediction)
@@ -594,11 +579,6 @@ class GradientBoostingMachine:
         proba = self._sigmoid(predictions)
         return np.vstack([1 - proba, proba]).T
 
-
-
-class XGBoostObjective(Enum):
-    REG_SQUAREDERROR = "reg:squarederror"
-    BINARY_LOGISTIC = "binary:logistic"
 
 class XGBoostNode:
     def __init__(self):
@@ -710,7 +690,7 @@ class XGBoost:
                  min_child_weight: float = 1.0, subsample: float = 1.0,
                  colsample_bytree: float = 1.0, lambda_: float = 1.0,
                  gamma: float = 0.0, random_state: int = None):
-        self.objective = XGBoostObjective(objective)
+        self.objective = objective
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
         self.max_depth = max_depth
@@ -729,7 +709,7 @@ class XGBoost:
         return 1 / (1 + np.exp(-x))
 
     def _compute_gradients(self, y: np.ndarray, pred: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        if self.objective == XGBoostObjective.REG_SQUAREDERROR:
+        if self.objective == "reg:squarederror":
             grad = pred - y
             hess = np.ones_like(y)
         else:
@@ -757,7 +737,7 @@ class XGBoost:
         return X, y, grad, hess
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> 'XGBoost':
-        if self.objective == XGBoostObjective.BINARY_LOGISTIC:
+        if self.objective == "binary:logistic":
             y = (y > 0).astype(np.float64)
             self.base_score = np.log(np.mean(y) / (1 - np.mean(y) + 1e-6))
         else:
@@ -790,12 +770,12 @@ class XGBoost:
         for tree in self.trees:
             predictions += self.learning_rate * tree.predict(X)
 
-        if self.objective == XGBoostObjective.BINARY_LOGISTIC:
+        if self.objective == "binary:logistic":
             return (self._sigmoid(predictions) >= 0.5).astype(int)
         return predictions
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        if self.objective != XGBoostObjective.BINARY_LOGISTIC:
+        if self.objective != "binary:logistic":
             raise ValueError("predict_proba is only available for binary classification")
 
         predictions = np.full(X.shape[0], self.base_score)
