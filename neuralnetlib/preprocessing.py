@@ -3,7 +3,7 @@ import re
 import numpy as np
 
 from time import time_ns
-from enum import Enum, auto
+from enum import Enum
 from collections import defaultdict
 from collections.abc import Generator
 
@@ -243,6 +243,8 @@ def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
     dot_product = np.dot(vector1, vector2)
     norm_vector1 = np.linalg.norm(vector1)
     norm_vector2 = np.linalg.norm(vector2)
+    if norm_vector1 == 0 or norm_vector2 == 0:
+        return 0.0 
     similarity = dot_product / (norm_vector1 * norm_vector2)
     return similarity
 
@@ -749,15 +751,10 @@ class CountVectorizer:
         return dict(sorted(self.vocabulary_.items(), key=lambda x: x[1]))
 
 
-class TokenType(Enum):
-    CHAR = auto()
-    WORD = auto()
-
-
 class NGram:
     def __init__(self,
                  n: int = 3,
-                 token_type: TokenType = TokenType.CHAR,
+                 token_type: str = "char",
                  start_token: str = '$',
                  end_token: str = '^',
                  separator: str = ' '):
@@ -771,12 +768,12 @@ class NGram:
         self.transitions = defaultdict(list)
 
     def _tokenize(self, text: str) -> list[str]:
-        if self.token_type == TokenType.CHAR:
+        if self.token_type == "char":
             return list(text)
         return text.split(self.separator)
 
     def _join_tokens(self, tokens: list[str]) -> str:
-        if self.token_type == TokenType.CHAR:
+        if self.token_type == "char":
             return ''.join(tokens)
         return self.separator.join(tokens)
 
@@ -810,7 +807,7 @@ class NGram:
         return self
 
     def _get_random_start(self) -> list[str]:
-        if self.token_type == TokenType.CHAR:
+        if self.token_type == "char":
             return [self.start_token] * (self.n - 1)
 
         start_contexts = [
@@ -840,7 +837,7 @@ class NGram:
                 context = tuple(current[-(self.n - 1):])
 
                 if context not in self.ngrams:
-                    if (self.token_type == TokenType.WORD and
+                    if (self.token_type == "word" and
                             current[-1] in self.transitions):
                         next_token = random.choice(self.transitions[current[-1]])
                         current.append(next_token)
@@ -855,7 +852,7 @@ class NGram:
                     if len(sequence) >= min_length:
                         if max_length is None or len(sequence) <= max_length:
                             result = self._join_tokens(sequence)
-                            if self.token_type == TokenType.WORD:
+                            if self.token_type == "word":
                                 result = result.capitalize()
                             return result
                     break
@@ -863,7 +860,7 @@ class NGram:
                 if max_length and len(current) - (self.n - 1) > max_length:
                     break
 
-                if (self.token_type == TokenType.WORD and
+                if (self.token_type == "word" and
                         random.random() < variability and
                         current[-1] in self.transitions):
                     next_token = random.choice(self.transitions[current[-1]])
@@ -893,9 +890,6 @@ class NGram:
     def get_contexts(self) -> dict:
         return dict(self.ngrams)
 
-
-import numpy as np
-from time import time_ns
 
 class ImageDataGenerator:
     def __init__(
