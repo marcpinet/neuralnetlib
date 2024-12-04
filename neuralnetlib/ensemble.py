@@ -785,3 +785,5 @@ class XGBoost:
 
         proba = self._sigmoid(predictions)
         return np.vstack([1 - proba, proba]).T
+
+
