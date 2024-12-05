@@ -470,10 +470,10 @@ class Tokenizer:
                     word = word.lower()
                 chars = list(word)
                 vocab[tuple(chars)] += 1
-                
+
                 word_pairs = self.get_pairs(chars)
                 for pair in word_pairs:
-                    pairs[pair] += vocab[tuple(chars)]
+                    pairs[pair] += 1
         
         merges = {}
         for i in range(self.bpe_merges):
