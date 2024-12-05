@@ -3079,44 +3079,28 @@ class AddNorm(Layer):
         return self.gamma * self.normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        N = output_error.shape[-1]
-        batch_size = output_error.shape[0]
-        self.step += 1
+        dY = output_error
+        B, T, F = dY.shape
+        N = F
+
+        x_minus_mean = self.normalized * self.std
         
-        scaled_error = output_error * self.grad_scale
+        d_gamma = np.sum(dY * self.normalized, axis=(0, 1), keepdims=True)
+        d_beta = np.sum(dY, axis=(0, 1), keepdims=True)
+
+        d_normalized = dY * self.gamma
+
+        d_var = np.sum(d_normalized * x_minus_mean * (-0.5) / (self.std**3), axis=-1, keepdims=True)
         
-        d_gamma_raw = np.sum(scaled_error * self.output_before_gamma, axis=(0, 1), keepdims=True)
-        d_beta_raw = np.sum(scaled_error, axis=(0, 1), keepdims=True)
-        
-        scale = 1.0 / (batch_size * output_error.shape[1])
-        d_gamma = d_gamma_raw * scale
-        d_beta = d_beta_raw * scale
-        
-        self.update_gradient_stats(d_gamma)
-        
-        self.d_gamma = self.normalize_gradients(d_gamma)
-        self.d_beta = self.normalize_gradients(d_beta)
-        
-        d_normalized = scaled_error * self.gamma
-        
-        d_variance = np.clip(
-            -0.5 * np.sum(d_normalized * self.output_before_gamma, axis=-1, keepdims=True) / self.std,
-            -self.grad_clip, self.grad_clip
-        )
-        
-        d_mean = np.clip(
-            -np.sum(d_normalized / self.std, axis=-1, keepdims=True),
-            -self.grad_clip, self.grad_clip
-        )
-        
-        d_input = np.clip(
-            (d_normalized / self.std + 
-             2.0 * d_variance * self.output_before_gamma / N +
-             d_mean / N),
-            -self.grad_clip, self.grad_clip
-        )
-        
-        return d_input, d_input
+        d_mean = np.sum(d_normalized * (-1.0 / self.std), axis=-1, keepdims=True) \
+                + d_var * np.mean(-2.0 * x_minus_mean, axis=-1, keepdims=True)
+
+        dx = (d_normalized / self.std) + (d_var * 2.0 * x_minus_mean / N) + (d_mean / N)
+
+        self.d_gamma = d_gamma
+        self.d_beta = d_beta
+
+        return dx, dx
         
     def __str__(self) -> str:
         return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
