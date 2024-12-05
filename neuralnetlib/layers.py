@@ -149,9 +149,9 @@ class Dense(Layer):
 
         if len(input_data.shape) == 1 and self.input_dim:
             batch_size = input_data.shape[0]
-            input_data = input_data.reshape(batch_size, input_data = input_data.reshape(batch_size, self.input_dim))
+            input_data = input_data.reshape(batch_size, self.input_dim)
             self.input = input_data
-        
+
         if len(input_data.shape) == 3:
             batch_size, timesteps, features = input_data.shape
             input_reshaped = input_data.reshape(-1, features)
