@@ -2693,7 +2693,9 @@ class MultiHeadAttention(Layer):
         
         d_attention = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
         attention_probs = self.attention_weights
-        d_attention_probs = d_attention * (attention_probs - np.power(attention_probs, 2))
+        dot = np.sum(d_attention * attention_probs, axis=-1, keepdims=True)
+        d_attention_probs = d_attention - dot
+        d_attention_probs = d_attention_probs * attention_probs
         
         d_values = np.matmul(attention_probs.transpose(0, 1, 3, 2), d_attention_output)
         d_query = np.matmul(d_attention_probs, self.reshaped_key)
