@@ -1,4 +1,3 @@
-import math
 import numpy as np
 
 from collections import namedtuple
@@ -521,3 +520,55 @@ def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None) -> fl
     xy_term = np.sum(k_xy) / (n * m)
 
     return float(xx_term + yy_term - 2 * xy_term)
+
+
+def pearsonr(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError("Input arrays must be 1D.")
+    if x.size != y.size:
+        raise ValueError("Arrays must have the same size.")
+    if x.size < 2:
+        raise ValueError("Arrays must have at least 2 elements.")
+    
+    x_mean = np.mean(x)
+    y_mean = np.mean(y)
+
+    numerator = np.sum((x - x_mean) * (y - y_mean))
+    denominator = np.sqrt(np.sum((x - x_mean)**2) * np.sum((y - y_mean)**2))
+
+    if denominator == 0:
+        return np.array(0.0), np.array(1.0)
+
+    r = numerator / denominator
+
+    if np.isclose(r, 1.0, rtol=1e-09, atol=1e-09) or r == -1.0:
+        return np.array(r), np.array(0.0)
+
+    n = x.size
+    df = n - 2
+    t_stat = r * np.sqrt(df / (1 - r**2))
+
+    x_beta = df / (df + t_stat**2)
+    p_value = 2 * regularized_incomplete_beta(df / 2, 0.5, x_beta)
+
+    return np.array(r), np.array(p_value)
+
+
+def regularized_incomplete_beta(a: float, b: float, x: float) -> float:
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+
+    ln_term = a * np.log(x) + b * np.log(1 - x)
+    sum_term = 1.0
+    term = 1.0
+
+    for k in range(1, 100):
+        term *= (a + k - 1) * x / (k * (b + k - 1))
+        sum_term += term
+        if term < 1e-15:
+            break
+
+    result = np.exp(ln_term) * sum_term / a
+    return result
