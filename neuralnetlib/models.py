@@ -2558,7 +2558,7 @@ class GAN(BaseModel):
             fixed_noise: np.ndarray | None = None,
             n_gen_samples: int | None = None
         ) -> dict:
-
+        
         history = History({
             'discriminator_loss': [],
             'generator_loss': [],
@@ -2646,10 +2646,10 @@ class GAN(BaseModel):
                         d_error += d_loss
                         g_error += g_loss
 
+                        batch_metrics = {}
                         if metrics is not None:
                             noise = self._generate_latent_points(len(x_batch))
                             generated_samples = self.forward_pass(noise, training=False)
-                            batch_metrics = {}
                             for metric in metrics:
                                 metric_value = metric(generated_samples, x_batch)
                                 metric_values[f'generator_{metric.name}'] += metric_value
