@@ -225,7 +225,11 @@ def clip_gradients(gradients: np.ndarray, threshold: float = 1.0) -> np.ndarray:
 
 
 def normalize_gradient(gradients: np.ndarray, scale: float = 1.0) -> np.ndarray:
-    grad_norm = np.sqrt(np.sum(gradients ** 2, axis=1, keepdims=True) + 1e-8)
+    axis = tuple(range(1, gradients.ndim))
+    grad_norm = np.sqrt(np.sum(gradients ** 2, axis=axis, keepdims=True) + 1e-8)
+    
+    grad_norm = np.maximum(grad_norm, 1e-8)
+    
     normalized_gradients = gradients / grad_norm
     return normalized_gradients * scale
 

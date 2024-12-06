@@ -317,7 +317,6 @@ class LearningRateScheduler(Callback):
         model = logs.get('model')
         if not model:
             return
-
         new_lr = self.schedule(epoch, self.initial_learning_rate)
         self._update_optimizer_learning_rate(model, new_lr)
 
