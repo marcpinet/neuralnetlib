@@ -3,5 +3,6 @@ numpy
 tensorflow
 pandas
 scikit-learn
-
-
+tqdm
+pillow
+ipython
