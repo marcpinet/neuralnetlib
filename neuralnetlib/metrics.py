@@ -572,3 +572,22 @@ def regularized_incomplete_beta(a: float, b: float, x: float) -> float:
 
     result = np.exp(ln_term) * sum_term / a
     return result
+
+
+def kurtosis(x: np.ndarray) -> float:
+    if x.ndim != 1:
+        raise ValueError("Input array must be 1D.")
+    if x.size < 2:
+        raise ValueError("Array must have at least 2 elements.")
+
+    n = x.size
+    mean = np.mean(x)
+    deviations = x - mean
+    m2 = np.mean(deviations**2)
+    m4 = np.mean(deviations**4)
+
+    if m2 == 0:
+        raise ValueError("Array must have variance greater than 0.")
+    
+    kurt = (n * m4) / (m2**2) - 3
+    return kurt
