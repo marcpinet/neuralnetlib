@@ -1572,8 +1572,9 @@ class Reshape(Layer):
 
 
 class LSTMCell(Layer):
-    def __init__(self, units: int, random_state: int | None = None):
+    def __init__(self, units: int, clip_value: float = 1.0, random_state: int | None = None):
         self.units = units
+        self.clip_value = clip_value
         self.random_state = random_state
 
         self.rng = np.random.default_rng(
@@ -1604,7 +1605,7 @@ class LSTMCell(Layer):
         # Forget gate
         self.Wf = self.orthogonal_init((input_dim, self.units))
         self.Uf = self.orthogonal_init((self.units, self.units))
-        self.bf = np.zeros((1, self.units))
+        self.bf = np.ones((1, self.units))
 
         # Input gate
         self.Wi = self.orthogonal_init((input_dim, self.units))
@@ -1612,8 +1613,8 @@ class LSTMCell(Layer):
         self.bi = np.zeros((1, self.units))
 
         # Cell gate
-        self.Wc = self.orthogonal_init((input_dim, self.units))
-        self.Uc = self.orthogonal_init((self.units, self.units))
+        self.Wc = self.orthogonal_init((input_dim, self.units), gain=5/3)
+        self.Uc = self.orthogonal_init((self.units, self.units), gain=5/3)
         self.bc = np.zeros((1, self.units))
 
         # Output gate
@@ -1621,7 +1622,7 @@ class LSTMCell(Layer):
         self.Uo = self.orthogonal_init((self.units, self.units))
         self.bo = np.zeros((1, self.units))
 
-        self.l2_reg = 0.01
+        self.l2_reg = 1e-6
 
         # Initialize gradients
         self._init_gradients()
@@ -1648,40 +1649,45 @@ class LSTMCell(Layer):
         if self.Wf is None:
             self.initialize_weights(x_t.shape[1])
 
+        h_norm = np.sqrt(np.sum(h_prev ** 2, axis=1, keepdims=True) + 1e-6)
+        h_prev_norm = h_prev / h_norm
+        
+        c_norm = np.sqrt(np.sum(c_prev ** 2, axis=1, keepdims=True) + 1e-6)
+        c_prev_norm = c_prev / c_norm
+
         self.x_t = x_t
         self.h_prev = h_prev
         self.c_prev = c_prev
-
-        self.f_gate_input = np.dot(x_t, self.Wf) + \
-            np.dot(h_prev, self.Uf) + self.bf
+        
+        self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev_norm, self.Uf) + self.bf
         self.f_t = self.sigmoid(self.f_gate_input)
-
-        # Input gate
-        self.i_gate_input = np.dot(x_t, self.Wi) + \
-            np.dot(h_prev, self.Ui) + self.bi
+        
+        self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev_norm, self.Ui) + self.bi
         self.i_t = self.sigmoid(self.i_gate_input)
-
-        # Cell gate
-        self.c_gate_input = np.dot(x_t, self.Wc) + \
-            np.dot(h_prev, self.Uc) + self.bc
+        
+        self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev_norm, self.Uc) + self.bc
         self.c_tilde = np.tanh(self.c_gate_input)
-
-        # Cell state
-        self.c_t = self.f_t * c_prev + self.i_t * self.c_tilde
-
-        # Output gate
-        self.o_gate_input = np.dot(x_t, self.Wo) + \
-            np.dot(h_prev, self.Uo) + self.bo
+        
+        self.c_t = self.f_t * c_prev_norm + self.i_t * self.c_tilde
+        c_t_mean = np.mean(self.c_t, axis=1, keepdims=True)
+        c_t_std = np.std(self.c_t, axis=1, keepdims=True) + 1e-6
+        self.c_t_norm = (self.c_t - c_t_mean) / c_t_std
+        
+        self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev_norm, self.Uo) + self.bo
         self.o_t = self.sigmoid(self.o_gate_input)
-
-        # Hidden state
-        self.c_t_tanh = np.tanh(self.c_t)
+        
+        self.c_t_tanh = np.tanh(self.c_t_norm)
         self.h_t = self.o_t * self.c_t_tanh
-
+        h_t_mean = np.mean(self.h_t, axis=1, keepdims=True)
+        h_t_std = np.std(self.h_t, axis=1, keepdims=True) + 1e-6
+        self.h_t_norm = (self.h_t - h_t_mean) / h_t_std
+        
         self.cache = {
             'x_t': self.x_t,
             'h_prev': self.h_prev,
+            'h_prev_norm': h_prev_norm,
             'c_prev': self.c_prev,
+            'c_prev_norm': c_prev_norm,
             'f_gate_input': self.f_gate_input,
             'i_gate_input': self.i_gate_input,
             'c_gate_input': self.c_gate_input,
@@ -1690,67 +1696,100 @@ class LSTMCell(Layer):
             'i_t': self.i_t,
             'c_tilde': self.c_tilde,
             'c_t': self.c_t,
+            'c_t_norm': self.c_t_norm,
             'c_t_tanh': self.c_t_tanh,
             'o_t': self.o_t,
-            'h_t': self.h_t
+            'h_t': self.h_t,
+            'h_t_norm': self.h_t_norm
         }
-
-        return self.h_t, self.c_t
+        
+        return self.h_t_norm, self.c_t_norm
 
     def backward(self, dh_next: np.ndarray, dc_next: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         x_t = self.cache['x_t']
-        h_prev = self.cache['h_prev']
-        c_prev = self.cache['c_prev']
+        h_prev_norm = self.cache['h_prev_norm']
+        c_prev_norm = self.cache['c_prev_norm']
         f_t = self.cache['f_t']
         i_t = self.cache['i_t']
         c_tilde = self.cache['c_tilde']
         o_t = self.cache['o_t']
-        c_t = self.cache['c_t']
         c_t_tanh = self.cache['c_t_tanh']
-
-        do = dh_next * self.c_t_tanh
-        dc = dc_next + dh_next * self.o_t * (1 - self.c_t_tanh ** 2)
-
-        # Output gate gradients
-        do_input = do * self.o_t * (1 - self.o_t)
-        self.dWo = np.dot(self.x_t.T, do_input)
-        self.dUo = np.dot(self.h_prev.T, do_input)
+        
+        batch_size = x_t.shape[0]
+        
+        dh = dh_next
+        dc = dc_next
+        
+        do = dh * c_t_tanh
+        dc = dc + dh * o_t * (1 - c_t_tanh ** 2)
+        
+        do = normalize_gradient(do)
+        dc = normalize_gradient(dc)
+        
+        do_input = do * o_t * (1 - o_t)
+        self.dWo = np.dot(x_t.T, do_input)
+        self.dUo = np.dot(h_prev_norm.T, do_input)
         self.dbo = np.sum(do_input, axis=0, keepdims=True)
-
-        # Cell state gradients
-        dc_prev = dc * self.f_t
-        df = dc * self.c_prev
-        di = dc * self.c_tilde
-        dc_tilde = dc * self.i_t
-
+        
+        dc_prev = dc * f_t
+        df = dc * c_prev_norm
+        di = dc * c_tilde
+        dc_tilde = dc * i_t
+        
+        dc_prev = normalize_gradient(dc_prev)
+        df = normalize_gradient(df)
+        di = normalize_gradient(di)
+        dc_tilde = normalize_gradient(dc_tilde)
+        
         df_input = df * f_t * (1 - f_t)
-        self.dWf += np.dot(x_t.T, df_input)
-        self.dUf += np.dot(h_prev.T, df_input)
-        self.dbf += np.sum(df_input, axis=0, keepdims=True)
-
+        self.dWf = np.dot(x_t.T, df_input)
+        self.dUf = np.dot(h_prev_norm.T, df_input)
+        self.dbf = np.sum(df_input, axis=0, keepdims=True)
+        
         di_input = di * i_t * (1 - i_t)
-        self.dWi += np.dot(x_t.T, di_input)
-        self.dUi += np.dot(h_prev.T, di_input)
-        self.dbi += np.sum(di_input, axis=0, keepdims=True)
-
+        self.dWi = np.dot(x_t.T, di_input)
+        self.dUi = np.dot(h_prev_norm.T, di_input)
+        self.dbi = np.sum(di_input, axis=0, keepdims=True)
+        
         dc_tilde_input = dc_tilde * (1 - c_tilde ** 2)
-        self.dWc += np.dot(x_t.T, dc_tilde_input)
-        self.dUc += np.dot(h_prev.T, dc_tilde_input)
-        self.dbc += np.sum(dc_tilde_input, axis=0, keepdims=True)
-
+        self.dWc = np.dot(x_t.T, dc_tilde_input)
+        self.dUc = np.dot(h_prev_norm.T, dc_tilde_input)
+        self.dbc = np.sum(dc_tilde_input, axis=0, keepdims=True)
+        
+        l2_scale = self.l2_reg / batch_size
+        self.dWf += l2_scale * self.Wf
+        self.dWi += l2_scale * self.Wi
+        self.dWc += l2_scale * self.Wc
+        self.dWo += l2_scale * self.Wo
+        
         dx = (np.dot(df_input, self.Wf.T) +
-              np.dot(di_input, self.Wi.T) +
-              np.dot(dc_tilde_input, self.Wc.T) +
-              np.dot(do_input, self.Wo.T))
-
+            np.dot(di_input, self.Wi.T) +
+            np.dot(dc_tilde_input, self.Wc.T) +
+            np.dot(do_input, self.Wo.T))
+        
         dh_prev = (np.dot(df_input, self.Uf.T) +
-                   np.dot(di_input, self.Ui.T) +
-                   np.dot(dc_tilde_input, self.Uc.T) +
-                   np.dot(do_input, self.Uo.T))
-
+                np.dot(di_input, self.Ui.T) +
+                np.dot(dc_tilde_input, self.Uc.T) +
+                np.dot(do_input, self.Uo.T))
+                
+        self.clip_gate_gradients()
+        
         return dx, dh_prev, dc_prev
 
-    def orthogonal_init(self, shape):
+    def clip_gate_gradients(self):
+        gate_clip_norm = self.clip_value / 4.0
+        
+        def clip_gate(dW, dU, db):
+            gate_norm = np.sqrt(np.sum(dW**2) + np.sum(dU**2) + np.sum(db**2))
+            scale = min(1.0, gate_clip_norm / (gate_norm + 1e-8))
+            return dW * scale, dU * scale, db * scale
+        
+        self.dWf, self.dUf, self.dbf = clip_gate(self.dWf, self.dUf, self.dbf)
+        self.dWi, self.dUi, self.dbi = clip_gate(self.dWi, self.dUi, self.dbi)
+        self.dWc, self.dUc, self.dbc = clip_gate(self.dWc, self.dUc, self.dbc)
+        self.dWo, self.dUo, self.dbo = clip_gate(self.dWo, self.dUo, self.dbo)
+
+    def orthogonal_init(self, shape: tuple, gain: float = 1.0) -> np.ndarray:
         if len(shape) < 2:
             return self.rng.normal(0, 1, shape)
         flat_shape = (shape[0], np.prod(shape[1:]))
@@ -1758,10 +1797,11 @@ class LSTMCell(Layer):
         u, _, vt = np.linalg.svd(a, full_matrices=False)
         q = u if u.shape == flat_shape else vt
         q = q.reshape(shape)
-        return q
+        return np.sqrt(2.0) * q
 
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
-        result = 0.5 * (1 + np.tanh(x * 0.5))
+        x_clipped = np.clip(x, -15, 15)
+        result = 1 / (1 + np.exp(-x_clipped))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
     def get_config(self) -> dict:
@@ -1827,6 +1867,13 @@ class LSTM(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    def compute_gradient_norm_squared(self, dx_t: np.ndarray) -> float:
+        return (np.sum(dx_t ** 2) +
+                np.sum(self.cell.dWf ** 2) + np.sum(self.cell.dUf ** 2) + np.sum(self.cell.dbf ** 2) +
+                np.sum(self.cell.dWi ** 2) + np.sum(self.cell.dUi ** 2) + np.sum(self.cell.dbi ** 2) +
+                np.sum(self.cell.dWc ** 2) + np.sum(self.cell.dUc ** 2) + np.sum(self.cell.dbc ** 2) +
+                np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
+        
     def __str__(self) -> str:
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state}, clip_value={self.clip_value})'
 
@@ -1836,7 +1883,7 @@ class LSTM(Layer):
             raise ValueError(
                 f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
         if not self.initialized:
-            self.cell = LSTMCell(self.units)
+            self.cell = LSTMCell(self.units, self.clip_value)
             self.initialized = True
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
@@ -1879,48 +1926,47 @@ class LSTM(Layer):
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         batch_size, timesteps, input_dim = self.input_shape
-
+        
         if len(output_error.shape) == 2:
             full_dout = np.zeros((batch_size, timesteps, self.units))
             full_dout[:, -1, :] = output_error
             output_error = full_dout
-
+        
         dx = np.zeros((batch_size, timesteps, input_dim))
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
-
+        
         self.cell._init_gradients()
-
+        
         squared_norm_sum = 0.0
-
+        grad_threshold = 1e-3
+        
         for t in reversed(range(timesteps)):
+            if np.max(np.abs(dh_next)) < grad_threshold and t < timesteps - 1:
+                break
+            
             dh = output_error[:, t, :] + dh_next
-
+            
+            dh_norm = np.sqrt(np.sum(dh ** 2, axis=1, keepdims=True) + 1e-6)
+            dh = dh / dh_norm
+            
             self.cell.cache = self.cache[t]
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
+            
             dx[:, t, :] = dx_t
-
-            squared_norm_sum += (np.sum(dx_t ** 2) +
-                                 np.sum(self.cell.dWf ** 2) + np.sum(self.cell.dUf ** 2) + np.sum(self.cell.dbf ** 2) +
-                                 np.sum(self.cell.dWi ** 2) + np.sum(self.cell.dUi ** 2) + np.sum(self.cell.dbi ** 2) +
-                                 np.sum(self.cell.dWc ** 2) + np.sum(self.cell.dUc ** 2) + np.sum(self.cell.dbc ** 2) +
-                                 np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
-
+            
+            squared_norm_sum += self.compute_gradient_norm_squared(dx_t)
+        
         global_norm = np.sqrt(squared_norm_sum)
-
-        self.cell.dWf += self.cell.l2_reg * self.cell.Wf
-        self.cell.dWi += self.cell.l2_reg * self.cell.Wi
-        self.cell.dWc += self.cell.l2_reg * self.cell.Wc
-        self.cell.dWo += self.cell.l2_reg * self.cell.Wo
-
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
+        
         if scaling_factor < 1.0:
             dx *= scaling_factor
-            for grad in self.cell.__dict__:
-                if grad.startswith('d'):
-                    setattr(self.cell, grad, getattr(
-                        self.cell, grad) * scaling_factor)
-
+            for grad_name in self.cell.__dict__:
+                if grad_name.startswith('d'):
+                    grad = getattr(self.cell, grad_name)
+                    setattr(self.cell, grad_name, grad * scaling_factor)
+        
         return dx
 
     def get_config(self) -> dict:
