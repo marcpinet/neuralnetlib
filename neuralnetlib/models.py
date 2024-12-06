@@ -242,160 +242,201 @@ class Sequential(BaseModel):
         return loss
 
     def fit(self, x_train: np.ndarray, y_train: np.ndarray,
-            epochs: int,
-            batch_size: int | None = None,
-            verbose: bool = True,
-            metrics: list | None = None,
-            random_state: int | None = None,
-            validation_data: tuple | None = None,
-            validation_split: float | None = None,
-            callbacks: list = [],
-            plot_decision_boundary: bool = False) -> dict:
-        """
-        Fit the model to the training data.
+                    epochs: int,
+                    batch_size: int | None = None,
+                    verbose: bool = True,
+                    metrics: list | None = None,
+                    random_state: int | None = None,
+                    validation_data: tuple | None = None,
+                    validation_split: float | None = None,
+                    callbacks: list = [],
+                    plot_decision_boundary: bool = False) -> dict:
+            """
+            Fit the model to the training data.
 
-        Args:
-            x_train: Training data
-            y_train: Training labels
-            epochs: Number of epochs to train the model
-            batch_size: Number of samples per gradient update
-            verbose: Whether to print training progress
-            metrics: List of metric to evaluate the model
-            random_state: Random seed for shuffling the data
-            validation_data: Tuple of validation data and labels
-            callbacks: List of callback objects (e.g., EarlyStopping)
-            plot_decision_boundary: Whether to plot the decision boundary
+            Args:
+                x_train: Training data
+                y_train: Training labels
+                epochs: Number of epochs to train the model
+                batch_size: Number of samples per gradient update
+                verbose: Whether to print training progress
+                metrics: List of metric to evaluate the model
+                random_state: Random seed for shuffling the data
+                validation_data: Tuple of validation data and labels
+                callbacks: List of callback objects (e.g., EarlyStopping)
+                plot_decision_boundary: Whether to plot the decision boundary
 
-        Returns:
-            Dictionary containing the training history of metrics (loss and any other metrics)
-        """
-        history = History({
-            'loss': [],
-            'val_loss': []
-        })
+            Returns:
+                Dictionary containing the training history of metrics (loss and any other metrics)
+            """
+            history = History({
+                'loss': [],
+                'val_loss': []
+            })
 
-        if validation_split is not None and validation_data is not None:
-            raise ValueError("Cannot specify both validation_data and validation_split")
-        elif validation_split is not None:
-            x_train, x_val, y_train, y_val = train_test_split(
-                x_train, y_train, 
-                test_size=validation_split,
-                random_state=random_state if random_state is not None else self.random_state
-            )
-            validation_data = (x_val, y_val)
-
-        if plot_decision_boundary and not is_interactive() and not is_display_available():
-            raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
-
-        x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
-        y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
-
-        for layer in self.layers:
-            if hasattr(layer, 'random_state'):
-                layer.random_state = random_state if random_state is not None else self.random_state
-
-        has_lstm_or_gru = any(isinstance(layer, (LSTM, Bidirectional, GRU)) for layer in self.layers)
-        has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
-
-        if has_lstm_or_gru and not has_embedding:
-            if len(x_train.shape) != 3:
-                raise ValueError(
-                    "Input data must be 3D (batch_size, time_steps, features) for LSTM/GRU layers without Embedding"
-                )
-        elif has_embedding:
-            if len(x_train.shape) != 2:
-                raise ValueError(
-                    "Input data must be 2D (batch_size, sequence_length) when using Embedding layer"
-                )
-
-        if validation_data is not None:
-            x_val, y_val = validation_data
-            x_val = np.array(x_val)
-            y_val = np.array(y_val)
-
-        if metrics is not None:
-            metrics = [Metric(m) for m in metrics]
-            for metric in metrics:
-                history[metric.name] = []
-                history[f'val_{metric.name}'] = []
-
-        for layer in self.layers:
-            if isinstance(layer, TextVectorization):
-                layer.adapt(x_train)
-                break
-
-        callbacks = callbacks if callbacks is not None else []
-        
-        logs = {
-            'model': self,
-            'params': {
-                'epochs': epochs,
-                'batch_size': batch_size,
-                'verbose': verbose,
-                'metrics': [m.name for m in (metrics or [])],
-                'validation': validation_data is not None,
-            }
-        }
-        
-        for callback in callbacks:
-            callback.on_train_begin(logs)
-
-        try:
-            for epoch in range(epochs):
-                epoch_logs = {'model': self}
-                for callback in callbacks:
-                    callback.on_epoch_begin(epoch, epoch_logs)
-
-                start_time = time.time()
-                x_train_shuffled, y_train_shuffled = shuffle(
-                    x_train, y_train,
+            if validation_split is not None and validation_data is not None:
+                raise ValueError("Cannot specify both validation_data and validation_split")
+            elif validation_split is not None:
+                x_train, x_val, y_train, y_val = train_test_split(
+                    x_train, y_train, 
+                    test_size=validation_split,
                     random_state=random_state if random_state is not None else self.random_state
                 )
+                validation_data = (x_val, y_val)
 
-                error = 0
-                predictions_list = []
-                y_true_list = []
+            if plot_decision_boundary and not is_interactive() and not is_display_available():
+                raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
 
-                if batch_size is not None:
-                    num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
-                    
-                    for j in range(0, x_train.shape[0], batch_size):
-                        batch_index = j // batch_size
+            x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
+            y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
+
+            for layer in self.layers:
+                if hasattr(layer, 'random_state'):
+                    layer.random_state = random_state if random_state is not None else self.random_state
+
+            has_lstm_or_gru = any(isinstance(layer, (LSTM, Bidirectional, GRU)) for layer in self.layers)
+            has_embedding = any(isinstance(layer, Embedding) for layer in self.layers)
+
+            if has_lstm_or_gru and not has_embedding:
+                if len(x_train.shape) != 3:
+                    raise ValueError(
+                        "Input data must be 3D (batch_size, time_steps, features) for LSTM/GRU layers without Embedding"
+                    )
+            elif has_embedding:
+                if len(x_train.shape) != 2:
+                    raise ValueError(
+                        "Input data must be 2D (batch_size, sequence_length) when using Embedding layer"
+                    )
+
+            if validation_data is not None:
+                x_val, y_val = validation_data
+                x_val = np.array(x_val)
+                y_val = np.array(y_val)
+
+            if metrics is not None:
+                processed_metrics = []
+                for metric in metrics:
+                    if metric == 'val_loss':
+                        continue
+                    try:
+                        metric_obj = Metric(metric)
+                        processed_metrics.append(metric_obj)
+                        history[metric_obj.name] = []
+                        if validation_data is not None:
+                            history[f'val_{metric_obj.name}'] = []
+                    except ValueError as e:
+                        if metric not in ['val_loss']:
+                            raise ValueError(f"Invalid metric: {metric}") from e
+                metrics = processed_metrics
+
+            for layer in self.layers:
+                if isinstance(layer, TextVectorization):
+                    layer.adapt(x_train)
+                    break
+
+            callbacks = callbacks if callbacks is not None else []
+            
+            logs = {
+                'model': self,
+                'params': {
+                    'epochs': epochs,
+                    'batch_size': batch_size,
+                    'verbose': verbose,
+                    'metrics': [m.name for m in (metrics or [])],
+                    'validation': validation_data is not None,
+                }
+            }
+            
+            for callback in callbacks:
+                callback.on_train_begin(logs)
+
+            try:
+                for epoch in range(epochs):
+                    epoch_logs = {'model': self}
+                    for callback in callbacks:
+                        callback.on_epoch_begin(epoch, epoch_logs)
+
+                    start_time = time.time()
+                    x_train_shuffled, y_train_shuffled = shuffle(
+                        x_train, y_train,
+                        random_state=random_state if random_state is not None else self.random_state
+                    )
+
+                    error = 0
+                    predictions_list = []
+                    y_true_list = []
+
+                    if batch_size is not None:
+                        num_batches = np.ceil(x_train.shape[0] / batch_size).astype(int)
                         
-                        x_batch = x_train_shuffled[j:j + batch_size]
-                        y_batch = y_train_shuffled[j:j + batch_size]
-                        if y_batch.ndim == 1:
-                            y_batch = y_batch.reshape(-1, 1)
+                        for j in range(0, x_train.shape[0], batch_size):
+                            batch_index = j // batch_size
+                            
+                            x_batch = x_train_shuffled[j:j + batch_size]
+                            y_batch = y_train_shuffled[j:j + batch_size]
+                            if y_batch.ndim == 1:
+                                y_batch = y_batch.reshape(-1, 1)
 
-                        batch_logs = {
-                            'batch': batch_index,
-                            'size': len(x_batch),
-                            'model': self
-                        }
-                        for callback in callbacks:
-                            callback.on_batch_begin(batch_index, batch_logs)
+                            batch_logs = {
+                                'batch': batch_index,
+                                'size': len(x_batch),
+                                'model': self
+                            }
+                            for callback in callbacks:
+                                callback.on_batch_begin(batch_index, batch_logs)
 
-                        batch_error = self.train_on_batch(x_batch, y_batch)
-                        error += batch_error
-                        predictions_list.append(self.predictions)
-                        y_true_list.append(y_batch)
+                            batch_error = self.train_on_batch(x_batch, y_batch)
+                            error += batch_error
+                            predictions_list.append(self.predictions)
+                            y_true_list.append(y_batch)
 
-                        batch_logs.update({
-                            'loss': batch_error,
-                        })
-                        
-                        if metrics is not None:
-                            batch_metrics = {}
-                            for metric in metrics:
-                                batch_metric_value = metric(
-                                    np.vstack(predictions_list[-1:]), 
-                                    np.vstack(y_true_list[-1:])
+                            batch_logs.update({'loss': batch_error})
+                            
+                            if metrics is not None:
+                                batch_metrics = {}
+                                for metric in metrics:
+                                    batch_metric_value = metric(
+                                        np.vstack(predictions_list[-1:]), 
+                                        np.vstack(y_true_list[-1:])
+                                    )
+                                    batch_metrics[metric.name] = batch_metric_value
+                                batch_logs.update(batch_metrics)
+
+                            for callback in callbacks:
+                                callback.on_batch_end(batch_index, batch_logs)
+
+                            if verbose:
+                                metrics_str = ''
+                                if metrics is not None:
+                                    for metric in metrics:
+                                        metric_value = metric(
+                                            np.vstack(predictions_list), 
+                                            np.vstack(y_true_list)
+                                        )
+                                        metrics_str += f'{metric.name}: {format_number(metric_value)} - '
+                                
+                                val_loss_str = ''
+                                if validation_data is not None:
+                                    val_loss_str = f'val_loss: {format_number(error / (batch_index + 1))} - '
+                                
+                                progress_message = (
+                                    f'Epoch {epoch + 1}/{epochs} - {time.time() - start_time:.2f}s - '
+                                    f'loss: {format_number(error / (batch_index + 1))} - '
+                                    f'{val_loss_str}{metrics_str}'.rstrip(' -')
                                 )
-                                batch_metrics[metric.name] = batch_metric_value
-                            batch_logs.update(batch_metrics)
+                                
+                                progress_bar(
+                                    batch_index + 1, 
+                                    num_batches,
+                                    message=progress_message
+                                )
 
-                        for callback in callbacks:
-                            callback.on_batch_end(batch_index, batch_logs)
+                        error /= num_batches
+
+                    else:
+                        error = self.train_on_batch(x_train, y_train)
+                        predictions_list.append(self.predictions)
+                        y_true_list.append(y_train)
 
                         if verbose:
                             metrics_str = ''
@@ -405,106 +446,92 @@ class Sequential(BaseModel):
                                         np.vstack(predictions_list), 
                                         np.vstack(y_true_list)
                                     )
+                                    history[metric.name].append(metric_value)
                                     metrics_str += f'{metric.name}: {format_number(metric_value)} - '
-                            progress_bar(
-                                batch_index + 1,
-                                num_batches,
-                                message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error / (batch_index + 1))} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s'
+                            
+                            val_loss_str = ''
+                            if validation_data is not None:
+                                val_loss_str = f'val_loss: {format_number(error)} - '
+                            
+                            progress_message = (
+                                f'Epoch {epoch + 1}/{epochs} - {time.time() - start_time:.2f}s - '
+                                f'loss: {format_number(error)} - '
+                                f'{val_loss_str}{metrics_str}'.rstrip(' -')
                             )
+                            
+                            progress_bar(1, 1, message=progress_message)
 
-                    error /= num_batches
+                    history['loss'].append(error)
 
-                else:
-                    error = self.train_on_batch(x_train, y_train)
-                    predictions_list.append(self.predictions)
-                    y_true_list.append(y_train)
-
-                    if verbose:
-                        metrics_str = ''
-                        if metrics is not None:
-                            for metric in metrics:
-                                metric_value = metric(
-                                    np.vstack(predictions_list), 
-                                    np.vstack(y_true_list)
-                                )
-                                history[metric.name].append(metric_value)
-                                metrics_str += f'{metric.name}: {format_number(metric_value)} - '
-                        progress_bar(
-                            1, 1,
-                            message=f'Epoch {epoch + 1}/{epochs} - loss: {format_number(error)} - {metrics_str[:-3]} - {time.time() - start_time:.2f}s'
-                        )
-
-                history['loss'].append(error)
-
-                epoch_logs.update({
-                    'loss': error,
-                    'time': time.time() - start_time
-                })
-
-                if metrics is not None:
-                    for metric in metrics:
-                        metric_value = metric(
-                            np.vstack(predictions_list), 
-                            np.vstack(y_true_list)
-                        )
-                        epoch_logs[metric.name] = metric_value
-
-                if validation_data is not None:
-                    val_loss, val_predictions = self.evaluate(x_val, y_val, batch_size)
-                    history['val_loss'].append(val_loss)
-                    epoch_logs['val_loss'] = val_loss
+                    epoch_logs.update({
+                        'loss': error,
+                        'time': time.time() - start_time
+                    })
 
                     if metrics is not None:
-                        val_metrics = []
                         for metric in metrics:
-                            val_metric = metric(val_predictions, y_val)
-                            history[f'val_{metric.name}'].append(val_metric)
-                            epoch_logs[f'val_{metric.name}'] = val_metric
-                            val_metrics.append(val_metric)
-                        
-                        if verbose:
-                            val_metrics_str = ' - '.join(
-                                f'val_{metric.name}: {format_number(val_metric)}'
-                                for metric, val_metric in zip(metrics, val_metrics)
+                            metric_value = metric(
+                                np.vstack(predictions_list), 
+                                np.vstack(y_true_list)
                             )
-                            print(f' - {val_metrics_str}', end='')
+                            history[metric.name].append(metric_value)
+                            epoch_logs[metric.name] = metric_value
 
-                    val_predictions = None
+                    if validation_data is not None:
+                        val_loss, val_predictions = self.evaluate(x_val, y_val, batch_size)
+                        history['val_loss'].append(val_loss)
+                        epoch_logs['val_loss'] = val_loss
 
-                stop_training = False
-                for callback in callbacks:
-                    if callback.on_epoch_end(epoch, epoch_logs):
-                        stop_training = True
+                        if metrics is not None:
+                            val_metrics = []
+                            for metric in metrics:
+                                val_metric = metric(val_predictions, y_val)
+                                history[f'val_{metric.name}'].append(val_metric)
+                                epoch_logs[f'val_{metric.name}'] = val_metric
+                                val_metrics.append(val_metric)
+                            
+                            if verbose:
+                                val_metrics_str = ' - '.join(
+                                    f'val_{metric.name}: {format_number(val_metric)}'
+                                    for metric, val_metric in zip(metrics, val_metrics)
+                                )
+                                if val_metrics_str:
+                                    print(f' - {val_metrics_str}')
+
+                    stop_training = False
+                    for callback in callbacks:
+                        if callback.on_epoch_end(epoch, epoch_logs):
+                            stop_training = True
+                            break
+
+                    if verbose:
+                        print()
+
+                    if plot_decision_boundary:
+                        self.__update_plot(
+                            epoch, x_train, y_train,
+                            random_state if random_state is not None else self.random_state
+                        )
+                        plt.pause(0.1)
+
+                    if stop_training:
                         break
+
+                if plot_decision_boundary:
+                    plt.show(block=True)
+
+            finally:
+                final_logs = {
+                    'model': self,
+                    'history': history
+                }
+                for callback in callbacks:
+                    callback.on_train_end(final_logs)
 
                 if verbose:
                     print()
 
-                if plot_decision_boundary:
-                    self.__update_plot(
-                        epoch, x_train, y_train,
-                        random_state if random_state is not None else self.random_state
-                    )
-                    plt.pause(0.1)
-
-                if stop_training:
-                    break
-
-            if plot_decision_boundary:
-                plt.show(block=True)
-
-        finally:
-            final_logs = {
-                'model': self,
-                'history': history
-            }
-            for callback in callbacks:
-                callback.on_train_end(final_logs)
-
-            if verbose:
-                print()
-
-        return history
+            return history
 
     def evaluate(self, x_test: np.ndarray, y_test: np.ndarray, batch_size: int = 32) -> tuple:
         total_loss = 0

@@ -155,7 +155,26 @@ class EarlyStopping(Callback):
         self.min_delta: float = min_delta
         self.restore_best_weights: bool = restore_best_weights
         self.start_from_epoch: int = start_from_epoch
-        self.monitor = Metric(monitor) if monitor != 'loss' else 'loss'
+        
+        if monitor in ['loss', 'val_loss']:
+            self.monitor = monitor
+            self.is_metric = False
+        else:
+            try:
+                self.monitor = Metric(monitor)
+                self.is_metric = True
+            except ValueError as e:
+                if 'val_' in monitor:
+                    try:
+                        base_metric = monitor.replace('val_', '')
+                        _ = Metric(base_metric)
+                        self.monitor = monitor
+                        self.is_metric = False
+                    except ValueError:
+                        raise ValueError(f"Invalid monitor metric: {monitor}") from e
+                else:
+                    raise ValueError(f"Invalid monitor metric: {monitor}") from e
+        
         self.mode: str = mode
         self.baseline: float | None = baseline
         self.best_weights = None
@@ -176,12 +195,22 @@ class EarlyStopping(Callback):
             return False
 
         current_metric = self._get_monitor_value(logs)
+        
+        if self.baseline is not None and self.best_metric is None:
+            if self.mode == 'min' and current_metric > self.baseline:
+                print(f"\nEarly stopping: baseline {self.baseline} was not met.")
+                return True
+            if self.mode == 'max' and current_metric < self.baseline:
+                print(f"\nEarly stopping: baseline {self.baseline} was not met.")
+                return True
 
         if self.best_metric is None:
             self.best_metric = current_metric
             if self.mode == 'auto':
-                self.mode = 'min' if isinstance(
-                    self.monitor, str) and 'loss' in self.monitor.lower() else 'max'
+                if isinstance(self.monitor, str):
+                    self.mode = 'min' if 'loss' in self.monitor.lower() else 'max'
+                else:
+                    self.mode = 'min' if 'loss' in self.monitor.name.lower() else 'max'
 
         if self.mode == 'min':
             improved = current_metric < self.best_metric - self.min_delta
@@ -192,8 +221,7 @@ class EarlyStopping(Callback):
             self.best_metric = current_metric
             self.patience_counter = 0
             if self.restore_best_weights:
-                self.best_weights = self.weight_manager.get_model_weights(
-                    model)
+                self.best_weights = self.weight_manager.get_model_weights(model)
         else:
             self.patience_counter += 1
 
@@ -208,10 +236,11 @@ class EarlyStopping(Callback):
 
     def _get_monitor_value(self, logs: dict) -> float:
         logs = logs or {}
-        if isinstance(self.monitor, Metric):
-            monitor_value = logs.get(self.monitor.name)
-        else:
+        
+        if isinstance(self.monitor, str):
             monitor_value = logs.get(self.monitor)
+        else:
+            monitor_value = logs.get(self.monitor.name)
 
         if monitor_value is None:
             if isinstance(logs, dict) and 'loss' in logs:
@@ -219,8 +248,12 @@ class EarlyStopping(Callback):
             elif isinstance(logs, (int, float)):
                 monitor_value = logs
             else:
-                raise ValueError(f"Monitored metric '{self.monitor}' is not available. "
-                                 f"Available metrics are: {','.join(logs.keys())}")
+                available_metrics = list(logs.keys())
+                raise ValueError(
+                    f"Monitored metric '{self.monitor if isinstance(self.monitor, str) else self.monitor.name}' "
+                    f"is not available. Available metrics are: {', '.join(available_metrics)}"
+                )
+                
         return float(monitor_value)
 
 
