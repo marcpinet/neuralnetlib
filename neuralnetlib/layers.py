@@ -1562,225 +1562,198 @@ class Reshape(Layer):
         return Reshape(config['target_shape'], config['input_shape'])
 
 
-class LSTMCell(Layer):
-    def __init__(self, units: int, clip_value: float = 1.0, random_state: int | None = None):
+class LSTMCell:
+    def __init__(self, units, use_layer_norm=False, use_weight_norm=False, 
+                 clip_value=1.0, l2_reg=0.0, dropout_rate=0.0, random_state=None):
         self.units = units
+        self.use_layer_norm = use_layer_norm
+        self.use_weight_norm = use_weight_norm
         self.clip_value = clip_value
+        self.l2_reg = l2_reg
+        self.dropout_rate = dropout_rate
         self.random_state = random_state
-
+        
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
-
-        self.grad_stats = {'forward': {}, 'backward': {}}
-
-        self.Wf = None
-        self.Uf = None
-        self.bf = None
-
-        self.Wi = None
-        self.Ui = None
-        self.bi = None
-
-        self.Wc = None
-        self.Uc = None
-        self.bc = None
-
-        self.Wo = None
-        self.Uo = None
-        self.bo = None
-
+        
+        self.Wf = self.Uf = self.bf = None
+        self.Wi = self.Ui = self.bi = None
+        self.Wc = self.Uc = self.bc = None
+        self.Wo = self.Uo = self.bo = None
+        
+        self.gamma = self.beta = None
+        
         self._init_gradients()
-        self.cache = None
+        self.cache = {}
 
-    def initialize_weights(self, input_dim: int):
-        # Forget gate
+    def initialize_weights(self, input_dim):
         self.Wf = self.orthogonal_init((input_dim, self.units))
         self.Uf = self.orthogonal_init((self.units, self.units))
         self.bf = np.ones((1, self.units))
 
-        # Input gate
         self.Wi = self.orthogonal_init((input_dim, self.units))
         self.Ui = self.orthogonal_init((self.units, self.units))
         self.bi = np.zeros((1, self.units))
 
-        # Cell gate
         self.Wc = self.orthogonal_init((input_dim, self.units), gain=5/3)
         self.Uc = self.orthogonal_init((self.units, self.units), gain=5/3)
         self.bc = np.zeros((1, self.units))
 
-        # Output gate
         self.Wo = self.orthogonal_init((input_dim, self.units))
         self.Uo = self.orthogonal_init((self.units, self.units))
         self.bo = np.zeros((1, self.units))
 
-        self.l2_reg = 1e-6
+        if self.use_layer_norm:
+            self.gamma = np.ones((1, self.units))
+            self.beta = np.zeros((1, self.units))
 
-        # Initialize gradients
         self._init_gradients()
 
-    def _init_gradients(self):
-        if self.Wf is not None:
-            self.dWf = np.zeros_like(self.Wf)
-            self.dUf = np.zeros_like(self.Uf)
-            self.dbf = np.zeros_like(self.bf)
+    def layer_norm(self, x, gamma, beta):
+        if not self.use_layer_norm:
+            return x
+        mean = np.mean(x, axis=1, keepdims=True)
+        var = np.var(x, axis=1, keepdims=True) + 1e-8
+        x_norm = (x - mean) / np.sqrt(var)
+        return gamma * x_norm + beta
 
-            self.dWi = np.zeros_like(self.Wi)
-            self.dUi = np.zeros_like(self.Ui)
-            self.dbi = np.zeros_like(self.bi)
+    def weight_norm(self, x):
+        if not self.use_weight_norm:
+            return x
+        norm = np.sqrt(np.sum(x ** 2, axis=1, keepdims=True) + 1e-8)
+        return x / norm
 
-            self.dWc = np.zeros_like(self.Wc)
-            self.dUc = np.zeros_like(self.Uc)
-            self.dbc = np.zeros_like(self.bc)
+    def dropout(self, x, training=True):
+        if not training or self.dropout_rate == 0:
+            return x
+        mask = self.rng.random(x.shape) > self.dropout_rate
+        return x * mask / (1 - self.dropout_rate)
 
-            self.dWo = np.zeros_like(self.Wo)
-            self.dUo = np.zeros_like(self.Uo)
-            self.dbo = np.zeros_like(self.bo)
-
-    def forward(self, x_t: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def forward(self, x_t, h_prev, c_prev, training=True):
         if self.Wf is None:
             self.initialize_weights(x_t.shape[1])
 
-        h_norm = np.sqrt(np.sum(h_prev ** 2, axis=1, keepdims=True) + 1e-6)
-        h_prev_norm = h_prev / h_norm
-        
-        c_norm = np.sqrt(np.sum(c_prev ** 2, axis=1, keepdims=True) + 1e-6)
-        c_prev_norm = c_prev / c_norm
+        x_dropped = self.dropout(x_t, training)
+        h_prev_dropped = self.dropout(h_prev, training)
+        h_prev_norm = self.weight_norm(h_prev_dropped)
+        c_prev_norm = self.weight_norm(c_prev) if self.use_weight_norm else c_prev
 
-        self.x_t = x_t
-        self.h_prev = h_prev
-        self.c_prev = c_prev
-        
-        self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev_norm, self.Uf) + self.bf
-        self.f_t = self.sigmoid(self.f_gate_input)
-        
-        self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev_norm, self.Ui) + self.bi
-        self.i_t = self.sigmoid(self.i_gate_input)
-        
-        self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev_norm, self.Uc) + self.bc
-        self.c_tilde = np.tanh(self.c_gate_input)
-        
-        self.c_t = self.f_t * c_prev_norm + self.i_t * self.c_tilde
-        c_t_mean = np.mean(self.c_t, axis=1, keepdims=True)
-        c_t_std = np.std(self.c_t, axis=1, keepdims=True) + 1e-6
-        self.c_t_norm = (self.c_t - c_t_mean) / c_t_std
-        
-        self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev_norm, self.Uo) + self.bo
-        self.o_t = self.sigmoid(self.o_gate_input)
-        
-        self.c_t_tanh = np.tanh(self.c_t_norm)
-        self.h_t = self.o_t * self.c_t_tanh
-        h_t_mean = np.mean(self.h_t, axis=1, keepdims=True)
-        h_t_std = np.std(self.h_t, axis=1, keepdims=True) + 1e-6
-        self.h_t_norm = (self.h_t - h_t_mean) / h_t_std
-        
+        f_gate = np.dot(x_dropped, self.Wf) + np.dot(h_prev_norm, self.Uf) + self.bf
+        f_gate = self.layer_norm(f_gate, self.gamma, self.beta) if self.use_layer_norm else f_gate
+        f_t = self.sigmoid(f_gate)
+
+        i_gate = np.dot(x_dropped, self.Wi) + np.dot(h_prev_norm, self.Ui) + self.bi
+        i_gate = self.layer_norm(i_gate, self.gamma, self.beta) if self.use_layer_norm else i_gate
+        i_t = self.sigmoid(i_gate)
+
+        c_gate = np.dot(x_dropped, self.Wc) + np.dot(h_prev_norm, self.Uc) + self.bc
+        c_gate = self.layer_norm(c_gate, self.gamma, self.beta) if self.use_layer_norm else c_gate
+        c_tilde = np.tanh(c_gate)
+
+        c_t = f_t * c_prev_norm + i_t * c_tilde
+
+        o_gate = np.dot(x_dropped, self.Wo) + np.dot(h_prev_norm, self.Uo) + self.bo
+        o_gate = self.layer_norm(o_gate, self.gamma, self.beta) if self.use_layer_norm else o_gate
+        o_t = self.sigmoid(o_gate)
+
+        c_t_norm = self.weight_norm(c_t) if self.use_weight_norm else c_t
+        h_t = o_t * np.tanh(c_t_norm)
+
         self.cache = {
-            'x_t': self.x_t,
-            'h_prev': self.h_prev,
-            'h_prev_norm': h_prev_norm,
-            'c_prev': self.c_prev,
-            'c_prev_norm': c_prev_norm,
-            'f_gate_input': self.f_gate_input,
-            'i_gate_input': self.i_gate_input,
-            'c_gate_input': self.c_gate_input,
-            'o_gate_input': self.o_gate_input,
-            'f_t': self.f_t,
-            'i_t': self.i_t,
-            'c_tilde': self.c_tilde,
-            'c_t': self.c_t,
-            'c_t_norm': self.c_t_norm,
-            'c_t_tanh': self.c_t_tanh,
-            'o_t': self.o_t,
-            'h_t': self.h_t,
-            'h_t_norm': self.h_t_norm
+            'x_t': x_t, 'x_dropped': x_dropped,
+            'h_prev': h_prev, 'h_prev_norm': h_prev_norm,
+            'c_prev': c_prev, 'c_prev_norm': c_prev_norm,
+            'f_gate': f_gate, 'i_gate': i_gate,
+            'c_gate': c_gate, 'o_gate': o_gate,
+            'f_t': f_t, 'i_t': i_t,
+            'c_tilde': c_tilde, 'c_t': c_t,
+            'c_t_norm': c_t_norm, 'o_t': o_t,
+            'h_t': h_t, 'training': training
         }
-        
-        return self.h_t_norm, self.c_t_norm
 
-    def backward(self, dh_next: np.ndarray, dc_next: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        x_t = self.cache['x_t']
-        h_prev_norm = self.cache['h_prev_norm']
-        c_prev_norm = self.cache['c_prev_norm']
-        f_t = self.cache['f_t']
-        i_t = self.cache['i_t']
-        c_tilde = self.cache['c_tilde']
-        o_t = self.cache['o_t']
-        c_t_tanh = self.cache['c_t_tanh']
-        
-        batch_size = x_t.shape[0]
-        
-        dh = dh_next
-        dc = dc_next
-        
-        do = dh * c_t_tanh
-        dc = dc + dh * o_t * (1 - c_t_tanh ** 2)
-        
-        do = normalize_gradient(do)
-        dc = normalize_gradient(dc)
-        
-        do_input = do * o_t * (1 - o_t)
-        self.dWo = np.dot(x_t.T, do_input)
-        self.dUo = np.dot(h_prev_norm.T, do_input)
-        self.dbo = np.sum(do_input, axis=0, keepdims=True)
-        
-        dc_prev = dc * f_t
-        df = dc * c_prev_norm
-        di = dc * c_tilde
-        dc_tilde = dc * i_t
-        
-        dc_prev = normalize_gradient(dc_prev)
-        df = normalize_gradient(df)
-        di = normalize_gradient(di)
-        dc_tilde = normalize_gradient(dc_tilde)
-        
-        df_input = df * f_t * (1 - f_t)
-        self.dWf = np.dot(x_t.T, df_input)
-        self.dUf = np.dot(h_prev_norm.T, df_input)
-        self.dbf = np.sum(df_input, axis=0, keepdims=True)
-        
-        di_input = di * i_t * (1 - i_t)
-        self.dWi = np.dot(x_t.T, di_input)
-        self.dUi = np.dot(h_prev_norm.T, di_input)
-        self.dbi = np.sum(di_input, axis=0, keepdims=True)
-        
-        dc_tilde_input = dc_tilde * (1 - c_tilde ** 2)
-        self.dWc = np.dot(x_t.T, dc_tilde_input)
-        self.dUc = np.dot(h_prev_norm.T, dc_tilde_input)
-        self.dbc = np.sum(dc_tilde_input, axis=0, keepdims=True)
-        
-        l2_scale = self.l2_reg / batch_size
-        self.dWf += l2_scale * self.Wf
-        self.dWi += l2_scale * self.Wi
-        self.dWc += l2_scale * self.Wc
-        self.dWo += l2_scale * self.Wo
-        
-        dx = (np.dot(df_input, self.Wf.T) +
-            np.dot(di_input, self.Wi.T) +
-            np.dot(dc_tilde_input, self.Wc.T) +
-            np.dot(do_input, self.Wo.T))
-        
-        dh_prev = (np.dot(df_input, self.Uf.T) +
-                np.dot(di_input, self.Ui.T) +
-                np.dot(dc_tilde_input, self.Uc.T) +
-                np.dot(do_input, self.Uo.T))
-                
-        self.clip_gate_gradients()
-        
+        return h_t, c_t
+
+    def backward(self, dh_next, dc_next):
+        cache = self.cache
+        batch_size = cache['x_t'].shape[0]
+
+        self._init_gradients()
+
+        do = dh_next * np.tanh(cache['c_t_norm'])
+        dc = dc_next + (dh_next * cache['o_t'] * (1 - np.tanh(cache['c_t_norm']) ** 2))
+
+        do_gate = do * cache['o_t'] * (1 - cache['o_t'])
+        self.dWo = np.dot(cache['x_dropped'].T, do_gate)
+        self.dUo = np.dot(cache['h_prev_norm'].T, do_gate)
+        self.dbo = np.sum(do_gate, axis=0, keepdims=True)
+
+        dc_prev = dc * cache['f_t']
+        df = dc * cache['c_prev_norm']
+        di = dc * cache['c_tilde']
+        dc_tilde = dc * cache['i_t']
+
+        df_gate = df * cache['f_t'] * (1 - cache['f_t'])
+        self.dWf = np.dot(cache['x_dropped'].T, df_gate)
+        self.dUf = np.dot(cache['h_prev_norm'].T, df_gate)
+        self.dbf = np.sum(df_gate, axis=0, keepdims=True)
+
+        di_gate = di * cache['i_t'] * (1 - cache['i_t'])
+        self.dWi = np.dot(cache['x_dropped'].T, di_gate)
+        self.dUi = np.dot(cache['h_prev_norm'].T, di_gate)
+        self.dbi = np.sum(di_gate, axis=0, keepdims=True)
+
+        dc_gate = dc_tilde * (1 - cache['c_tilde'] ** 2)
+        self.dWc = np.dot(cache['x_dropped'].T, dc_gate)
+        self.dUc = np.dot(cache['h_prev_norm'].T, dc_gate)
+        self.dbc = np.sum(dc_gate, axis=0, keepdims=True)
+
+        if self.l2_reg > 0:
+            l2_scale = self.l2_reg / batch_size
+            self.dWf += l2_scale * self.Wf
+            self.dWi += l2_scale * self.Wi
+            self.dWc += l2_scale * self.Wc
+            self.dWo += l2_scale * self.Wo
+
+        if self.clip_value > 0:
+            self.clip_gradients()
+
+        dx = (np.dot(df_gate, self.Wf.T) +
+              np.dot(di_gate, self.Wi.T) +
+              np.dot(dc_gate, self.Wc.T) +
+              np.dot(do_gate, self.Wo.T))
+
+        dh_prev = (np.dot(df_gate, self.Uf.T) +
+                  np.dot(di_gate, self.Ui.T) +
+                  np.dot(dc_gate, self.Uc.T) +
+                  np.dot(do_gate, self.Uo.T))
+
+        if cache['training'] and self.dropout_rate > 0:
+            dx = dx * (1 - self.dropout_rate)
+            dh_prev = dh_prev * (1 - self.dropout_rate)
+
         return dx, dh_prev, dc_prev
 
-    def clip_gate_gradients(self):
-        gate_clip_norm = self.clip_value / 4.0
-        
-        def clip_gate(dW, dU, db):
-            gate_norm = np.sqrt(np.sum(dW**2) + np.sum(dU**2) + np.sum(db**2))
-            scale = min(1.0, gate_clip_norm / (gate_norm + 1e-8))
-            return dW * scale, dU * scale, db * scale
-        
-        self.dWf, self.dUf, self.dbf = clip_gate(self.dWf, self.dUf, self.dbf)
-        self.dWi, self.dUi, self.dbi = clip_gate(self.dWi, self.dUi, self.dbi)
-        self.dWc, self.dUc, self.dbc = clip_gate(self.dWc, self.dUc, self.dbc)
-        self.dWo, self.dUo, self.dbo = clip_gate(self.dWo, self.dUo, self.dbo)
+    def clip_gradients(self):
+        def clip_norm(grads):
+            total_norm = np.sqrt(sum(np.sum(g ** 2) for g in grads))
+            scale = min(1.0, self.clip_value / (total_norm + 1e-8))
+            return [g * scale for g in grads]
 
-    def orthogonal_init(self, shape: tuple, gain: float = 1.0) -> np.ndarray:
+        grads = [
+            self.dWf, self.dUf, self.dbf,
+            self.dWi, self.dUi, self.dbi,
+            self.dWc, self.dUc, self.dbc,
+            self.dWo, self.dUo, self.dbo
+        ]
+        
+        clipped = clip_norm(grads)
+        
+        self.dWf, self.dUf, self.dbf = clipped[0:3]
+        self.dWi, self.dUi, self.dbi = clipped[3:6]
+        self.dWc, self.dUc, self.dbc = clipped[6:9]
+        self.dWo, self.dUo, self.dbo = clipped[9:12]
+
+    def orthogonal_init(self, shape, gain=1.0):
         if len(shape) < 2:
             return self.rng.normal(0, 1, shape)
         flat_shape = (shape[0], np.prod(shape[1:]))
@@ -1788,17 +1761,37 @@ class LSTMCell(Layer):
         u, _, vt = np.linalg.svd(a, full_matrices=False)
         q = u if u.shape == flat_shape else vt
         q = q.reshape(shape)
-        return np.sqrt(2.0) * q
+        return gain * q
 
-    def sigmoid(self, x: np.ndarray) -> np.ndarray:
+    def sigmoid(self, x):
         x_clipped = np.clip(x, -15, 15)
         result = 1 / (1 + np.exp(-x_clipped))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
 
-    def get_config(self) -> dict:
+    def _init_gradients(self):
+        if self.Wf is not None:
+            self.dWf = np.zeros_like(self.Wf)
+            self.dUf = np.zeros_like(self.Uf)
+            self.dbf = np.zeros_like(self.bf)
+            self.dWi = np.zeros_like(self.Wi)
+            self.dUi = np.zeros_like(self.Ui)
+            self.dbi = np.zeros_like(self.bi)
+            self.dWc = np.zeros_like(self.Wc)
+            self.dUc = np.zeros_like(self.Uc)
+            self.dbc = np.zeros_like(self.bc)
+            self.dWo = np.zeros_like(self.Wo)
+            self.dUo = np.zeros_like(self.Uo)
+            self.dbo = np.zeros_like(self.bo)
+
+    def get_config(self):
         return {
             'name': self.__class__.__name__,
             'units': self.units,
+            'use_layer_norm': self.use_layer_norm,
+            'use_weight_norm': self.use_weight_norm,
+            'clip_value': self.clip_value,
+            'l2_reg': self.l2_reg,
+            'dropout_rate': self.dropout_rate,
             'random_state': self.random_state,
             'weights': {
                 'Wf': self.Wf.tolist() if self.Wf is not None else None,
@@ -1812,13 +1805,23 @@ class LSTMCell(Layer):
                 'bc': self.bc.tolist() if self.bc is not None else None,
                 'Wo': self.Wo.tolist() if self.Wo is not None else None,
                 'Uo': self.Uo.tolist() if self.Uo is not None else None,
-                'bo': self.bo.tolist() if self.bo is not None else None
+                'bo': self.bo.tolist() if self.bo is not None else None,
+                'gamma': self.gamma.tolist() if self.gamma is not None else None,
+                'beta': self.beta.tolist() if self.beta is not None else None
             }
         }
 
-    @staticmethod
-    def from_config(config: dict) -> 'LSTMCell':
-        cell = LSTMCell(config['units'], config['random_state'])
+    @classmethod
+    def from_config(cls, config):
+        cell = cls(
+            units=config['units'],
+            use_layer_norm=config['use_layer_norm'],
+            use_weight_norm=config['use_weight_norm'],
+            clip_value=config['clip_value'],
+            l2_reg=config['l2_reg'],
+            dropout_rate=config['dropout_rate'],
+            random_state=config['random_state']
+        )
         if config.get('weights'):
             w = config['weights']
             if w['Wf'] is not None:
@@ -1834,58 +1837,62 @@ class LSTMCell(Layer):
                 cell.Wo = np.array(w['Wo'])
                 cell.Uo = np.array(w['Uo'])
                 cell.bo = np.array(w['bo'])
+                if w['gamma'] is not None:
+                    cell.gamma = np.array(w['gamma'])
+                    cell.beta = np.array(w['beta'])
         return cell
 
 
-class LSTM(Layer):
-    def __init__(self, units: int, return_sequences: bool = False, return_state: bool = False,
-                 random_state: int | None = None, clip_value: float = 5.0, **kwargs):
-        super().__init__()
+class LSTM:
+    def __init__(self, units, return_sequences=False, return_state=False,
+                 use_layer_norm=False, use_weight_norm=False, clip_value=5.0,
+                 l2_reg=0.0, dropout_rate=0.0, random_state=None, **kwargs):
         self.units = units
         self.return_sequences = return_sequences
         self.return_state = return_state
-        self.random_state = random_state
+        self.use_layer_norm = use_layer_norm
+        self.use_weight_norm = use_weight_norm
         self.clip_value = clip_value
-        self.initialized = False
+        self.l2_reg = l2_reg
+        self.dropout_rate = dropout_rate
+        self.random_state = random_state
+        
         self.cell = None
+        self.initialized = False
         self.last_h = None
         self.last_c = None
         self.cache = None
         self.input_shape = None
-        self.initialized = False
+        
         self.gradient_norms = []
-
+        self.activation_stats = {'mean': [], 'std': []}
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def compute_gradient_norm_squared(self, dx_t: np.ndarray) -> float:
-        return (np.sum(dx_t ** 2) +
-                np.sum(self.cell.dWf ** 2) + np.sum(self.cell.dUf ** 2) + np.sum(self.cell.dbf ** 2) +
-                np.sum(self.cell.dWi ** 2) + np.sum(self.cell.dUi ** 2) + np.sum(self.cell.dbi ** 2) +
-                np.sum(self.cell.dWc ** 2) + np.sum(self.cell.dUc ** 2) + np.sum(self.cell.dbc ** 2) +
-                np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
-        
-    def __str__(self) -> str:
-        return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state}, clip_value={self.clip_value})'
-
-    def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[
-            np.ndarray, np.ndarray, np.ndarray]:
+    def forward_pass(self, x, training=True):
         if x.ndim != 3:
-            raise ValueError(
-                f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
-        if not self.initialized:
-            self.cell = LSTMCell(self.units, self.clip_value)
-            self.initialized = True
+            raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
+
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
 
         if not hasattr(self, '_zeros_template') or self._zeros_template.shape[0] != batch_size:
             self._zeros_template = np.zeros((batch_size, self.units))
+
         h = self._zeros_template.copy()
         c = self._zeros_template.copy()
 
         if not self.initialized:
-            self.cell = LSTMCell(self.units, self.random_state)
+            self.cell = LSTMCell(
+                units=self.units,
+                use_layer_norm=self.use_layer_norm,
+                use_weight_norm=self.use_weight_norm,
+                clip_value=self.clip_value,
+                l2_reg=self.l2_reg,
+                dropout_rate=self.dropout_rate,
+                random_state=self.random_state
+            )
             self.cell.initialize_weights(input_dim)
             self.initialized = True
 
@@ -1895,12 +1902,17 @@ class LSTM(Layer):
 
         for t in range(timesteps):
             x_t = x[:, t, :]
-            h, c = self.cell.forward(x_t, h, c)
+            h, c = self.cell.forward(x_t, h, c, training)
+            
             if self.return_sequences:
                 all_h.append(h)
             all_c.append(c)
+            
             if training:
                 self.cache.append(self.cell.cache)
+                if len(self.activation_stats['mean']) < timesteps:
+                    self.activation_stats['mean'].append(np.mean(h))
+                    self.activation_stats['std'].append(np.std(h))
 
         self.last_h = h
         self.last_c = c
@@ -1915,75 +1927,83 @@ class LSTM(Layer):
                 return self.last_h, self.last_h, self.last_c
             return self.last_h
 
-    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+    def backward_pass(self, output_error):
         batch_size, timesteps, input_dim = self.input_shape
-        
+
         if len(output_error.shape) == 2:
             full_dout = np.zeros((batch_size, timesteps, self.units))
             full_dout[:, -1, :] = output_error
             output_error = full_dout
-        
+
         dx = np.zeros((batch_size, timesteps, input_dim))
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
-        
+
         self.cell._init_gradients()
-        
         squared_norm_sum = 0.0
-        grad_threshold = 1e-3
-        
+        early_stop_threshold = 1e-3
+
         for t in reversed(range(timesteps)):
-            if np.max(np.abs(dh_next)) < grad_threshold and t < timesteps - 1:
+            if np.max(np.abs(dh_next)) < early_stop_threshold and t < timesteps - 1:
                 break
-            
+
             dh = output_error[:, t, :] + dh_next
-            
-            dh_norm = np.sqrt(np.sum(dh ** 2, axis=1, keepdims=True) + 1e-6)
-            dh = dh / dh_norm
-            
             self.cell.cache = self.cache[t]
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
-            
             dx[:, t, :] = dx_t
-            
-            squared_norm_sum += self.compute_gradient_norm_squared(dx_t)
-        
-        global_norm = np.sqrt(squared_norm_sum)
-        scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
-        
-        if scaling_factor < 1.0:
-            dx *= scaling_factor
-            for grad_name in self.cell.__dict__:
-                if grad_name.startswith('d'):
-                    grad = getattr(self.cell, grad_name)
-                    setattr(self.cell, grad_name, grad * scaling_factor)
-        
+
+            squared_norm_sum += (np.sum(dx_t ** 2) +
+                np.sum(self.cell.dWf ** 2) + np.sum(self.cell.dUf ** 2) + np.sum(self.cell.dbf ** 2) +
+                np.sum(self.cell.dWi ** 2) + np.sum(self.cell.dUi ** 2) + np.sum(self.cell.dbi ** 2) +
+                np.sum(self.cell.dWc ** 2) + np.sum(self.cell.dUc ** 2) + np.sum(self.cell.dbc ** 2) +
+                np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
+
+            self.gradient_norms.append(np.sqrt(squared_norm_sum))
+
         return dx
 
-    def get_config(self) -> dict:
+    def get_config(self):
         return {
             'name': self.__class__.__name__,
             'units': self.units,
             'return_sequences': self.return_sequences,
             'return_state': self.return_state,
+            'use_layer_norm': self.use_layer_norm,
+            'use_weight_norm': self.use_weight_norm,
             'clip_value': self.clip_value,
+            'l2_reg': self.l2_reg,
+            'dropout_rate': self.dropout_rate,
             'random_state': self.random_state,
             'cell_config': self.cell.get_config() if self.cell is not None else None
         }
 
-    @staticmethod
-    def from_config(config: dict) -> 'LSTM':
-        lstm = LSTM(
-            config['units'],
-            config['return_sequences'],
-            config.get('return_state', False),
-            config['random_state'],
-            config.get('clip_value', 5.0)
+    @classmethod
+    def from_config(cls, config):
+        lstm = cls(
+            units=config['units'],
+            return_sequences=config['return_sequences'],
+            return_state=config.get('return_state', False),
+            use_layer_norm=config.get('use_layer_norm', False),
+            use_weight_norm=config.get('use_weight_norm', False),
+            clip_value=config.get('clip_value', 5.0),
+            l2_reg=config.get('l2_reg', 0.0),
+            dropout_rate=config.get('dropout_rate', 0.0),
+            random_state=config.get('random_state')
         )
         if config.get('cell_config'):
             lstm.cell = LSTMCell.from_config(config['cell_config'])
             lstm.initialized = True
         return lstm
+
+    def __str__(self):
+        return (f'LSTM(units={self.units}, '
+                f'return_sequences={self.return_sequences}, '
+                f'return_state={self.return_state}, '
+                f'layer_norm={self.use_layer_norm}, '
+                f'weight_norm={self.use_weight_norm}, '
+                f'clip_value={self.clip_value}, '
+                f'l2_reg={self.l2_reg}, '
+                f'dropout={self.dropout_rate})')
 
 
 class Bidirectional(Layer):
