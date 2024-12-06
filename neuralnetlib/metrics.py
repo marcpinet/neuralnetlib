@@ -591,3 +591,22 @@ def kurtosis(x: np.ndarray) -> float:
     
     kurt = (n * m4) / (m2**2) - 3
     return kurt
+
+
+def skew(x: np.ndarray) -> float:
+    if x.ndim != 1:
+        raise ValueError("Input array must be 1D.")
+    if x.size < 2:
+        raise ValueError("Array must have at least 2 elements.")
+
+    n = x.size
+    mean = np.mean(x)
+    deviations = x - mean
+    m2 = np.mean(deviations**2)
+    m3 = np.mean(deviations**3)
+
+    if m2 == 0:
+        raise ValueError("Array must have variance greater than 0.")
+
+    skewness = (n * m3) / (m2**1.5)
+    return skewness
