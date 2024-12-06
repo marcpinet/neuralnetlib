@@ -574,7 +574,7 @@ def regularized_incomplete_beta(a: float, b: float, x: float) -> float:
     return result
 
 
-def kurtosis(x: np.ndarray) -> float:
+def kurtosis(x: np.ndarray, fisher: bool = True) -> float:
     if x.ndim != 1:
         raise ValueError("Input array must be 1D.")
     if x.size < 2:
@@ -586,10 +586,14 @@ def kurtosis(x: np.ndarray) -> float:
     m2 = np.mean(deviations**2)
     m4 = np.mean(deviations**4)
 
-    if m2 == 0:
-        raise ValueError("Array must have variance greater than 0.")
+    if m2 <= 1e-15:
+        return np.nan
     
-    kurt = (n * m4) / (m2**2) - 3
+    kurt = (n * m4) / (m2**2)
+    
+    if fisher:
+        kurt -= 3
+    
     return kurt
 
 
@@ -605,8 +609,8 @@ def skew(x: np.ndarray) -> float:
     m2 = np.mean(deviations**2)
     m3 = np.mean(deviations**3)
 
-    if m2 == 0:
-        raise ValueError("Array must have variance greater than 0.")
+    if m2 <= 1e-15:
+        return np.nan
 
     skewness = (n * m3) / (m2**1.5)
     return skewness
