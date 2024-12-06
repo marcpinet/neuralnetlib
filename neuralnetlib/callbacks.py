@@ -9,18 +9,21 @@ class ModelWeightManager:
     def get_model_weights(model) -> list[np.ndarray]:
         """Extract weights from any model type."""
         weights = []
-        
+
         if hasattr(model, 'layers'):  # Sequential model
-            weights.extend([layer.weights for layer in model.layers if hasattr(layer, 'weights')])
-            
+            weights.extend(
+                [layer.weights for layer in model.layers if hasattr(layer, 'weights')])
+
         elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
-            weights.extend([layer.weights for layer in model.encoder_layers if hasattr(layer, 'weights')])
-            weights.extend([layer.weights for layer in model.decoder_layers if hasattr(layer, 'weights')])
-            
+            weights.extend(
+                [layer.weights for layer in model.encoder_layers if hasattr(layer, 'weights')])
+            weights.extend(
+                [layer.weights for layer in model.decoder_layers if hasattr(layer, 'weights')])
+
         elif hasattr(model, 'embedding'):  # Transformer
             if hasattr(model.embedding, 'weights'):
                 weights.append(model.embedding.weights)
-            
+
             for encoder_layer in model.encoder_layers:
                 if hasattr(encoder_layer, 'attention'):
                     weights.extend([
@@ -34,7 +37,7 @@ class ModelWeightManager:
                         encoder_layer.ffn.dense1.weights,
                         encoder_layer.ffn.dense2.weights
                     ])
-            
+
             for decoder_layer in model.decoder_layers:
                 if hasattr(decoder_layer, 'self_attention'):
                     weights.extend([
@@ -55,39 +58,39 @@ class ModelWeightManager:
                         decoder_layer.ffn.dense1.weights,
                         decoder_layer.ffn.dense2.weights
                     ])
-            
+
             if hasattr(model.output_layer, 'weights'):
                 weights.append(model.output_layer.weights)
-        
+
         return weights
 
     @staticmethod
     def set_model_weights(model, weights: list[np.ndarray]) -> None:
         """Restore weights to any model type."""
         weight_idx = 0
-        
+
         if hasattr(model, 'layers'):  # Sequential model
             for layer in model.layers:
                 if hasattr(layer, 'weights'):
                     layer.weights = weights[weight_idx]
                     weight_idx += 1
-                    
+
         elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
             for layer in model.encoder_layers:
                 if hasattr(layer, 'weights'):
                     layer.weights = weights[weight_idx]
                     weight_idx += 1
-            
+
             for layer in model.decoder_layers:
                 if hasattr(layer, 'weights'):
                     layer.weights = weights[weight_idx]
                     weight_idx += 1
-                    
+
         elif hasattr(model, 'embedding'):
             if hasattr(model.embedding, 'weights'):
                 model.embedding.weights = weights[weight_idx]
                 weight_idx += 1
-            
+
             for encoder_layer in model.encoder_layers:
                 if hasattr(encoder_layer, 'attention'):
                     encoder_layer.attention.query_dense.weights = weights[weight_idx]
@@ -99,7 +102,7 @@ class ModelWeightManager:
                     encoder_layer.ffn.dense1.weights = weights[weight_idx]
                     encoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
                     weight_idx += 2
-            
+
             for decoder_layer in model.decoder_layers:
                 if hasattr(decoder_layer, 'self_attention'):
                     decoder_layer.self_attention.query_dense.weights = weights[weight_idx]
@@ -117,7 +120,7 @@ class ModelWeightManager:
                     decoder_layer.ffn.dense1.weights = weights[weight_idx]
                     decoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
                     weight_idx += 2
-            
+
             # Restore output layer weights
             if hasattr(model.output_layer, 'weights'):
                 model.output_layer.weights = weights[weight_idx]
@@ -177,7 +180,8 @@ class EarlyStopping(Callback):
         if self.best_metric is None:
             self.best_metric = current_metric
             if self.mode == 'auto':
-                self.mode = 'min' if isinstance(self.monitor, str) and 'loss' in self.monitor.lower() else 'max'
+                self.mode = 'min' if isinstance(
+                    self.monitor, str) and 'loss' in self.monitor.lower() else 'max'
 
         if self.mode == 'min':
             improved = current_metric < self.best_metric - self.min_delta
@@ -188,7 +192,8 @@ class EarlyStopping(Callback):
             self.best_metric = current_metric
             self.patience_counter = 0
             if self.restore_best_weights:
-                self.best_weights = self.weight_manager.get_model_weights(model)
+                self.best_weights = self.weight_manager.get_model_weights(
+                    model)
         else:
             self.patience_counter += 1
 
@@ -220,7 +225,7 @@ class EarlyStopping(Callback):
 
 
 class LearningRateScheduler(Callback):
-    def __init__(self, 
+    def __init__(self,
                  schedule,
                  initial_learning_rate: float = 0.01,
                  min_learning_rate: float = 1e-6,
@@ -232,31 +237,31 @@ class LearningRateScheduler(Callback):
         self.min_learning_rate = min_learning_rate
         self.verbose = verbose
         self.schedule_params = schedule_params or {}
-        
+
         if isinstance(schedule, str):
             self.schedule = self._get_schedule_function(schedule)
         else:
             self.schedule = schedule
-            
+
         self.current_learning_rate = initial_learning_rate
 
     def _step_decay(self, epoch: int, initial_learning_rate: float) -> float:
         drop_rate = self.schedule_params.get('drop_rate', 0.5)
         epochs_drop = self.schedule_params.get('epochs_drop', 10.0)
-        
+
         learning_rate = initial_learning_rate * np.power(
             drop_rate, np.floor((1 + epoch) / epochs_drop))
         return max(learning_rate, self.min_learning_rate)
 
     def _exponential_decay(self, epoch: int, initial_learning_rate: float) -> float:
         decay_rate = self.schedule_params.get('decay_rate', 0.1)
-        
+
         learning_rate = initial_learning_rate * np.exp(-decay_rate * epoch)
         return max(learning_rate, self.min_learning_rate)
 
     def _cosine_decay(self, epoch: int, initial_learning_rate: float) -> float:
         total_epochs = self.schedule_params.get('total_epochs', 100)
-        
+
         learning_rate = self.min_learning_rate + 0.5 * (initial_learning_rate - self.min_learning_rate) * \
             (1 + np.cos(np.pi * epoch / total_epochs))
         return max(learning_rate, self.min_learning_rate)
@@ -264,21 +269,23 @@ class LearningRateScheduler(Callback):
     def _warmup_cosine_decay(self, epoch: int, initial_learning_rate: float) -> float:
         warmup_epochs = self.schedule_params.get('warmup_epochs', 5)
         total_epochs = self.schedule_params.get('total_epochs', 100)
-        
+
         if epoch < warmup_epochs:
             learning_rate = (epoch + 1) * initial_learning_rate / warmup_epochs
         else:
             learning_rate = self.min_learning_rate + 0.5 * (initial_learning_rate - self.min_learning_rate) * \
-                (1 + np.cos(np.pi * (epoch - warmup_epochs) / (total_epochs - warmup_epochs)))
+                (1 + np.cos(np.pi * (epoch - warmup_epochs) /
+                 (total_epochs - warmup_epochs)))
         return max(learning_rate, self.min_learning_rate)
 
     def _cyclical(self, epoch: int, initial_learning_rate: float) -> float:
         step_size = self.schedule_params.get('step_size', 5)
         max_lr = self.schedule_params.get('max_lr', initial_learning_rate * 3)
-        
+
         cycle = np.floor(1 + epoch / (2 * step_size))
         x = np.abs(epoch / step_size - 2 * cycle + 1)
-        learning_rate = initial_learning_rate + (max_lr - initial_learning_rate) * max(0, 1 - x)
+        learning_rate = initial_learning_rate + \
+            (max_lr - initial_learning_rate) * max(0, 1 - x)
         return max(learning_rate, self.min_learning_rate)
 
     def _get_schedule_function(self, schedule_name: str) -> callable:
@@ -289,10 +296,11 @@ class LearningRateScheduler(Callback):
             'warmup_cosine': self._warmup_cosine_decay,
             'cyclical': self._cyclical
         }
-        
+
         if schedule_name not in schedules:
-            raise ValueError(f"Unknown schedule: {schedule_name}. Available schedules: {list(schedules.keys())}")
-        
+            raise ValueError(
+                f"Unknown schedule: {schedule_name}. Available schedules: {list(schedules.keys())}")
+
         return schedules[schedule_name]
 
     def _update_optimizer_learning_rate(self, model, new_lr: float) -> None:
@@ -305,17 +313,18 @@ class LearningRateScheduler(Callback):
     def on_epoch_begin(self, epoch: int, logs: dict = None) -> None:
         if not logs:
             return
-            
+
         model = logs.get('model')
         if not model:
             return
-            
+
         new_lr = self.schedule(epoch, self.initial_learning_rate)
         self._update_optimizer_learning_rate(model, new_lr)
-        
+
         if self.verbose and new_lr != self.current_learning_rate:
-            print(f'\nEpoch {epoch + 1}: Learning rate adjusted to {new_lr:.6f}')
-            
+            print(
+                f'\nEpoch {epoch + 1}: Learning rate adjusted to {new_lr:.6f}')
+
         self.current_learning_rate = new_lr
 
     def on_train_begin(self, logs: dict = None) -> None:

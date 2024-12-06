@@ -33,26 +33,27 @@ def dict_with_list_to_dict_with_ndarray(d: dict) -> dict:
 
 def shuffle(x: np.ndarray, y: np.ndarray = None, random_state: int = None) -> tuple:
     """Shuffles the data along the first axis."""
-    rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
-    
+    rng = np.random.default_rng(
+        random_state if random_state is not None else int(time.time_ns()))
+
     n_samples = x.shape[0]
     indices = rng.permutation(n_samples)
-    
+
     x = np.array(x)
     shuffled_x = x[indices]
-    
+
     if y is not None:
         y = np.array(y)
         shuffled_y = y[indices]
         return shuffled_x, shuffled_y
-    
+
     return shuffled_x
 
 
 def progress_bar(current: int, total: int, width: int = 30, message: str = "") -> None:
     """
     Prints a progress bar to the console.
-    
+
     Args:
         current (int): current progress
         total (int): total progress
@@ -82,17 +83,18 @@ def train_test_split(x: np.ndarray, y: np.ndarray = None, test_size: float = 0.2
         tuple: (x_train, x_test) if y is None, else (x_train, x_test, y_train, y_test)
     """
     x = np.array(x)
-    rng = np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
+    rng = np.random.default_rng(
+        random_state if random_state is not None else int(time.time_ns()))
     indices = np.arange(len(x))
     if shuffle:
         rng.shuffle(indices)
     split_index = int(len(x) * (1 - test_size))
     x_train = x[indices[:split_index]]
     x_test = x[indices[split_index:]]
-    
+
     if y is None:
         return x_train, x_test
-    
+
     y = np.array(y)
     y_train = y[indices[:split_index]]
     y_test = y[indices[split_index:]]
@@ -113,7 +115,7 @@ def softmax(x: np.ndarray) -> np.ndarray:
 def format_number(number):
     if number == 0:  # Handle the case for 0 directly
         return "0.0"
-    
+
     if abs(number) < 1e-3:
         exponent = int(f"{number:.1e}".split("e")[1])
         significant_digits = max(0, abs(exponent)) + 1
@@ -138,13 +140,15 @@ def is_display_available():
     elif system == "Windows":
         return is_display_available_windows()
     else:
-        raise NotImplementedError(f"Display check not implemented for {system}")
+        raise NotImplementedError(
+            f"Display check not implemented for {system}")
 
 
 def is_display_available_linux():
     if "DISPLAY" in os.environ:
         try:
-            output = subprocess.check_output(["xdpyinfo"], stderr=subprocess.STDOUT)
+            output = subprocess.check_output(
+                ["xdpyinfo"], stderr=subprocess.STDOUT)
             return True
         except subprocess.CalledProcessError:
             return False
@@ -167,23 +171,24 @@ class GradientDebugger:
         self.running_mean_norm = None
         self.running_std_norm = None
         self.beta = 0.9
-        
+
     def adaptive_clip_gradients(self, gradient: np.ndarray) -> np.ndarray:
         if gradient is None:
             return None
-            
+
         grad_norm = np.linalg.norm(gradient)
         if self.running_mean_norm is None:
             self.running_mean_norm = grad_norm
             self.running_std_norm = 1.0
         else:
-            self.running_mean_norm = self.beta * self.running_mean_norm + (1 - self.beta) * grad_norm
-            self.running_std_norm = (self.beta * self.running_std_norm + 
-                                   (1 - self.beta) * abs(grad_norm - self.running_mean_norm))
-        
+            self.running_mean_norm = self.beta * \
+                self.running_mean_norm + (1 - self.beta) * grad_norm
+            self.running_std_norm = (self.beta * self.running_std_norm +
+                                     (1 - self.beta) * abs(grad_norm - self.running_mean_norm))
+
         adaptive_threshold = self.running_mean_norm + 2 * self.running_std_norm
         clip_norm = min(self.clip_threshold * adaptive_threshold, 10.0)
-        
+
         if grad_norm > clip_norm:
             return gradient * (clip_norm / grad_norm)
         return gradient
@@ -191,10 +196,10 @@ class GradientDebugger:
     def compute_gradient_stats(self, gradient: np.ndarray) -> dict:
         if gradient is None or not isinstance(gradient, np.ndarray):
             return self._empty_stats()
-            
+
         flat_grad = gradient.flatten()
         grad_norm = float(np.linalg.norm(flat_grad))
-        
+
         stats = {
             'mean': float(np.mean(flat_grad)),
             'std': float(np.std(flat_grad)),
@@ -205,10 +210,10 @@ class GradientDebugger:
             'is_valid': bool(not np.any(np.isnan(flat_grad)) and not np.any(np.isinf(flat_grad))),
             'relative_norm': grad_norm / self.running_mean_norm if self.running_mean_norm else 1.0
         }
-        
+
         hist, _ = np.histogram(flat_grad, bins=10)
         stats['distribution'] = hist.tolist()
-        
+
         return stats
 
     def _empty_stats(self) -> dict:
@@ -223,24 +228,26 @@ class GradientDebugger:
         stats['step'] = step
         stats['name'] = name
         self.stats_history.append(stats)
-        
+
         self._check_gradient_health(name, stats, step)
 
     def _check_gradient_health(self, name: str, stats: dict, step: int):
         warnings = []
-        
+
         if not stats['is_valid']:
             warnings.append("Invalid gradients detected")
-        
+
         if stats['norm'] > 100:
             warnings.append(f"Large gradient norm ({stats['norm']:.2f})")
-            
+
         if stats['zeros_pct'] > 90:
-            warnings.append(f"High percentage of zeros ({stats['zeros_pct']:.1f}%)")
-            
+            warnings.append(
+                f"High percentage of zeros ({stats['zeros_pct']:.1f}%)")
+
         if stats['relative_norm'] > 5.0:
-            warnings.append(f"Gradient norm {stats['relative_norm']:.1f}x larger than running average")
-            
+            warnings.append(
+                f"Gradient norm {stats['relative_norm']:.1f}x larger than running average")
+
         if warnings:
             print(f"WARNING in {name} at step {step}:")
             for warning in warnings:
@@ -249,21 +256,21 @@ class GradientDebugger:
     def get_summary(self, last_n: int = None) -> dict:
         if not self.stats_history:
             return {}
-            
+
         history = self.stats_history[-last_n:] if last_n else self.stats_history
-        
+
         grouped = {}
         for entry in history:
             name = entry['name']
             if name not in grouped:
                 grouped[name] = []
             grouped[name].append(entry)
-            
+
         summary = {}
         for name, entries in grouped.items():
             norms = [e['norm'] for e in entries]
             relative_norms = [e['relative_norm'] for e in entries]
-            
+
             summary[name] = {
                 'mean_norm': np.mean(norms),
                 'std_norm': np.std(norms),
@@ -274,5 +281,5 @@ class GradientDebugger:
                 'norm_trend': np.polyfit(range(len(norms)), norms, 1)[0],
                 'samples': len(entries)
             }
-            
+
         return summary

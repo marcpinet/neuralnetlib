@@ -17,12 +17,13 @@ class Optimizer:
     @staticmethod
     def from_config(config: dict):
         optimizer_name = config['name']
-        
+
         for optimizer_class in Optimizer.__subclasses__():
             if optimizer_class.__name__ == optimizer_name:
-                constructor_params = {k: v for k, v in config.items() if k != 'name'}
+                constructor_params = {k: v for k,
+                                      v in config.items() if k != 'name'}
                 return optimizer_class(**constructor_params)
-                
+
         raise ValueError(f"No optimizer found for the name: {optimizer_name}")
 
     @staticmethod
@@ -68,7 +69,7 @@ class Momentum(Optimizer):
             self.velocity_w = np.zeros_like(weights)
             self.velocity_b = np.zeros_like(bias)
         self.velocity_w = self.momentum * self.velocity_w - \
-                          self.learning_rate * weights_grad
+            self.learning_rate * weights_grad
         weights += self.velocity_w
         self.velocity_b = self.momentum * self.velocity_b - self.learning_rate * bias_grad
         bias += self.velocity_b
@@ -98,13 +99,13 @@ class RMSprop(Optimizer):
             self.sq_grads_w = np.zeros_like(weights)
             self.sq_grads_b = np.zeros_like(bias)
         self.sq_grads_w = self.rho * self.sq_grads_w + \
-                          (1 - self.rho) * np.square(weights_grad)
+            (1 - self.rho) * np.square(weights_grad)
         weights -= self.learning_rate * weights_grad / \
-                   (np.sqrt(self.sq_grads_w) + self.epsilon)
+            (np.sqrt(self.sq_grads_w) + self.epsilon)
         self.sq_grads_b = self.rho * self.sq_grads_b + \
-                          (1 - self.rho) * np.square(bias_grad)
+            (1 - self.rho) * np.square(bias_grad)
         bias -= self.learning_rate * bias_grad / \
-                (np.sqrt(self.sq_grads_b) + self.epsilon)
+            (np.sqrt(self.sq_grads_b) + self.epsilon)
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "learning_rate": self.learning_rate, "rho": self.rho,
@@ -135,7 +136,8 @@ class Adam(Optimizer):
 
         self._min_denom = 1e-16
 
-        self._max_exp = np.log(np.finfo(np.float64).max)  # Maximum exponent value for float64 = 709
+        # Maximum exponent value for float64 = 709
+        self._max_exp = np.log(np.finfo(np.float64).max)
 
     def _clip_gradients(self, grad: np.ndarray) -> np.ndarray:
         if grad is None:
@@ -164,7 +166,8 @@ class Adam(Optimizer):
         v_hat = v / (1 - beta2_t)
 
         denom = np.sqrt(v_hat) + self.epsilon
-        update = self.learning_rate * m_hat / np.maximum(denom, self._min_denom)
+        update = self.learning_rate * m_hat / \
+            np.maximum(denom, self._min_denom)
 
         update = np.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
         param -= update
@@ -263,19 +266,20 @@ class AdaBelief(Optimizer):
         grad = self._clip_gradients(grad)
 
         m = self.beta_1 * m + (1 - self.beta_1) * grad
-        
+
         grad_residual = grad - m
-        
+
         s = self.beta_2 * s + (1 - self.beta_2) * np.square(grad_residual)
 
         beta1_t = self.beta_1 ** self.t
         beta2_t = self.beta_2 ** self.t
-        
+
         m_hat = m / (1 - beta1_t)
         s_hat = s / (1 - beta2_t)
 
         denom = np.sqrt(s_hat + self.epsilon)
-        update = self.learning_rate * m_hat / np.maximum(denom, self._min_denom)
+        update = self.learning_rate * m_hat / \
+            np.maximum(denom, self._min_denom)
 
         update = np.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
         param -= update
@@ -338,7 +342,7 @@ class AdaBelief(Optimizer):
         return (f"{self.__class__.__name__}(learning_rate={self.learning_rate}, "
                 f"beta_1={self.beta_1}, beta_2={self.beta_2}, epsilon={self.epsilon}, "
                 f"clip_norm={self.clip_norm}, clip_value={self.clip_value})")
-    
+
 
 class RAdam(Optimizer):
     def __init__(self, learning_rate: float = 0.001, beta_1: float = 0.9, beta_2: float = 0.999,
@@ -356,7 +360,7 @@ class RAdam(Optimizer):
 
         self._min_denom = 1e-16
         self._max_exp = np.log(np.finfo(np.float64).max)
-        
+
         self.rho_inf = 2/(1-beta_2) - 1
 
     def _clip_gradients(self, grad: np.ndarray) -> np.ndarray:
@@ -381,21 +385,22 @@ class RAdam(Optimizer):
 
         beta1_t = self.beta_1 ** self.t
         beta2_t = self.beta_2 ** self.t
-        
+
         m_hat = m / (1 - beta1_t)
-        
+
         rho_t = self.rho_inf - 2 * self.t * beta2_t / (1 - beta2_t)
-        
+
         if rho_t > 4:
             v_hat = np.sqrt(v / (1 - beta2_t))
-            r_t = np.sqrt(((rho_t - 4) * (rho_t - 2) * self.rho_inf) / 
-                         ((self.rho_inf - 4) * (self.rho_inf - 2) * rho_t))
-            
+            r_t = np.sqrt(((rho_t - 4) * (rho_t - 2) * self.rho_inf) /
+                          ((self.rho_inf - 4) * (self.rho_inf - 2) * rho_t))
+
             denom = v_hat + self.epsilon
-            update = r_t * self.learning_rate * m_hat / np.maximum(denom, self._min_denom)
+            update = r_t * self.learning_rate * m_hat / \
+                np.maximum(denom, self._min_denom)
         else:
             update = self.learning_rate * m_hat
-            
+
         update = np.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
         param -= update
 

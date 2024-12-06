@@ -157,7 +157,8 @@ class AdaptiveDropout:
         input_variance = np.var(input_data)
         input_mean = np.mean(np.abs(input_data))
 
-        dropout_rate = self.initial_rate * np.exp(-input_variance / (self.temperature * input_mean + 1e-8))
+        dropout_rate = self.initial_rate * \
+            np.exp(-input_variance / (self.temperature * input_mean + 1e-8))
         self.current_rate = np.clip(dropout_rate, self.min_rate, self.max_rate)
 
         self.mask = self.rng.binomial(1, 1 - self.current_rate,

@@ -32,7 +32,8 @@ class Layer:
             layer_class = globals()[layer_name]
             return layer_class.from_config(config)
         except KeyError:
-            raise ValueError(f'Invalid layer name: {layer_name}. Make sure the class {layer_name} is defined.')
+            raise ValueError(
+                f'Invalid layer name: {layer_name}. Make sure the class {layer_name} is defined.')
 
 
 class Input(Layer):
@@ -95,7 +96,8 @@ class Dense(Layer):
             self.weights = self.rng.normal(0, stddev, (input_size, self.units))
         elif self.weights_init in ["glorot_uniform", "xavier_uniform"]:
             limit = np.sqrt(6 / (fan_in + fan_out))
-            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+            self.weights = self.rng.uniform(-limit,
+                                            limit, (input_size, self.units))
 
         elif self.weights_init in ["glorot_normal", "xavier_normal"]:
             stddev = np.sqrt(2 / (fan_in + fan_out))
@@ -103,7 +105,8 @@ class Dense(Layer):
 
         elif self.weights_init == "he_uniform":
             limit = np.sqrt(6 / fan_in)
-            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+            self.weights = self.rng.uniform(-limit,
+                                            limit, (input_size, self.units))
 
         elif self.weights_init == "he_normal":
             stddev = np.sqrt(2 / fan_in)
@@ -111,7 +114,8 @@ class Dense(Layer):
 
         elif self.weights_init == "lecun_uniform":
             limit = np.sqrt(3 / fan_in)
-            self.weights = self.rng.uniform(-limit, limit, (input_size, self.units))
+            self.weights = self.rng.uniform(-limit,
+                                            limit, (input_size, self.units))
 
         elif self.weights_init == "lecun_normal":
             stddev = np.sqrt(1 / fan_in)
@@ -171,7 +175,8 @@ class Dense(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if len(output_error.shape) == 3:
             batch_size, timesteps, _ = output_error.shape
-            output_error_reshaped = output_error.reshape(-1, output_error.shape[-1])
+            output_error_reshaped = output_error.reshape(
+                -1, output_error.shape[-1])
             input_reshaped = self.input.reshape(-1, self.input.shape[-1])
 
             input_error = np.dot(output_error_reshaped, self.weights.T)
@@ -179,9 +184,9 @@ class Dense(Layer):
             self.d_bias = np.sum(output_error_reshaped, axis=0, keepdims=True)
 
             return input_error.reshape(batch_size, timesteps, -1)
-            
+
         input_error = np.dot(output_error, self.weights.T)
-        
+
         if len(self.input.shape) == 1:
             self.input = self.input.reshape(-1, 1)
         if len(output_error.shape) == 1:
@@ -297,7 +302,8 @@ class Dropout(Layer):
         if self.adaptive:
             return self.dropout_impl(input_data, training)
 
-        rng = np.random.default_rng(self.random_state if self.random_state is not None else int(time.time_ns()))
+        rng = np.random.default_rng(
+            self.random_state if self.random_state is not None else int(time.time_ns()))
         self.mask = rng.binomial(1, 1 - self.rate,
                                  size=input_data.shape) / (1 - self.rate)
         return input_data * self.mask
@@ -334,7 +340,8 @@ class Conv2D(Layer):
         self.filters = filters
         self.kernel_size = (kernel_size, kernel_size) if isinstance(
             kernel_size, int) else kernel_size
-        self.strides = (strides, strides) if isinstance(strides, int) else strides
+        self.strides = (strides, strides) if isinstance(
+            strides, int) else strides
         self.padding = padding
 
         self.weights = None
@@ -354,17 +361,19 @@ class Conv2D(Layer):
 
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
-        
+
         if self.weights_init == "xavier":
             self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)),
-                                         (*self.kernel_size, in_channels, self.filters))
+                                           (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))),
-                                         (*self.kernel_size, in_channels, self.filters))
+                                           (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(0, 0.01, (*self.kernel_size, in_channels, self.filters))
+            self.weights = self.rng.normal(
+                0, 0.01, (*self.kernel_size, in_channels, self.filters))
         else:
-            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            raise ValueError(
+                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
         if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
@@ -386,11 +395,13 @@ class Conv2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
-            assert len(input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
+            assert len(
+                input_data.shape) == 4, f"Conv2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
             self.initialize_weights(input_data.shape)
 
         self.input = input_data
-        output = self._convolve(self.input, self.weights, self.bias, self.strides, self.padding)
+        output = self._convolve(self.input, self.weights,
+                                self.bias, self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -432,23 +443,27 @@ class Conv2D(Layer):
         if padding == 'same':
             out_height = int(np.ceil(float(in_height) / float(strides[0])))
             out_width = int(np.ceil(float(in_width) / float(strides[1])))
-            
-            pad_height_total = int(max(0, (out_height - 1) * strides[0] + kernel_height - in_height))
-            pad_width_total = int(max(0, (out_width - 1) * strides[1] + kernel_width - in_width))
-            
+
+            pad_height_total = int(
+                max(0, (out_height - 1) * strides[0] + kernel_height - in_height))
+            pad_width_total = int(
+                max(0, (out_width - 1) * strides[1] + kernel_width - in_width))
+
             pad_height = pad_height_total // 2
             pad_width = pad_width_total // 2
-            
-            out_height = (in_height + 2 * pad_height - kernel_height) // strides[0] + 1
-            out_width = (in_width + 2 * pad_width - kernel_width) // strides[1] + 1
+
+            out_height = (in_height + 2 * pad_height -
+                          kernel_height) // strides[0] + 1
+            out_width = (in_width + 2 * pad_width -
+                         kernel_width) // strides[1] + 1
         else:
             pad_height, pad_width = 0, 0
             out_height = (in_height - kernel_height) // strides[0] + 1
             out_width = (in_width - kernel_width) // strides[1] + 1
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
-                       strides, (pad_height, pad_width))
-        
+                        strides, (pad_height, pad_width))
+
         col_W = weights.reshape(-1, out_channels)
 
         output = np.dot(col, col_W)
@@ -456,13 +471,14 @@ class Conv2D(Layer):
 
         expected_elements = batch_size * out_height * out_width * out_channels
         actual_elements = output.size
-        
+
         if expected_elements != actual_elements:
             raise ValueError(f"Size mismatch: Expected {expected_elements} elements "
-                           f"({batch_size}×{out_height}×{out_width}×{out_channels}), "
-                           f"but got {actual_elements} elements.")
+                             f"({batch_size}×{out_height}×{out_width}×{out_channels}), "
+                             f"but got {actual_elements} elements.")
 
-        output = output.reshape(batch_size, out_height, out_width, out_channels)
+        output = output.reshape(batch_size, out_height,
+                                out_width, out_channels)
         return output
 
     @staticmethod
@@ -473,12 +489,15 @@ class Conv2D(Layer):
         kernel_height, kernel_width, _, _ = weights.shape
 
         if padding == 'same':
-            out_height_temp = int(np.ceil(float(in_height) / float(strides[0])))
+            out_height_temp = int(
+                np.ceil(float(in_height) / float(strides[0])))
             out_width_temp = int(np.ceil(float(in_width) / float(strides[1])))
-            
-            pad_height_total = int(max(0, (out_height_temp - 1) * strides[0] + kernel_height - in_height))
-            pad_width_total = int(max(0, (out_width_temp - 1) * strides[1] + kernel_width - in_width))
-            
+
+            pad_height_total = int(
+                max(0, (out_height_temp - 1) * strides[0] + kernel_height - in_height))
+            pad_width_total = int(
+                max(0, (out_width_temp - 1) * strides[1] + kernel_width - in_width))
+
             pad_height = pad_height_total // 2
             pad_width = pad_width_total // 2
         else:
@@ -486,20 +505,23 @@ class Conv2D(Layer):
 
         col = im2col_2d(input_data, kernel_height, kernel_width,
                         strides, (pad_height, pad_width))
-        
+
         col_W = weights.reshape(-1, out_channels)
 
-        d_output = output_error.reshape(batch_size * out_height * out_width, -1)
-        
+        d_output = output_error.reshape(
+            batch_size * out_height * out_width, -1)
+
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
-        d_weights = d_weights.reshape(kernel_height, kernel_width, in_channels, out_channels)
+        d_weights = d_weights.reshape(
+            kernel_height, kernel_width, in_channels, out_channels)
         d_col = np.dot(d_output, col_W.T)
 
         d_input = col2im_2d(d_col, input_data.shape, kernel_height,
                             kernel_width, strides, (pad_height, pad_width))
 
         return d_input, d_weights, d_bias
+
 
 class MaxPooling2D(Layer):
     def __init__(self, pool_size: tuple | int, strides: tuple = None, padding: str = 'valid'):
@@ -547,27 +569,32 @@ class MaxPooling2D(Layer):
         batch_size, in_height, in_width, channels = input_data.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) *
+                          strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) *
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, 
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
+        padded_input = np.pad(input_data,
+                              ((0, 0), (pad_height, pad_height),
+                               (pad_width, pad_width), (0, 0)),
+                              mode='constant')
 
-        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
+        out_height = (in_height + 2 * pad_height -
+                      pool_size[0]) // strides[0] + 1
         out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
         output = np.zeros((batch_size, out_height, out_width, channels))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, 
-                                         i * strides[0]:i * strides[0] + pool_size[0],
-                                         j * strides[1]:j * strides[1] + pool_size[1], 
-                                         :]
-                output[:, i, j, :] = np.max(np.max(input_slice, axis=1), axis=1)
+                input_slice = padded_input[:,
+                                           i * strides[0]:i * strides[0] + pool_size[0],
+                                           j * strides[1]:j * strides[1] + pool_size[1],
+                                           :]
+                output[:, i, j, :] = np.max(
+                    np.max(input_slice, axis=1), axis=1)
 
         return output
 
@@ -578,33 +605,37 @@ class MaxPooling2D(Layer):
         _, out_height, out_width, _ = output_error.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) *
+                          strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) *
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
         padded_input = np.pad(input_data,
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
+                              ((0, 0), (pad_height, pad_height),
+                               (pad_width, pad_width), (0, 0)),
+                              mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, 
-                                         i * strides[0]:i * strides[0] + pool_size[0],
-                                         j * strides[1]:j * strides[1] + pool_size[1], 
-                                         :]
-                mask = (input_slice == np.max(np.max(input_slice, axis=1, keepdims=True), 
-                                            axis=2, keepdims=True))
-                
-                d_input[:, 
-                       i * strides[0]:i * strides[0] + pool_size[0],
-                       j * strides[1]:j * strides[1] + pool_size[1], 
-                       :] += output_error[:, i:i+1, j:j+1, :] * mask
+                input_slice = padded_input[:,
+                                           i * strides[0]:i * strides[0] + pool_size[0],
+                                           j * strides[1]:j * strides[1] + pool_size[1],
+                                           :]
+                mask = (input_slice == np.max(np.max(input_slice, axis=1, keepdims=True),
+                                              axis=2, keepdims=True))
+
+                d_input[:,
+                        i * strides[0]:i * strides[0] + pool_size[0],
+                        j * strides[1]:j * strides[1] + pool_size[1],
+                        :] += output_error[:, i:i+1, j:j+1, :] * mask
 
         if padding == 'same':
-            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
+            d_input = d_input[:, pad_height:-
+                              pad_height, pad_width:-pad_width, :]
 
         return d_input
 
@@ -655,17 +686,19 @@ class Conv1D(Layer):
 
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
-            
+
         if self.weights_init == "xavier":
             self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * in_channels)),
-                                         (self.kernel_size, in_channels, self.filters))
+                                           (self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * self.kernel_size)),
-                                         (self.kernel_size, in_channels, self.filters))
+                                           (self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(0, 0.01, (self.kernel_size, in_channels, self.filters))
+            self.weights = self.rng.normal(
+                0, 0.01, (self.kernel_size, in_channels, self.filters))
         else:
-            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            raise ValueError(
+                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
         if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
@@ -707,18 +740,20 @@ class Conv1D(Layer):
         assert in_channels == weights.shape[1], "Number of input channels must match"
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + kernel_length - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          kernel_length - in_length) // 2
         else:
             pad_length = 0
 
-        out_length = (in_length + 2 * pad_length - kernel_length) // strides + 1
+        out_length = (in_length + 2 * pad_length -
+                      kernel_length) // strides + 1
 
         col = im2col_1d(input_data, kernel_length, strides, pad_length)
-        
+
         col_W = weights.reshape(-1, out_channels)
 
         output = np.dot(col, col_W) + bias
-        
+
         output = output.reshape(batch_size, out_length, out_channels)
 
         return output
@@ -731,24 +766,26 @@ class Conv1D(Layer):
         kernel_length, _, _ = weights.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + kernel_length - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          kernel_length - in_length) // 2
         else:
             pad_length = 0
 
         col = im2col_1d(input_data, kernel_length, strides, pad_length)
-        
+
         col_W = weights.reshape(-1, out_channels)
 
         d_output = output_error.reshape(batch_size * out_length, -1)
-        
+
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
-        
+
         d_weights = d_weights.reshape(kernel_length, in_channels, out_channels)
-        
+
         d_col = np.dot(d_output, col_W.T)
 
-        d_input = col2im_1d(d_col, input_data.shape, kernel_length, strides, pad_length)
+        d_input = col2im_1d(d_col, input_data.shape,
+                            kernel_length, strides, pad_length)
 
         return d_input, d_weights, d_bias
 
@@ -789,7 +826,8 @@ class MaxPooling1D(Layer):
         assert len(
             input_data.shape) == 3, f"MaxPooling1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
         self.input = input_data
-        output = self._pool(self.input, self.pool_size, self.strides, self.padding)
+        output = self._pool(self.input, self.pool_size,
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -814,7 +852,8 @@ class MaxPooling1D(Layer):
         batch_size, in_length, channels = input_data.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          pool_size - in_length) // 2
         else:
             pad_length = 0
 
@@ -826,7 +865,8 @@ class MaxPooling1D(Layer):
         output = np.zeros((batch_size, out_length, channels))
 
         for i in range(out_length):
-            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            input_slice = padded_input[:, i *
+                                       strides:i * strides + pool_size, :]
             output[:, i, :] = np.max(input_slice, axis=1)
 
         return output
@@ -838,7 +878,8 @@ class MaxPooling1D(Layer):
         _, out_length, _ = output_error.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          pool_size - in_length) // 2
         else:
             pad_length = 0
 
@@ -848,7 +889,8 @@ class MaxPooling1D(Layer):
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_length):
-            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            input_slice = padded_input[:, i *
+                                       strides:i * strides + pool_size, :]
             mask = (input_slice == np.max(input_slice, axis=1, keepdims=True))
             d_input[:, i * strides:i * strides + pool_size, :] += (
                 output_error[:, i, :][:, np.newaxis, :] * mask
@@ -877,7 +919,7 @@ class AveragePooling2D(Layer):
             input_data.shape) == 4, f"AveragePooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
-                          self.strides, self.padding)
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -902,27 +944,32 @@ class AveragePooling2D(Layer):
         batch_size, in_height, in_width, channels = input_data.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) *
+                          strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) *
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
-        padded_input = np.pad(input_data, 
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
+        padded_input = np.pad(input_data,
+                              ((0, 0), (pad_height, pad_height),
+                               (pad_width, pad_width), (0, 0)),
+                              mode='constant')
 
-        out_height = (in_height + 2 * pad_height - pool_size[0]) // strides[0] + 1
+        out_height = (in_height + 2 * pad_height -
+                      pool_size[0]) // strides[0] + 1
         out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
 
         output = np.zeros((batch_size, out_height, out_width, channels))
 
         for i in range(out_height):
             for j in range(out_width):
-                input_slice = padded_input[:, 
-                                         i * strides[0]:i * strides[0] + pool_size[0],
-                                         j * strides[1]:j * strides[1] + pool_size[1], 
-                                         :]
-                output[:, i, j, :] = np.mean(np.mean(input_slice, axis=1), axis=1)
+                input_slice = padded_input[:,
+                                           i * strides[0]:i * strides[0] + pool_size[0],
+                                           j * strides[1]:j * strides[1] + pool_size[1],
+                                           :]
+                output[:, i, j, :] = np.mean(
+                    np.mean(input_slice, axis=1), axis=1)
 
         return output
 
@@ -933,26 +980,30 @@ class AveragePooling2D(Layer):
         _, out_height, out_width, _ = output_error.shape
 
         if padding == 'same':
-            pad_height = ((in_height - 1) * strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) * strides[1] + pool_size[1] - in_width) // 2
+            pad_height = ((in_height - 1) *
+                          strides[0] + pool_size[0] - in_height) // 2
+            pad_width = ((in_width - 1) *
+                         strides[1] + pool_size[1] - in_width) // 2
         else:
             pad_height, pad_width = 0, 0
 
         padded_input = np.pad(input_data,
-                             ((0, 0), (pad_height, pad_height), (pad_width, pad_width), (0, 0)),
-                             mode='constant')
+                              ((0, 0), (pad_height, pad_height),
+                               (pad_width, pad_width), (0, 0)),
+                              mode='constant')
 
         d_input = np.zeros_like(padded_input)
 
         for i in range(out_height):
             for j in range(out_width):
-                d_input[:, 
-                       i * strides[0]:i * strides[0] + pool_size[0],
-                       j * strides[1]:j * strides[1] + pool_size[1], 
-                       :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
+                d_input[:,
+                        i * strides[0]:i * strides[0] + pool_size[0],
+                        j * strides[1]:j * strides[1] + pool_size[1],
+                        :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
 
         if padding == 'same':
-            d_input = d_input[:, pad_height:-pad_height, pad_width:-pad_width, :]
+            d_input = d_input[:, pad_height:-
+                              pad_height, pad_width:-pad_width, :]
 
         return d_input
 
@@ -970,7 +1021,8 @@ class AveragePooling1D(Layer):
         assert len(
             input_data.shape) == 3, f"AveragePooling1D input must be 3D (batch_size, length, channels), got {input_data.shape}"
         self.input = input_data
-        output = self._pool(self.input, self.pool_size, self.strides, self.padding)
+        output = self._pool(self.input, self.pool_size,
+                            self.strides, self.padding)
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -995,7 +1047,8 @@ class AveragePooling1D(Layer):
         batch_size, in_length, channels = input_data.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          pool_size - in_length) // 2
         else:
             pad_length = 0
 
@@ -1007,7 +1060,8 @@ class AveragePooling1D(Layer):
         output = np.zeros((batch_size, out_length, channels))
 
         for i in range(out_length):
-            input_slice = padded_input[:, i * strides:i * strides + pool_size, :]
+            input_slice = padded_input[:, i *
+                                       strides:i * strides + pool_size, :]
             output[:, i, :] = np.mean(input_slice, axis=1)
 
         return output
@@ -1019,7 +1073,8 @@ class AveragePooling1D(Layer):
         _, out_length, _ = output_error.shape
 
         if padding == 'same':
-            pad_length = ((in_length - 1) * strides + pool_size - in_length) // 2
+            pad_length = ((in_length - 1) * strides +
+                          pool_size - in_length) // 2
         else:
             pad_length = 0
 
@@ -1056,21 +1111,22 @@ class Embedding(Layer):
 
     def initialize_weights(self):
         self.rng = np.random.default_rng(self.random_state)
-        
+
         scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
-        self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
-        
+        self.weights = self.rng.normal(
+            0, scale, (self.input_dim, self.output_dim))
+
         self.weights[0] = np.zeros(self.output_dim)
-        
+
         for idx in [1, 2, 3]:  # UNK, SOS, EOS
-            special_vector = self.rng.normal(0, scale / 2, self.output_dim)  
+            special_vector = self.rng.normal(0, scale / 2, self.output_dim)
             self.weights[idx] = special_vector
-        
+
         epsilon = 1e-8
         norms = np.linalg.norm(self.weights[4:], axis=1, keepdims=True)
         norms = np.maximum(norms, epsilon)
         self.weights[4:] = self.weights[4:] / norms * np.sqrt(self.output_dim)
-        
+
         self.bias = np.zeros((1, 1, self.output_dim))
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
@@ -1083,47 +1139,47 @@ class Embedding(Layer):
         self.clipped_input = input_data.copy()
 
         output = self.weights[input_data]
-        
+
         output_norm = np.linalg.norm(output, axis=-1, keepdims=True)
         output = output / np.maximum(output_norm, 1e-7)
-        
+
         output = output + self.bias
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         batch_size, seq_length, _ = output_error.shape
         grad_weights = np.zeros_like(self.weights)
-        
+
         seq_length = min(seq_length, self.clipped_input.shape[1])
         input_indices = self.clipped_input[:batch_size, :seq_length]
         flattened_output = output_error[:batch_size, :seq_length]
-        
+
         mask = (input_indices != 0)
-        
+
         token_counts = np.bincount(
-            input_indices[mask].flatten(), 
+            input_indices[mask].flatten(),
             minlength=self.input_dim
         )
         token_counts = np.maximum(token_counts, 1)
-        
+
         for b in range(batch_size):
             grad_batch = flattened_output[b]
             indices_batch = input_indices[b]
-            
+
             valid_indices = indices_batch != 0
             grad_batch = grad_batch[valid_indices]
             indices_batch = indices_batch[valid_indices]
-            
+
             grad_batch = grad_batch / token_counts[indices_batch, np.newaxis]
             np.add.at(grad_weights, indices_batch, grad_batch)
-        
+
         grad_norm = np.linalg.norm(grad_weights[1:])
         if grad_norm > 1.0:
             grad_weights[1:] = grad_weights[1:] / grad_norm
-        
+
         self.d_weights = grad_weights
         self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
-        
+
         return np.zeros((batch_size, seq_length))
 
     def get_config(self) -> dict:
@@ -1158,7 +1214,7 @@ class BatchNormalization(Layer):
         self.epsilon = epsilon
         self.running_mean = None
         self.running_var = None
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -1176,16 +1232,18 @@ class BatchNormalization(Layer):
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         if self.gamma is None:
             self.initialize_weights(input_data.shape[1:])
-            
+
         input_data = np.clip(input_data, -10, 10)
 
         if training:
             self.batch_mean = np.mean(input_data, axis=0)
             self.batch_var = np.var(input_data, axis=0) + self.epsilon
-            
-            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * self.batch_mean
-            self.running_var = self.momentum * self.running_var + (1 - self.momentum) * self.batch_var
-            
+
+            self.running_mean = self.momentum * self.running_mean + \
+                (1 - self.momentum) * self.batch_mean
+            self.running_var = self.momentum * self.running_var + \
+                (1 - self.momentum) * self.batch_var
+
             mean = self.batch_mean
             var = self.batch_var
         else:
@@ -1196,27 +1254,27 @@ class BatchNormalization(Layer):
         self.std = np.sqrt(var + self.epsilon)
         self.input_centered = input_data - mean
         self.input_normalized = self.input_centered / self.std
-        
+
         return self.gamma * self.input_normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         N = output_error.shape[0]
-        
+
         self.d_gamma = np.sum(output_error * self.input_normalized, axis=0)
         self.d_beta = np.sum(output_error, axis=0)
-        
+
         d_normalized = output_error * self.gamma
-        
-        d_var = np.sum(d_normalized * self.input_centered * -0.5 * 
-                      (self.batch_var + self.epsilon) ** (-1.5), axis=0)
-        
+
+        d_var = np.sum(d_normalized * self.input_centered * -0.5 *
+                       (self.batch_var + self.epsilon) ** (-1.5), axis=0)
+
         d_mean = np.sum(d_normalized * -1/self.std, axis=0) + \
-                 d_var * np.mean(-2 * self.input_centered, axis=0)
-        
+            d_var * np.mean(-2 * self.input_centered, axis=0)
+
         d_input = d_normalized / self.std + \
-                 d_var * 2 * self.input_centered / N + \
-                 d_mean / N
-        
+            d_var * 2 * self.input_centered / N + \
+            d_mean / N
+
         return d_input
 
     def get_config(self) -> dict:
@@ -1281,7 +1339,7 @@ class LayerNormalization(Layer):
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_shape = self.input_shape
-        
+
         if len(input_shape) == 3:
             output_error = output_error.reshape(-1, input_shape[-1])
             x_norm = self.x_norm.reshape(-1, input_shape[-1])
@@ -1298,7 +1356,7 @@ class LayerNormalization(Layer):
         dx_norm = output_error * self.gamma
 
         dx = (1.0 / std) * (
-            dx_norm - 
+            dx_norm -
             np.mean(dx_norm, axis=-1, keepdims=True) -
             x_norm * np.mean(dx_norm * x_norm, axis=-1, keepdims=True)
         )
@@ -1478,7 +1536,8 @@ class TextVectorization(Layer):
 
     @staticmethod
     def from_config(config: dict):
-        layer = TextVectorization(config['max_tokens'], config['output_mode'], config['output_sequence_length'])
+        layer = TextVectorization(
+            config['max_tokens'], config['output_mode'], config['output_sequence_length'])
         layer.vocabulary = config['vocabulary']
         layer.word_index = config['word_index']
         return layer
@@ -1516,10 +1575,10 @@ class LSTMCell(Layer):
     def __init__(self, units: int, random_state: int | None = None):
         self.units = units
         self.random_state = random_state
-        
+
         self.rng = np.random.default_rng(
             random_state if random_state is not None else int(time.time_ns()))
-        
+
         self.grad_stats = {'forward': {}, 'backward': {}}
 
         self.Wf = None
@@ -1561,7 +1620,7 @@ class LSTMCell(Layer):
         self.Wo = self.orthogonal_init((input_dim, self.units))
         self.Uo = self.orthogonal_init((self.units, self.units))
         self.bo = np.zeros((1, self.units))
-        
+
         self.l2_reg = 0.01
 
         # Initialize gradients
@@ -1584,7 +1643,7 @@ class LSTMCell(Layer):
             self.dWo = np.zeros_like(self.Wo)
             self.dUo = np.zeros_like(self.Uo)
             self.dbo = np.zeros_like(self.bo)
-        
+
     def forward(self, x_t: np.ndarray, h_prev: np.ndarray, c_prev: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.Wf is None:
             self.initialize_weights(x_t.shape[1])
@@ -1593,22 +1652,26 @@ class LSTMCell(Layer):
         self.h_prev = h_prev
         self.c_prev = c_prev
 
-        self.f_gate_input = np.dot(x_t, self.Wf) + np.dot(h_prev, self.Uf) + self.bf
+        self.f_gate_input = np.dot(x_t, self.Wf) + \
+            np.dot(h_prev, self.Uf) + self.bf
         self.f_t = self.sigmoid(self.f_gate_input)
 
         # Input gate
-        self.i_gate_input = np.dot(x_t, self.Wi) + np.dot(h_prev, self.Ui) + self.bi
+        self.i_gate_input = np.dot(x_t, self.Wi) + \
+            np.dot(h_prev, self.Ui) + self.bi
         self.i_t = self.sigmoid(self.i_gate_input)
 
         # Cell gate
-        self.c_gate_input = np.dot(x_t, self.Wc) + np.dot(h_prev, self.Uc) + self.bc
+        self.c_gate_input = np.dot(x_t, self.Wc) + \
+            np.dot(h_prev, self.Uc) + self.bc
         self.c_tilde = np.tanh(self.c_gate_input)
-        
+
         # Cell state
         self.c_t = self.f_t * c_prev + self.i_t * self.c_tilde
 
         # Output gate
-        self.o_gate_input = np.dot(x_t, self.Wo) + np.dot(h_prev, self.Uo) + self.bo
+        self.o_gate_input = np.dot(x_t, self.Wo) + \
+            np.dot(h_prev, self.Uo) + self.bo
         self.o_t = self.sigmoid(self.o_gate_input)
 
         # Hidden state
@@ -1653,7 +1716,7 @@ class LSTMCell(Layer):
         self.dWo = np.dot(self.x_t.T, do_input)
         self.dUo = np.dot(self.h_prev.T, do_input)
         self.dbo = np.sum(do_input, axis=0, keepdims=True)
-        
+
         # Cell state gradients
         dc_prev = dc * self.f_t
         df = dc * self.c_prev
@@ -1700,7 +1763,7 @@ class LSTMCell(Layer):
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
-    
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
@@ -1768,9 +1831,10 @@ class LSTM(Layer):
         return f'LSTM(units={self.units}, return_sequences={self.return_sequences}, return_state={self.return_state}, random_state={self.random_state}, clip_value={self.clip_value})'
 
     def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray | tuple[
-        np.ndarray, np.ndarray, np.ndarray]:
+            np.ndarray, np.ndarray, np.ndarray]:
         if x.ndim != 3:
-            raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
+            raise ValueError(
+                f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
         if not self.initialized:
             self.cell = LSTMCell(self.units)
             self.initialized = True
@@ -1843,18 +1907,19 @@ class LSTM(Layer):
                                  np.sum(self.cell.dWo ** 2) + np.sum(self.cell.dUo ** 2) + np.sum(self.cell.dbo ** 2))
 
         global_norm = np.sqrt(squared_norm_sum)
-        
+
         self.cell.dWf += self.cell.l2_reg * self.cell.Wf
         self.cell.dWi += self.cell.l2_reg * self.cell.Wi
         self.cell.dWc += self.cell.l2_reg * self.cell.Wc
         self.cell.dWo += self.cell.l2_reg * self.cell.Wo
-        
+
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
         if scaling_factor < 1.0:
             dx *= scaling_factor
             for grad in self.cell.__dict__:
                 if grad.startswith('d'):
-                    setattr(self.cell, grad, getattr(self.cell, grad) * scaling_factor)
+                    setattr(self.cell, grad, getattr(
+                        self.cell, grad) * scaling_factor)
 
         return dx
 
@@ -1916,7 +1981,8 @@ class Bidirectional(Layer):
 
                 backward_seq = backward_seq[:, ::-1, :]
 
-                combined_seq = np.concatenate([forward_seq, backward_seq], axis=-1)
+                combined_seq = np.concatenate(
+                    [forward_seq, backward_seq], axis=-1)
                 combined_h = np.concatenate([forward_h, backward_h], axis=-1)
                 combined_c = np.concatenate([forward_c, backward_c], axis=-1)
 
@@ -2012,7 +2078,7 @@ class GRUCell:
         self.Ur = None
         self.br = None
 
-        # Update gate weights 
+        # Update gate weights
         self.Wz = None
         self.Uz = None
         self.bz = None
@@ -2077,15 +2143,18 @@ class GRUCell:
         self.h_prev = h_prev
 
         # Reset gate
-        self.r_gate_input = np.dot(x_t, self.Wr) + np.dot(h_prev, self.Ur) + self.br
+        self.r_gate_input = np.dot(x_t, self.Wr) + \
+            np.dot(h_prev, self.Ur) + self.br
         self.r_t = self.sigmoid(self.r_gate_input)
 
         # Update gate
-        self.z_gate_input = np.dot(x_t, self.Wz) + np.dot(h_prev, self.Uz) + self.bz
+        self.z_gate_input = np.dot(x_t, self.Wz) + \
+            np.dot(h_prev, self.Uz) + self.bz
         self.z_t = self.sigmoid(self.z_gate_input)
 
         # Candidate state
-        self.h_candidate_input = np.dot(x_t, self.Wh) + np.dot(self.r_t * h_prev, self.Uh) + self.bh
+        self.h_candidate_input = np.dot(
+            x_t, self.Wh) + np.dot(self.r_t * h_prev, self.Uh) + self.bh
         self.h_candidate = np.tanh(self.h_candidate_input)
 
         # New hidden state
@@ -2166,7 +2235,7 @@ class GRUCell:
     def sigmoid(self, x: np.ndarray) -> np.ndarray:
         result = 0.5 * (1 + np.tanh(x * 0.5))
         return np.clip(result, EPSILON_SIGMOID, 1 - EPSILON_SIGMOID)
-    
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
@@ -2188,7 +2257,8 @@ class GRUCell:
 
     @staticmethod
     def from_config(config: dict) -> 'GRUCell':
-        cell = GRUCell(config['units'], config['random_state'], config.get('clip_value', 5.0))
+        cell = GRUCell(config['units'], config['random_state'],
+                       config.get('clip_value', 5.0))
         if config.get('weights'):
             w = config['weights']
             if w['Wr'] is not None:
@@ -2226,7 +2296,8 @@ class GRU(Layer):
 
     def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray:
         if x.ndim != 3:
-            raise ValueError(f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
+            raise ValueError(
+                f"Expected 3D input (batch_size, timesteps, features), got shape {x.shape}")
         self.input_shape = x.shape
         batch_size, timesteps, input_dim = x.shape
 
@@ -2290,7 +2361,8 @@ class GRU(Layer):
             dx *= scaling_factor
             for grad in self.cell.__dict__:
                 if grad.startswith('d'):
-                    setattr(self.cell, grad, getattr(self.cell, grad) * scaling_factor)
+                    setattr(self.cell, grad, getattr(
+                        self.cell, grad) * scaling_factor)
 
         return dx
 
@@ -2321,9 +2393,11 @@ class GRU(Layer):
 class Attention(Layer):
     def __init__(self, use_scale: bool = True, score_mode: str = "dot", return_sequences: bool = False):
         super().__init__()
-        valid_score_modes = ["dot"]  # for now cuz I'm too lazy to implement the others
+        # for now cuz I'm too lazy to implement the others
+        valid_score_modes = ["dot"]
         if score_mode not in valid_score_modes:
-            raise ValueError(f"score_mode must be one of {valid_score_modes}, got {score_mode}")
+            raise ValueError(
+                f"score_mode must be one of {valid_score_modes}, got {score_mode}")
         self.use_scale = use_scale
         self.score_mode = score_mode
         self.return_sequences = return_sequences
@@ -2376,7 +2450,8 @@ class Attention(Layer):
             d_weights = np.dot(d_context, input_data[i].T)
 
             d_scores = d_weights * attention_weights[i]
-            d_scores -= attention_weights[i] * np.sum(d_weights * attention_weights[i], axis=-1, keepdims=True)
+            d_scores -= attention_weights[i] * np.sum(
+                d_weights * attention_weights[i], axis=-1, keepdims=True)
 
             if self.use_scale:
                 d_scores *= 1.0 / np.sqrt(features)
@@ -2416,19 +2491,21 @@ class Attention(Layer):
 class UpSampling2D(Layer):
     def __init__(self, size=(2, 2), interpolation="nearest", **kwargs):
         super().__init__()
-        self.size = tuple(size) if isinstance(size, (list, tuple)) else (size, size)
+        self.size = tuple(size) if isinstance(
+            size, (list, tuple)) else (size, size)
         self.interpolation = interpolation
-        
+
         if not isinstance(self.size, tuple):
             raise TypeError('Size must be a tuple or list of 2 integers.')
         if len(self.size) != 2:
             raise ValueError('Size must have exactly 2 elements.')
         if not all(isinstance(s, (int, np.integer)) and s > 0 for s in self.size):
             raise ValueError('Size elements must be positive integers.')
-        
+
         if interpolation not in ['nearest', 'bilinear', 'bicubic']:
-            raise ValueError('interpolation must be one of "nearest", "bilinear", or "bicubic"')
-            
+            raise ValueError(
+                'interpolation must be one of "nearest", "bilinear", or "bicubic"')
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -2437,37 +2514,41 @@ class UpSampling2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input = input_data
-        
+
         batch_size, height, width, channels = input_data.shape
         height_factor, width_factor = self.size
-        
+
         if self.interpolation == 'nearest':
-            output = np.repeat(np.repeat(input_data, height_factor, axis=1), width_factor, axis=2)
-                                
+            output = np.repeat(
+                np.repeat(input_data, height_factor, axis=1), width_factor, axis=2)
+
         elif self.interpolation in ['bilinear', 'bicubic']:
             output_height = height * height_factor
             output_width = width * width_factor
-            
+
             y = np.linspace(0, height - 1, output_height)
             x = np.linspace(0, width - 1, output_width)
             x_grid, y_grid = np.meshgrid(x, y)
-            
+
             y0 = np.floor(y_grid).astype(int)
             x0 = np.floor(x_grid).astype(int)
             y1 = np.minimum(y0 + 1, height - 1)
             x1 = np.minimum(x0 + 1, width - 1)
-            
+
             wy = y_grid - y0
             wx = x_grid - x0
-            
+
             wy = wy[:, :, np.newaxis]
             wx = wx[:, :, np.newaxis]
-            
-            output = np.zeros((batch_size, output_height, output_width, channels), dtype=input_data.dtype)
-            
+
+            output = np.zeros((batch_size, output_height,
+                              output_width, channels), dtype=input_data.dtype)
+
             for b in range(batch_size):
-                top = (1 - wx) * input_data[b, y0, x0] + wx * input_data[b, y0, x1]
-                bottom = (1 - wx) * input_data[b, y1, x0] + wx * input_data[b, y1, x1]
+                top = (1 - wx) * input_data[b, y0,
+                                            x0] + wx * input_data[b, y0, x1]
+                bottom = (1 - wx) * \
+                    input_data[b, y1, x0] + wx * input_data[b, y1, x1]
                 output[b] = (1 - wy) * top + wy * bottom
 
         return output
@@ -2475,39 +2556,43 @@ class UpSampling2D(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         batch_size, height, width, channels = self.input.shape
         height_factor, width_factor = self.size
-        
+
         if self.interpolation == 'nearest':
             output_error_reshaped = output_error.reshape(
-                batch_size, 
+                batch_size,
                 height, height_factor,
                 width, width_factor,
                 channels
             )
             input_error = output_error_reshaped.sum(axis=(2, 4))
-                            
+
         else:  # bilinear
             output_height = height * height_factor
             output_width = width * width_factor
-            
+
             y = np.linspace(0, height - 1, output_height)
             x = np.linspace(0, width - 1, output_width)
             x_grid, y_grid = np.meshgrid(x, y)
-            
+
             y0 = np.floor(y_grid).astype(int)
             x0 = np.floor(x_grid).astype(int)
             y1 = np.minimum(y0 + 1, height - 1)
             x1 = np.minimum(x0 + 1, width - 1)
-            
+
             wy = (y_grid - y0)[:, :, np.newaxis]
             wx = (x_grid - x0)[:, :, np.newaxis]
-            
+
             input_error = np.zeros_like(self.input)
-            
+
             for b in range(batch_size):
-                input_error[b, y0, x0] += ((1 - wy) * (1 - wx) * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y0, x1] += ((1 - wy) * wx * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y1, x0] += (wy * (1 - wx) * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y1, x1] += (wy * wx * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y0, x0] += ((1 - wy) * (1 - wx)
+                                           * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y0, x1] += ((1 - wy) *
+                                           wx * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y1, x0] += (wy * (1 - wx)
+                                           * output_error[b]).sum(axis=(0, 1))
+                input_error[b, y1, x1] += (wy * wx *
+                                           output_error[b]).sum(axis=(0, 1))
 
         return input_error
 
@@ -2559,10 +2644,11 @@ class MultiHeadAttention(Layer):
         self.key_dense: Dense = None
         self.value_dense: Dense = None
         self.output_dense: Dense = None
-        self.dropout: Dropout = Dropout(dropout_rate, random_state=random_state) if dropout_rate > 0 else None
-        
+        self.dropout: Dropout = Dropout(
+            dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+
         self.scale = 1.0 / np.sqrt(self.key_dim)
-        
+
         self.attention_weights: np.ndarray | None = None
 
         for key, value in kwargs.items():
@@ -2578,13 +2664,17 @@ class MultiHeadAttention(Layer):
             bias_init=self.bias_initializer if self.use_bias else None,
             random_state=self.random_state
         )
+
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
         embedding_dim: int = input_shape[-1]
 
         if self.query_dense is None:
-            self.query_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
-            self.key_dense = self.build_dense_layer(self.num_heads * self.key_dim, input_shape)
-            self.value_dense = self.build_dense_layer(self.num_heads * self.value_dim, input_shape)
+            self.query_dense = self.build_dense_layer(
+                self.num_heads * self.key_dim, input_shape)
+            self.key_dense = self.build_dense_layer(
+                self.num_heads * self.key_dim, input_shape)
+            self.value_dense = self.build_dense_layer(
+                self.num_heads * self.value_dim, input_shape)
 
         output_dim: int = self.output_shape if self.output_shape else embedding_dim
         if self.output_dense is None:
@@ -2594,35 +2684,39 @@ class MultiHeadAttention(Layer):
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
 
-    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray, 
-                                        value: np.ndarray, mask: np.ndarray = None,
-                                        training: bool = True) -> np.ndarray:
-        
+    def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray,
+                                      value: np.ndarray, mask: np.ndarray = None,
+                                      training: bool = True) -> np.ndarray:
+
         if self.normalize_attention:
-            query_norm = np.sqrt(np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
-            key_norm = np.sqrt(np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
-            
+            query_norm = np.sqrt(
+                np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
+            key_norm = np.sqrt(
+                np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
+
             query_normalized = query / query_norm
             key_normalized = key / key_norm
-        
-            matmul_qk = np.matmul(query_normalized, np.transpose(key_normalized, (0, 1, 3, 2)))
+
+            matmul_qk = np.matmul(query_normalized, np.transpose(
+                key_normalized, (0, 1, 3, 2)))
         else:
             matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-            
+
         d_k = key.shape[-1]
-        
+
         scaling_factor = np.sqrt(d_k)
         scaled_attention_logits = matmul_qk / scaling_factor
-        
+
         MASKING_VALUE = -1e9
         if mask is not None:
             scaled_attention_logits += (mask * MASKING_VALUE)
-        
-        attention_weights = self._softmax_with_mask(scaled_attention_logits, mask)
+
+        attention_weights = self._softmax_with_mask(
+            scaled_attention_logits, mask)
         self.attention_weights = attention_weights
-        
+
         output = np.matmul(attention_weights, value)
-        
+
         return output
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
@@ -2634,10 +2728,10 @@ class MultiHeadAttention(Layer):
         else:
             max_x = np.max(x, axis=-1, keepdims=True)
             exp_x = np.exp(x - max_x)
-        
+
         sum_x = np.sum(exp_x, axis=-1, keepdims=True)
         sum_x = np.maximum(sum_x, 1e-6)
-        
+
         return exp_x / sum_x
 
     def forward_pass(self, inputs: np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray], mask: np.ndarray = None, training: bool = True) -> np.ndarray:
@@ -2649,35 +2743,38 @@ class MultiHeadAttention(Layer):
             self.is_cross_attention = False
 
         batch_size = query.shape[0]
-        
+
         self.query_input = query
         self.key_input = key
         self.value_input = value
-        
+
         if self.query_dense is None:
             self.initialize_weights(query.shape)
-            
+
         Q = self.query_dense.forward_pass(query)
         K = self.key_dense.forward_pass(key)
         V = self.value_dense.forward_pass(value)
-        
-        self.reshaped_query = self._reshape_for_attention(Q, batch_size, query.shape[1])
-        
-        self.reshaped_key = self._reshape_for_attention(K, batch_size, key.shape[1])
-        self.reshaped_value = self._reshape_for_attention(V, batch_size, value.shape[1])
-        
+
+        self.reshaped_query = self._reshape_for_attention(
+            Q, batch_size, query.shape[1])
+
+        self.reshaped_key = self._reshape_for_attention(
+            K, batch_size, key.shape[1])
+        self.reshaped_value = self._reshape_for_attention(
+            V, batch_size, value.shape[1])
+
         scaled_attention = self._scaled_dot_product_attention(
-            self.reshaped_query, 
-            self.reshaped_key, 
-            self.reshaped_value, 
-            mask, 
+            self.reshaped_query,
+            self.reshaped_key,
+            self.reshaped_value,
+            mask,
             training
         )
-        
+
         scaled_attention = np.transpose(scaled_attention, (0, 2, 1, 3))
-        concat_attention = np.reshape(scaled_attention, 
-                                    (batch_size, -1, self.num_heads * self.value_dim))
-        
+        concat_attention = np.reshape(scaled_attention,
+                                      (batch_size, -1, self.num_heads * self.value_dim))
+
         output = self.output_dense.forward_pass(concat_attention)
         return output
 
@@ -2685,39 +2782,45 @@ class MultiHeadAttention(Layer):
         batch_size = output_error.shape[0]
         query_seq_length = output_error.shape[1]
         key_value_seq_length = self.reshaped_value.shape[2]
-        
-        d_attention_output = np.reshape(output_error, 
-            (batch_size, query_seq_length, self.num_heads, -1))
+
+        d_attention_output = np.reshape(output_error,
+                                        (batch_size, query_seq_length, self.num_heads, -1))
         d_attention_output = normalize_gradient(d_attention_output)
         d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
-        
-        d_attention = np.matmul(d_attention_output, np.transpose(self.reshaped_value, (0, 1, 3, 2)))
+
+        d_attention = np.matmul(d_attention_output, np.transpose(
+            self.reshaped_value, (0, 1, 3, 2)))
         attention_probs = self.attention_weights
         dot = np.sum(d_attention * attention_probs, axis=-1, keepdims=True)
         d_attention_probs = d_attention - dot
         d_attention_probs = d_attention_probs * attention_probs
-        
-        d_values = np.matmul(attention_probs.transpose(0, 1, 3, 2), d_attention_output)
+
+        d_values = np.matmul(attention_probs.transpose(
+            0, 1, 3, 2), d_attention_output)
         d_query = np.matmul(d_attention_probs, self.reshaped_key)
-        d_key = np.matmul(d_attention_probs.transpose(0, 1, 3, 2), self.reshaped_query)
-        
+        d_key = np.matmul(d_attention_probs.transpose(
+            0, 1, 3, 2), self.reshaped_query)
+
         d_values = normalize_gradient(d_values)
         d_query = normalize_gradient(d_query)
         d_key = normalize_gradient(d_key)
-        
+
         d_query = np.transpose(d_query, (0, 2, 1, 3))
         d_key = np.transpose(d_key, (0, 2, 1, 3))
         d_values = np.transpose(d_values, (0, 2, 1, 3))
-        
+
         final_dim = self.num_heads * self.key_dim
-        d_query = np.reshape(d_query, (batch_size, query_seq_length, final_dim))
-        d_key = np.reshape(d_key, (batch_size, key_value_seq_length, final_dim))
-        d_values = np.reshape(d_values, (batch_size, key_value_seq_length, final_dim))
-        
+        d_query = np.reshape(
+            d_query, (batch_size, query_seq_length, final_dim))
+        d_key = np.reshape(
+            d_key, (batch_size, key_value_seq_length, final_dim))
+        d_values = np.reshape(
+            d_values, (batch_size, key_value_seq_length, final_dim))
+
         d_query = self.query_dense.backward_pass(d_query)
         d_key = self.key_dense.backward_pass(d_key)
         d_value = self.value_dense.backward_pass(d_values)
-        
+
         if self.is_cross_attention:
             return d_query, d_key, d_value
         return d_query
@@ -2779,100 +2882,106 @@ class PositionalEncoding(Layer):
         self.scale_embeddings = scale_embeddings
         self.trainable = trainable
         self.random_state = random_state
-        
+
         self.current_step = 0
         self.current_scale = initial_scale
-        
-        self.base_scale_factor = 1.0 if not scale_embeddings else 1.0 / np.sqrt(embedding_dim)
-        
+
+        self.base_scale_factor = 1.0 if not scale_embeddings else 1.0 / \
+            np.sqrt(embedding_dim)
+
         if trainable:
             self.rng = np.random.default_rng(random_state)
             self.initialize_weights()
         else:
             self._build_sinusoidal_encoding()
-            
+
         for key, value in kwargs.items():
             setattr(self, key, value)
-    
+
     def _build_sinusoidal_encoding(self) -> None:
         position = np.arange(self.max_sequence_length)[:, np.newaxis]
-        
+
         div_term = np.power(
             10000.0,
-            np.arange(0, self.embedding_dim, 2, dtype=np.float32) / self.embedding_dim
+            np.arange(0, self.embedding_dim, 2, dtype=np.float32) /
+            self.embedding_dim
         )
-        
-        pe = np.zeros((self.max_sequence_length, self.embedding_dim), dtype=np.float32)
+
+        pe = np.zeros((self.max_sequence_length,
+                      self.embedding_dim), dtype=np.float32)
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
-        
+
         self.weights = pe[np.newaxis, :, :]
         self.d_weights = np.zeros_like(self.weights)
-    
+
     def initialize_weights(self) -> None:
         if self.trainable:
             self._build_sinusoidal_encoding()
-            
+
             noise = self.rng.normal(
-                0, 
-                0.01, 
+                0,
+                0.01,
                 self.weights.shape
             )
             self.weights = self.weights + noise
             self.d_weights = np.zeros_like(self.weights)
-    
+
     def get_warmup_scale(self) -> float:
         if self.current_step >= self.warmup_steps:
             return self.final_scale
-        
+
         progress = self.current_step / self.warmup_steps
         return self.initial_scale + (self.final_scale - self.initial_scale) * progress
-    
+
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         batch_size, seq_len, _ = input_data.shape
-        
+
         if seq_len > self.max_sequence_length:
-            raise ValueError(f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}")
-        
-        input_norm = np.sqrt(np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
+            raise ValueError(
+                f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}")
+
+        input_norm = np.sqrt(
+            np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
         normalized_input = input_data / input_norm
-        
+
         pos_encoding = self.weights[:, :seq_len, :]
         if batch_size > 1:
             pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
-        
+
         if self.trainable:
             self.current_scale = self.get_warmup_scale()
         else:
             self.current_scale = self.final_scale
-            
+
         effective_scale = self.current_scale * self.base_scale_factor
-        
+
         scaled_pe = pos_encoding * effective_scale
         output = normalized_input + scaled_pe
-        
+
         self.metadata = {
             'step': self.current_step,
             'scale': self.current_scale,
             'effective_scale': effective_scale,
             'embedding_contribution': np.mean(np.abs(scaled_pe)) / np.mean(np.abs(normalized_input))
         }
-        
+
         return output
-    
+
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.trainable:
             _, seq_len, _ = output_error.shape
-            
+
             effective_scale = self.current_scale * self.base_scale_factor
             scaled_error = output_error * effective_scale
-            
-            self.d_weights[:, :seq_len, :] += np.sum(scaled_error, axis=0, keepdims=True)
-            
+
+            self.d_weights[:, :seq_len,
+                           :] += np.sum(scaled_error, axis=0, keepdims=True)
+
             self.current_step += 1
-        
+
         return output_error
-    
+
     def get_config(self) -> dict:
         return {
             'max_sequence_length': self.max_sequence_length,
@@ -2886,7 +2995,7 @@ class PositionalEncoding(Layer):
             'current_step': self.current_step,
             'current_scale': self.current_scale
         }
-    
+
     def __str__(self) -> str:
         return (
             f'PositionalEncodingWithWarmup('
@@ -2928,40 +3037,40 @@ class FeedForward(Layer):
             bias_init=bias_initializer,
             random_state=random_state
         )
-        
+
         self.dense2 = Dense(
             units=d_model,
             weights_init=output_initializer,
             bias_init=bias_initializer,
             random_state=random_state
         )
-        
+
         self.activation = Activation.from_name(activation)
         self.dropout = Dropout(dropout_rate, random_state=random_state)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
-            
+
     def __str__(self) -> str:
         return f'FeedForward(d_ff={self.d_ff}, d_model={self.d_model})'
-        
+
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         x = self.dense1.forward_pass(input_data)
         x = self.activation.forward_pass(x)
-        
+
         if training:
             x = self.dropout.forward_pass(x, training=True)
-            
+
         x = self.dense2.forward_pass(x)
         return x
-        
+
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         dx = self.dense2.backward_pass(output_error)
         dx = self.dropout.backward_pass(dx)
         dx = self.activation.backward_pass(dx)
         dx = self.dense1.backward_pass(dx)
         return dx
-        
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
@@ -2973,7 +3082,7 @@ class FeedForward(Layer):
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
-        
+
     @staticmethod
     def from_config(config: dict) -> "FeedForward":
         return FeedForward(
@@ -3007,75 +3116,78 @@ class AddNorm(Layer):
         self.grad_scale = grad_scale
         self.warmup_steps = warmup_steps
         self.random_state = random_state
-        
+
         self.step = 0
         self.gamma = None
         self.beta = None
         self.d_gamma = None
         self.d_beta = None
-        
+
         self.grad_ema = None
         self.grad_emv = None
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
         feature_shape = input_shape[-1]
         rng = np.random.default_rng(self.random_state)
-        
-        self.gamma = 1.0 + self.gamma_init_std * rng.normal(0, 1, (1, 1, feature_shape))
-        self.beta = self.beta_init_std * rng.normal(0, 1, (1, 1, feature_shape))
-        
+
+        self.gamma = 1.0 + self.gamma_init_std * \
+            rng.normal(0, 1, (1, 1, feature_shape))
+        self.beta = self.beta_init_std * \
+            rng.normal(0, 1, (1, 1, feature_shape))
+
         self.d_gamma = np.zeros_like(self.gamma)
         self.d_beta = np.zeros_like(self.beta)
-        
+
         self.grad_ema = np.zeros_like(self.gamma)
         self.grad_emv = np.ones_like(self.gamma)
-        
+
     def get_warmup_factor(self) -> float:
         return min(1.0, (self.step + 1) / self.warmup_steps)
-        
+
     def update_gradient_stats(self, grad: np.ndarray) -> None:
         if self.grad_ema is None:
             return
-            
+
         beta1, beta2 = 0.9, 0.999  # Adam like momentum and variance
-        
+
         self.grad_ema = beta1 * self.grad_ema + (1 - beta1) * grad
-        
+
         self.grad_emv = beta2 * self.grad_emv + (1 - beta2) * (grad ** 2)
-        
+
     def normalize_gradients(self, grad: np.ndarray) -> np.ndarray:
         """Normalize gradients using running statistics"""
         if self.grad_emv is None:
             return grad
-            
+
         scale = np.sqrt(self.grad_emv) + self.epsilon
-        
+
         warmup = self.get_warmup_factor()
-        
+
         normalized = grad / scale * warmup
         return np.clip(normalized, -self.grad_clip, self.grad_clip)
-        
+
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
         x, residual = inputs
         self.residual = residual
-        
+
         combined = x + residual
-        
+
         if self.gamma is None:
             self.initialize_weights(combined.shape)
-        
+
         self.mean = np.mean(combined, axis=-1, keepdims=True)
-        self.var = np.var(combined, axis=-1, keepdims=True, ddof=1) + self.epsilon
-        
+        self.var = np.var(combined, axis=-1, keepdims=True,
+                          ddof=1) + self.epsilon
+
         std = np.sqrt(self.var)
         self.normalized = (combined - self.mean) / std
-        
+
         self.std = std
         self.output_before_gamma = self.normalized
-        
+
         return self.gamma * self.normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -3084,34 +3196,36 @@ class AddNorm(Layer):
         N = F
 
         x_minus_mean = self.normalized * self.std
-        
+
         d_gamma = np.sum(dY * self.normalized, axis=(0, 1), keepdims=True)
         d_beta = np.sum(dY, axis=(0, 1), keepdims=True)
 
         d_normalized = dY * self.gamma
 
-        d_var = np.sum(d_normalized * x_minus_mean * (-0.5) / (self.std**3), axis=-1, keepdims=True)
-        
-        d_mean = np.sum(d_normalized * (-1.0 / self.std), axis=-1, keepdims=True) \
-                + d_var * np.mean(-2.0 * x_minus_mean, axis=-1, keepdims=True)
+        d_var = np.sum(d_normalized * x_minus_mean * (-0.5) /
+                       (self.std**3), axis=-1, keepdims=True)
 
-        dx = (d_normalized / self.std) + (d_var * 2.0 * x_minus_mean / N) + (d_mean / N)
+        d_mean = np.sum(d_normalized * (-1.0 / self.std), axis=-1, keepdims=True) \
+            + d_var * np.mean(-2.0 * x_minus_mean, axis=-1, keepdims=True)
+
+        dx = (d_normalized / self.std) + \
+            (d_var * 2.0 * x_minus_mean / N) + (d_mean / N)
 
         self.d_gamma = d_gamma
         self.d_beta = d_beta
 
         return dx, dx
-        
+
     def __str__(self) -> str:
         return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
-        
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
             'epsilon': self.epsilon,
             'random_state': self.random_state
         }
-        
+
     @staticmethod
     def from_config(config: dict) -> "AddNorm":
         return AddNorm(
@@ -3156,7 +3270,7 @@ class TransformerEncoderLayer(Layer):
             bias_initializer=bias_initializer,
             random_state=random_state
         )
-        
+
         self.ffn = FeedForward(
             d_ff=d_ff,
             d_model=d_model,
@@ -3166,10 +3280,11 @@ class TransformerEncoderLayer(Layer):
             bias_initializer=bias_initializer,
             random_state=random_state
         )
-        
-        self.attention_dropout = Dropout(dropout_rate, random_state=random_state)
+
+        self.attention_dropout = Dropout(
+            dropout_rate, random_state=random_state)
         self.ffn_dropout = Dropout(dropout_rate, random_state=random_state)
-        
+
         norm_config = {
             'epsilon': 1e-6,
             'gamma_init_std': 0.02,
@@ -3177,49 +3292,54 @@ class TransformerEncoderLayer(Layer):
             'grad_clip': 1.0,
             'random_state': random_state
         }
-        
+
         self.attention_norm = AddNorm(**norm_config)
         self.ffn_norm = AddNorm(**norm_config)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
-            
+
     def forward_pass(self, inputs: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         self.x = inputs
-        attn_output = self.attention.forward_pass(self.x, mask=mask, training=training)
-        
+        attn_output = self.attention.forward_pass(
+            self.x, mask=mask, training=training)
+
         if training:
-            attn_output = self.attention_dropout.forward_pass(attn_output, training=True)
-            
+            attn_output = self.attention_dropout.forward_pass(
+                attn_output, training=True)
+
         attn_output = self.attention_norm.forward_pass((attn_output, self.x))
-        
+
         ffn_output = self.ffn.forward_pass(attn_output, training=training)
-        
+
         if training:
-            ffn_output = self.ffn_dropout.forward_pass(ffn_output, training=True)
-            
+            ffn_output = self.ffn_dropout.forward_pass(
+                ffn_output, training=True)
+
         output = self.ffn_norm.forward_pass((ffn_output, attn_output))
-        
+
         return output
-        
+
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(output_error)
+        ffn_norm_dx, ffn_norm_dresidual = self.ffn_norm.backward_pass(
+            output_error)
         ffn_dx = self.ffn_dropout.backward_pass(ffn_norm_dx)
-        
+
         ffn_dx = self.ffn.backward_pass(ffn_dx)
         ffn_dx = ffn_dx + ffn_norm_dresidual
-        
-        attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(ffn_dx)
+
+        attn_norm_dx, attn_norm_dresidual = self.attention_norm.backward_pass(
+            ffn_dx)
         attn_dx = self.attention_dropout.backward_pass(attn_norm_dx)
-        
+
         attn_dx = self.attention.backward_pass(attn_dx)
         dx = attn_dx + attn_norm_dresidual
-        
+
         return dx
-        
+
     def __str__(self) -> str:
         return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
-        
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
@@ -3233,7 +3353,7 @@ class TransformerEncoderLayer(Layer):
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
-        
+
     @staticmethod
     def from_config(config: dict) -> "TransformerEncoderLayer":
         return TransformerEncoderLayer(
@@ -3272,7 +3392,7 @@ class TransformerDecoderLayer(Layer):
         self.kernel_initializer = kernel_initializer
         self.bias_initializer = bias_initializer
         self.random_state = random_state
-        
+
         self.self_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=d_model // num_heads,
@@ -3281,7 +3401,7 @@ class TransformerDecoderLayer(Layer):
             bias_initializer=bias_initializer,
             random_state=random_state,
         )
-        
+
         self.cross_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=d_model // num_heads,
@@ -3290,7 +3410,7 @@ class TransformerDecoderLayer(Layer):
             bias_initializer=bias_initializer,
             random_state=random_state,
         )
-        
+
         self.ffn = FeedForward(
             d_ff=d_ff,
             d_model=d_model,
@@ -3300,20 +3420,20 @@ class TransformerDecoderLayer(Layer):
             bias_initializer=bias_initializer,
             random_state=random_state
         )
-        
+
         self.dropout1 = Dropout(dropout_rate, random_state=random_state)
         self.dropout2 = Dropout(dropout_rate, random_state=random_state)
         self.dropout3 = Dropout(dropout_rate, random_state=random_state)
-        
+
         self.norm1 = AddNorm(random_state=random_state)
         self.norm2 = AddNorm(random_state=random_state)
         self.norm3 = AddNorm(random_state=random_state)
-        
+
         self.cache = {}
-            
+
     def __str__(self) -> str:
         return f'TransformerDecoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
-    
+
     def forward_pass(
         self,
         x: np.ndarray,
@@ -3324,87 +3444,95 @@ class TransformerDecoderLayer(Layer):
     ) -> np.ndarray:
         self.cache['x'] = x
         self.cache['enc_output'] = enc_output
-        
+
         # Self attention
-        attn1 = self.self_attention.forward_pass(x, mask=self_attention_mask, training=training)
+        attn1 = self.self_attention.forward_pass(
+            x, mask=self_attention_mask, training=training)
         if training:
             attn1 = self.dropout1.forward_pass(attn1, training=True)
         out1 = self.norm1.forward_pass((attn1, x))
         self.cache['attn1'] = attn1
         self.cache['out1'] = out1
-        
+
         # Cross attention
         attn2 = self.cross_attention.forward_pass(
             (out1, enc_output, enc_output),
             mask=cross_attention_mask,
             training=training
         )
-        
+
         if training:
             attn2 = self.dropout2.forward_pass(attn2, training=True)
         out2 = self.norm2.forward_pass((attn2, out1))
         self.cache['attn2'] = attn2
         self.cache['out2'] = out2
-        
+
         # Feed forward
         ffn_out = self.ffn.forward_pass(out2, training=training)
         if training:
             ffn_out = self.dropout3.forward_pass(ffn_out, training=True)
         out3 = self.norm3.forward_pass((ffn_out, out2))
         self.cache['ffn_out'] = ffn_out
-        
+
         return out3
-        
+
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         d_norm3, d_residual3 = self.norm3.backward_pass(output_error)
         d_ffn = self.dropout3.backward_pass(d_norm3)
-        
+
         d_ffn = self.ffn.backward_pass(d_ffn)
-        
+
         d_out2 = d_residual3 + d_ffn
-        
+
         d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
-        
-        d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
+
+        d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(
+            d_attn2)
         d_out1 = d_residual2 + normalize_gradient(d_attn2_query)
-        
+
         d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
         d_attn1 = self.dropout1.backward_pass(d_norm1)
-        
+
         d_x = self.self_attention.backward_pass(d_attn1)
-        
+
         d_x = d_residual1 + d_x
-        
+
         batch_size, seq_len, hidden_dim = d_attn2_key.shape
         attention_weights = self.cross_attention.attention_weights
         num_heads = self.cross_attention.num_heads
         head_dim = hidden_dim // num_heads
-        
+
         if attention_weights is None:
-            attention_weights = np.ones((batch_size, num_heads, seq_len, seq_len))
-            
-        head_importance = np.mean(attention_weights, axis=(2, 3), keepdims=True)
+            attention_weights = np.ones(
+                (batch_size, num_heads, seq_len, seq_len))
+
+        head_importance = np.mean(
+            attention_weights, axis=(2, 3), keepdims=True)
         head_importance = head_importance.reshape(batch_size, num_heads, 1, 1)
-        
-        d_key_reshaped = d_attn2_key.reshape(batch_size * seq_len, num_heads * head_dim)
-        d_key_heads = d_key_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
+
+        d_key_reshaped = d_attn2_key.reshape(
+            batch_size * seq_len, num_heads * head_dim)
+        d_key_heads = d_key_reshaped.reshape(
+            batch_size, seq_len, num_heads, head_dim)
         d_key_heads = np.transpose(d_key_heads, (0, 2, 1, 3))
-        
-        d_value_reshaped = d_attn2_value.reshape(batch_size * seq_len, num_heads * head_dim)
-        d_value_heads = d_value_reshaped.reshape(batch_size, seq_len, num_heads, head_dim)
+
+        d_value_reshaped = d_attn2_value.reshape(
+            batch_size * seq_len, num_heads * head_dim)
+        d_value_heads = d_value_reshaped.reshape(
+            batch_size, seq_len, num_heads, head_dim)
         d_value_heads = np.transpose(d_value_heads, (0, 2, 1, 3))
-        
+
         d_key_weighted = head_importance * d_key_heads
         d_value_weighted = (1.0 - head_importance) * d_value_heads
-        
+
         d_combined_heads = d_key_weighted + d_value_weighted
-        
+
         d_combined = np.transpose(d_combined_heads, (0, 2, 1, 3))
         d_combined = d_combined.reshape(batch_size, seq_len, hidden_dim)
-        
+
         return d_x, d_combined
-        
+
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
@@ -3418,7 +3546,7 @@ class TransformerDecoderLayer(Layer):
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
-        
+
     @staticmethod
     def from_config(config: dict) -> "TransformerDecoderLayer":
         return TransformerDecoderLayer(
@@ -3439,64 +3567,64 @@ class TransformerDecoderLayer(Layer):
 
 incompatibility_dict = {
     Input: [],
-    
+
     Dense: [Conv1D, Conv2D, UpSampling2D],
-    
+
     Activation: [],
-    
+
     Conv2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     UpSampling2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     MaxPooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     AveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     GlobalAveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
-    
+
     Conv1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
-    
+
     MaxPooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
-    
+
     AveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
-    
+
     GlobalAveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     Flatten: [],
-    
+
     Dropout: [],
-    
+
     Embedding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     BatchNormalization: [],
-    
+
     LayerNormalization: [],
-    
+
     Permute: [],
-    
+
     TextVectorization: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     Reshape: [],
-    
+
     LSTM: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     GRU: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     Bidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     Unidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     Attention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     MultiHeadAttention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     PositionalEncoding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     FeedForward: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     AddNorm: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     TransformerEncoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
-    
+
     TransformerDecoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
 }

@@ -18,7 +18,8 @@ def one_hot_encode(indices: np.ndarray, num_classes: int) -> np.ndarray:
     elif indices.ndim == 2:
         batch_size, seq_len = indices.shape
         one_hot = np.zeros((batch_size, seq_len, num_classes))
-        rows, cols = np.meshgrid(np.arange(batch_size), np.arange(seq_len), indexing='ij')
+        rows, cols = np.meshgrid(
+            np.arange(batch_size), np.arange(seq_len), indexing='ij')
         one_hot[rows, cols, indices] = 1
     else:
         raise ValueError("Unsupported input shape. Expected 1D or 2D indices.")
@@ -68,13 +69,13 @@ def im2col_2d(input_data: np.ndarray, filter_h: int, filter_w: int, stride: int 
         y_max = y + stride_h * out_h
         for x in range(filter_w):
             x_max = x + stride_w * out_w
-            col[:, :, :, y, x, :] = padded_input[:, 
-                                                y:y_max:stride_h, 
-                                                x:x_max:stride_w, 
-                                                :]
+            col[:, :, :, y, x, :] = padded_input[:,
+                                                 y:y_max:stride_h,
+                                                 x:x_max:stride_w,
+                                                 :]
 
     col = col.transpose(0, 1, 2, 5, 3, 4).reshape(N * out_h * out_w, -1)
-    
+
     return col
 
 
@@ -113,7 +114,7 @@ def col2im_2d(col: np.ndarray, input_shape: tuple[int, int, int, int], filter_h:
 
     img_h = H + 2 * pad_h + stride_h - 1
     img_w = W + 2 * pad_w + stride_w - 1
-    
+
     img = np.zeros((N, img_h, img_w, C))
 
     for y in range(filter_h):
@@ -142,7 +143,8 @@ def im2col_1d(input_data: np.ndarray, filter_size: int, stride: int = 1, pad: in
 
     out_l = (L + 2 * pad - filter_size) // stride + 1
 
-    padded_input = np.pad(input_data, ((0, 0), (pad, pad), (0, 0)), mode='constant')
+    padded_input = np.pad(
+        input_data, ((0, 0), (pad, pad), (0, 0)), mode='constant')
 
     col = np.zeros((N, out_l, filter_size, C))
 
@@ -244,7 +246,7 @@ def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
     norm_vector1 = np.linalg.norm(vector1)
     norm_vector2 = np.linalg.norm(vector2)
     if norm_vector1 == 0 or norm_vector2 == 0:
-        return 0.0 
+        return 0.0
     similarity = dot_product / (norm_vector1 * norm_vector2)
     return similarity
 
@@ -312,7 +314,7 @@ class PCA:
     def fit(self, X: np.ndarray):
         if self.n_components is None:
             self.n_components = X.shape[1]
-        
+
         self.input_shape = X.shape[1:]
         X = X.reshape(X.shape[0], -1)
 
@@ -328,12 +330,12 @@ class PCA:
         eigenvectors = eigenvectors[:, sorted_indices]
 
         self.components = eigenvectors[:, :self.n_components]
-        
-        explained_variance = np.var(np.dot(X_centered, self.components), axis=0)
+
+        explained_variance = np.var(
+            np.dot(X_centered, self.components), axis=0)
         total_variance = np.sum(np.var(X_centered, axis=0))
 
         self.explained_variance_ratio = explained_variance / total_variance
-
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         X = X.reshape(X.shape[0], -1)
@@ -361,7 +363,8 @@ class TSNE:
         self.kl_div = None
 
     def _calculate_pairwise_affinities(self, X):
-        distances = np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis=2)
+        distances = np.sum(
+            (X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis=2)
         P = np.exp(-distances / (2 * self.perplexity ** 2))
         np.fill_diagonal(P, 0)
         P /= np.sum(P, axis=1, keepdims=True)
@@ -378,7 +381,8 @@ class TSNE:
         Y = rng.standard_normal((n_samples, self.n_components)) * 1e-4
 
         for i in range(self.n_iter):
-            distances = np.sum((Y[:, np.newaxis, :] - Y[np.newaxis, :, :]) ** 2, axis=2)
+            distances = np.sum(
+                (Y[:, np.newaxis, :] - Y[np.newaxis, :, :]) ** 2, axis=2)
             Q = 1 / (1 + distances)
             np.fill_diagonal(Q, 0)
             Q /= np.sum(Q)
@@ -386,7 +390,8 @@ class TSNE:
             PQ_diff = (P - Q) * Q
             grad = np.zeros_like(Y)
             for j in range(n_samples):
-                grad[j] = np.sum((Y[j] - Y) * PQ_diff[j, :, np.newaxis], axis=0)
+                grad[j] = np.sum(
+                    (Y[j] - Y) * PQ_diff[j, :, np.newaxis], axis=0)
 
             Y -= self.learning_rate * grad
 
@@ -399,11 +404,11 @@ class TSNE:
 
 
 class Tokenizer:
-    def __init__(self, 
-                 num_words: int | None = None, 
+    def __init__(self,
+                 num_words: int | None = None,
                  filters: str = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
-                 lower: bool = True, 
-                 split: str = ' ', 
+                 lower: bool = True,
+                 split: str = ' ',
                  mode: str = 'word',
                  bpe_merges: int = None,
                  pad_token: str = "<PAD>",
@@ -416,41 +421,42 @@ class Tokenizer:
         self.split = split
         self.mode = mode
         self.bpe_merges = bpe_merges
-        
+
         if mode not in ['char', 'word', 'bpe']:
             raise ValueError("Mode must be one of 'char', 'word', or 'bpe'")
-        
+
         if mode == 'bpe' and bpe_merges is None:
-            raise ValueError("bpe_merges must be specified when using BPE mode")
-        
+            raise ValueError(
+                "bpe_merges must be specified when using BPE mode")
+
         self.SPECIAL_TOKENS = {
             'PAD': (pad_token, 0),
             'UNK': (unk_token, 1),
             'SOS': (sos_token, 2),
             'EOS': (eos_token, 3)
         }
-        
+
         for token_name, (token_text, token_idx) in self.SPECIAL_TOKENS.items():
             setattr(self, f"{token_name}_IDX", token_idx)
             setattr(self, f"{token_name.lower()}_token", token_text)
-        
+
         self.word_counts = {}
         self.word_index = {}
         self.index_word = {}
         self.word_docs = {}
         self.document_count = 0
         self.bpe_cache = {}
-        
+
         for token, (text, idx) in self.SPECIAL_TOKENS.items():
             self.word_index[text] = idx
             self.index_word[idx] = text
-            
+
     def preprocess_text(self, text: str) -> str:
         text = re.sub(r"([!\"#$%&()*+,-./:;<=>?@\[\]^_`{|}~])", r" \1 ", text)
         text = re.sub(r"(\b\w)'(\w)", r"\1' \2", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
-        
+
     def get_pairs(self, word: list[str]) -> set[tuple[str, str]]:
         """Get all adjacent pairs in the word"""
         pairs = set()
@@ -459,11 +465,11 @@ class Tokenizer:
             pairs.add((prev_char, char))
             prev_char = char
         return pairs
-        
+
     def learn_bpe(self, texts: list[str], cache: bool = True) -> dict:
         vocab = defaultdict(int)
         pairs = defaultdict(int)
-        
+
         for text in texts:
             for word in text.split():
                 if self.lower:
@@ -474,14 +480,14 @@ class Tokenizer:
                 word_pairs = self.get_pairs(chars)
                 for pair in word_pairs:
                     pairs[pair] += 1
-        
+
         merges = {}
         for i in range(self.bpe_merges):
             if not pairs:
                 break
             best_pair = max(pairs.items(), key=lambda x: x[1])[0]
             merges[best_pair] = i
-            
+
             new_vocab = {}
             for word, freq in vocab.items():
                 word = list(word)
@@ -495,34 +501,35 @@ class Tokenizer:
                         break
                 new_vocab[tuple(word)] = freq
             vocab = new_vocab
-            
+
             pairs = defaultdict(int)
             for word, freq in vocab.items():
                 word_pairs = self.get_pairs(list(word))
                 for pair in word_pairs:
                     pairs[pair] += freq
-                    
+
         self.bpe_merges = merges
         return vocab
 
     def bpe_encode(self, text: str) -> list[str]:
         if not self.bpe_merges:
             return list(text)
-            
+
         if self.lower:
             text = text.lower()
-            
+
         if text in self.bpe_cache:
             return self.bpe_cache[text]
-            
+
         word = list(text)
         pairs = self.get_pairs(word)
-        
+
         while pairs:
-            bigram = min(pairs, key=lambda pair: self.bpe_merges.get(pair, float('inf')))
+            bigram = min(pairs, key=lambda pair: self.bpe_merges.get(
+                pair, float('inf')))
             if bigram not in self.bpe_merges:
                 break
-                
+
             new_word = []
             i = 0
             while i < len(word):
@@ -534,22 +541,22 @@ class Tokenizer:
                     i += 1
             word = new_word
             pairs = self.get_pairs(word)
-            
+
         self.bpe_cache[text] = word
         return word
 
     def fit_on_texts(self, texts: list[str], preprocess_ponctuation: bool = True) -> None:
         FIRST_REGULAR_IDX = len(self.SPECIAL_TOKENS)
-        
-        processed_texts = [self.preprocess_text(text) if preprocess_ponctuation else text 
-                         for text in texts]
-        
+
+        processed_texts = [self.preprocess_text(text) if preprocess_ponctuation else text
+                           for text in texts]
+
         if self.mode == 'bpe':
             self.learn_bpe(processed_texts)
-        
+
         for text in processed_texts:
             self.document_count += 1
-            
+
             if self.mode == 'char':
                 seq = list(text)
             elif self.mode == 'bpe':
@@ -558,7 +565,7 @@ class Tokenizer:
                     seq.extend(self.bpe_encode(word))
             else:
                 seq = text.split(self.split)
-                
+
             for w in seq:
                 if self.lower:
                     w = w.lower()
@@ -566,35 +573,36 @@ class Tokenizer:
                     continue
                 if w in [token for token, _ in self.SPECIAL_TOKENS.values()]:
                     continue
-                    
+
                 self.word_counts[w] = self.word_counts.get(w, 0) + 1
                 self.word_docs[w] = self.word_docs.get(w, 0) + 1
-        
-        wcounts = sorted(self.word_counts.items(), key=lambda x: x[1], reverse=True)
+
+        wcounts = sorted(self.word_counts.items(),
+                         key=lambda x: x[1], reverse=True)
         sorted_voc = [wc[0] for wc in wcounts]
-        
+
         next_index = FIRST_REGULAR_IDX
         for w in sorted_voc:
             if w not in self.word_index:
                 self.word_index[w] = next_index
                 next_index += 1
-        
+
         if self.num_words is not None:
-            keep_tokens = {w: i for w, i in self.word_index.items() 
-                         if (i < self.num_words or 
-                             w in [token for token, _ in self.SPECIAL_TOKENS.values()])}
+            keep_tokens = {w: i for w, i in self.word_index.items()
+                           if (i < self.num_words or
+                               w in [token for token, _ in self.SPECIAL_TOKENS.values()])}
             self.word_index = keep_tokens
-            
+
         self.index_word = {i: w for w, i in self.word_index.items()}
 
-    def texts_to_sequences(self, texts: list[str], 
-                         preprocess_ponctuation: bool = False,
-                         add_special_tokens: bool = True) -> list[list[int]]:
+    def texts_to_sequences(self, texts: list[str],
+                           preprocess_ponctuation: bool = False,
+                           add_special_tokens: bool = True) -> list[list[int]]:
         sequences = []
         for text in texts:
             if preprocess_ponctuation:
                 text = self.preprocess_text(text)
-            
+
             if self.mode == 'char':
                 seq = list(text)
             elif self.mode == 'bpe':
@@ -603,14 +611,14 @@ class Tokenizer:
                     seq.extend(self.bpe_encode(word))
             else:
                 seq = text.split(self.split)
-            
+
             vect = []
             for w in seq:
                 if self.lower:
                     w = w.lower()
-                    
+
                 i = self.word_index.get(w)
-                
+
                 if i is not None:
                     if self.num_words and i >= self.num_words:
                         if w in {self.pad_token, self.unk_token, self.sos_token, self.eos_token}:
@@ -624,16 +632,17 @@ class Tokenizer:
                         subwords = w.split('-')
                         for idx, subw in enumerate(subwords):
                             if idx > 0:
-                                vect.append(self.word_index.get('-', self.UNK_IDX))
+                                vect.append(self.word_index.get(
+                                    '-', self.UNK_IDX))
                             i = self.word_index.get(subw, self.UNK_IDX)
                             vect.append(i)
                     else:
                         vect.append(self.UNK_IDX)
-            
+
             if add_special_tokens:
                 vect = [self.SOS_IDX] + vect + [self.EOS_IDX]
             sequences.append(vect)
-            
+
         return sequences
 
     def sequences_to_texts(self, sequences: list[list[int]]) -> list[str]:
@@ -648,7 +657,7 @@ class Tokenizer:
                     vect.append(word)
                 else:
                     vect.append(self.unk_token)
-            
+
             if self.mode == 'char':
                 yield ''.join(vect)
             else:
@@ -722,9 +731,11 @@ class CountVectorizer:
                  if min_doc_count <= freq <= max_doc_count]
 
         if self.max_features is not None:
-            terms = sorted(terms, key=lambda t: term_freq[t], reverse=True)[:self.max_features]
+            terms = sorted(terms, key=lambda t: term_freq[t], reverse=True)[
+                :self.max_features]
 
-        self.vocabulary_ = {term: idx for idx, term in enumerate(sorted(terms))}
+        self.vocabulary_ = {term: idx for idx,
+                            term in enumerate(sorted(terms))}
 
         return self
 
@@ -839,7 +850,8 @@ class NGram:
                 if context not in self.ngrams:
                     if (self.token_type == "word" and
                             current[-1] in self.transitions):
-                        next_token = random.choice(self.transitions[current[-1]])
+                        next_token = random.choice(
+                            self.transitions[current[-1]])
                         current.append(next_token)
                         continue
                     break
@@ -866,7 +878,8 @@ class NGram:
                     next_token = random.choice(self.transitions[current[-1]])
                     current.append(next_token)
 
-        raise ValueError(f"Could not generate a sequence after {max_attempts} attempts.")
+        raise ValueError(
+            f"Could not generate a sequence after {max_attempts} attempts.")
 
     def generate_sequences(self,
                            n_sequences: int = 20,
@@ -919,7 +932,7 @@ class ImageDataGenerator:
         self.rescale = rescale
         self.random_state = random_state if random_state is not None else time_ns()
         self.rng = np.random.default_rng(self.random_state)
-        
+
         if isinstance(zoom_range, (float, int)):
             self.zoom_range = [1 - zoom_range, 1 + zoom_range]
         else:
@@ -930,51 +943,51 @@ class ImageDataGenerator:
             rng = np.random.default_rng(seed)
         else:
             rng = self.rng
-            
+
         if x.ndim == 2:
             x = np.expand_dims(x, axis=2)
 
         img_row_axis, img_col_axis, img_channel_axis = 0, 1, 2
         h, w = x.shape[img_row_axis], x.shape[img_col_axis]
-        
+
         transform_matrix = np.eye(3)
-        
+
         if self.rotation_range:
             theta = rng.uniform(-self.rotation_range, self.rotation_range)
             rotation_matrix = self._get_rotation_matrix(theta)
             transform_matrix = np.dot(transform_matrix, rotation_matrix)
-            
+
         if self.width_shift_range or self.height_shift_range:
             tx = 0
             ty = 0
             if self.width_shift_range:
                 if isinstance(self.width_shift_range, int):
-                    tx = rng.integers(-self.width_shift_range, 
-                                    self.width_shift_range + 1)
+                    tx = rng.integers(-self.width_shift_range,
+                                      self.width_shift_range + 1)
                 else:
-                    tx = rng.uniform(-self.width_shift_range, 
-                                   self.width_shift_range) * w
+                    tx = rng.uniform(-self.width_shift_range,
+                                     self.width_shift_range) * w
             if self.height_shift_range:
                 if isinstance(self.height_shift_range, int):
                     ty = rng.integers(-self.height_shift_range,
-                                    self.height_shift_range + 1)
+                                      self.height_shift_range + 1)
                 else:
                     ty = rng.uniform(-self.height_shift_range,
-                                   self.height_shift_range) * h
-                    
+                                     self.height_shift_range) * h
+
             translation_matrix = np.array([[1, 0, tx],
-                                         [0, 1, ty],
-                                         [0, 0, 1]])
+                                           [0, 1, ty],
+                                           [0, 0, 1]])
             transform_matrix = np.dot(transform_matrix, translation_matrix)
-            
+
         if self.zoom_range[0] != 1 or self.zoom_range[1] != 1:
             zx = rng.uniform(self.zoom_range[0], self.zoom_range[1])
             zy = zx
             zoom_matrix = np.array([[zx, 0, 0],
-                                  [0, zy, 0],
-                                  [0, 0, 1]])
+                                    [0, zy, 0],
+                                    [0, 0, 1]])
             transform_matrix = np.dot(transform_matrix, zoom_matrix)
-            
+
         if not np.array_equal(transform_matrix, np.eye(3)):
             h, w = x.shape[img_row_axis], x.shape[img_col_axis]
             transforms = []
@@ -985,23 +998,23 @@ class ImageDataGenerator:
                     fill_mode=self.fill_mode,
                     cval=self.cval))
             x = np.stack(transforms, axis=-1)
-            
+
         if self.horizontal_flip and rng.random() < 0.5:
             x = x[:, ::-1]
         if self.vertical_flip and rng.random() < 0.5:
             x = x[::-1]
-            
+
         if self.brightness_range is not None:
             brightness = rng.uniform(self.brightness_range[0],
-                                   self.brightness_range[1])
+                                     self.brightness_range[1])
             x = x * brightness
-            
+
         if self.channel_shift_range != 0:
             x = self._channel_shift(x, self.channel_shift_range, rng)
-            
+
         if self.rescale is not None:
             x *= self.rescale
-            
+
         return x
 
     def flow(self, x, y=None, batch_size=32, shuffle=True, seed=None):
@@ -1009,33 +1022,33 @@ class ImageDataGenerator:
             rng = np.random.default_rng(seed)
         else:
             rng = self.rng
-            
+
         n = x.shape[0]
         batch_index = 0
         index_array = np.arange(n)
-        
+
         while True:
             if shuffle:
                 rng.shuffle(index_array)
-                
+
             current_index = (batch_index * batch_size) % n
-            
+
             if n > current_index + batch_size:
                 current_batch_size = batch_size
             else:
                 current_batch_size = n - current_index
-                
+
             batch_index += 1
             batch_indices = index_array[current_index:
-                                      current_index + current_batch_size]
-            
+                                        current_index + current_batch_size]
+
             batch_x = np.zeros((current_batch_size,) + x.shape[1:],
-                             dtype=x.dtype)
-            
+                               dtype=x.dtype)
+
             for i, j in enumerate(batch_indices):
                 x_aug = self.random_transform(x[j])
                 batch_x[i] = x_aug
-                
+
             if y is None:
                 yield batch_x
             else:
@@ -1051,50 +1064,52 @@ class ImageDataGenerator:
 
     def _affine_transform(self, x, matrix, fill_mode='nearest', cval=0.0):
         h, w = x.shape[:2]
-        
-        y_coords, x_coords = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+
+        y_coords, x_coords = np.meshgrid(
+            np.arange(h), np.arange(w), indexing='ij')
         coords = np.stack([y_coords, x_coords, np.ones_like(x_coords)])
         coords_reshaped = coords.reshape(3, -1)
-        
+
         matrix_inv = np.linalg.inv(matrix)
         transformed_coords = np.dot(matrix_inv, coords_reshaped)
-        
+
         y_coords = transformed_coords[0].reshape(h, w)
         x_coords = transformed_coords[1].reshape(h, w)
-        
+
         if fill_mode == 'nearest':
             y_coords = np.clip(np.round(y_coords), 0, h - 1).astype(np.int32)
             x_coords = np.clip(np.round(x_coords), 0, w - 1).astype(np.int32)
             return x[y_coords, x_coords]
-            
+
         elif fill_mode == 'constant':
             y_floor = np.floor(y_coords).astype(np.int32)
             y_ceil = y_floor + 1
             x_floor = np.floor(x_coords).astype(np.int32)
             x_ceil = x_floor + 1
-            
-            valid_coords = (y_floor >= 0) & (y_ceil < h) & (x_floor >= 0) & (x_ceil < w)
-            
+
+            valid_coords = (y_floor >= 0) & (
+                y_ceil < h) & (x_floor >= 0) & (x_ceil < w)
+
             y_floor = np.clip(y_floor, 0, h-1)
             y_ceil = np.clip(y_ceil, 0, h-1)
             x_floor = np.clip(x_floor, 0, w-1)
             x_ceil = np.clip(x_ceil, 0, w-1)
-            
+
             dy = y_coords - y_floor
             dx = x_coords - x_floor
-            
+
             dy = dy[..., np.newaxis]
             dx = dx[..., np.newaxis]
-            
+
             values = (
                 x[y_floor, x_floor] * (1 - dy) * (1 - dx) +
                 x[y_ceil, x_floor] * dy * (1 - dx) +
                 x[y_floor, x_ceil] * (1 - dy) * dx +
                 x[y_ceil, x_ceil] * dy * dx
             )
-            
+
             return np.where(valid_coords[..., np.newaxis], values, cval)
-            
+
         elif fill_mode == 'reflect':
             y_coords = np.clip(y_coords, -h, 2*h-1)
             x_coords = np.clip(x_coords, -w, 2*w-1)
@@ -1105,12 +1120,12 @@ class ImageDataGenerator:
             y_coords = y_coords.astype(np.int32)
             x_coords = x_coords.astype(np.int32)
             return x[y_coords, x_coords]
-            
+
         elif fill_mode == 'wrap':
             y_coords = np.remainder(y_coords, h).astype(np.int32)
             x_coords = np.remainder(x_coords, w).astype(np.int32)
             return x[y_coords, x_coords]
-        
+
         return x
 
     def _channel_shift(self, x, intensity, rng):
@@ -1130,11 +1145,12 @@ class SpectralNorm:
         self.n_power_iterations = n_power_iterations
         self.u_dict = {}
         self.v_dict = {}
-        self.rng = np.random.default_rng(random_state if random_state is not None else time_ns())
-    
+        self.rng = np.random.default_rng(
+            random_state if random_state is not None else time_ns())
+
     def _get_uv_key(self, W: np.ndarray) -> tuple:
         return tuple(W.shape)
-    
+
     def _initialize_uv(self, W: np.ndarray, key: tuple):
         if len(W.shape) == 1:
             height = W.shape[0]
@@ -1142,45 +1158,45 @@ class SpectralNorm:
             W = W.reshape(-1, 1)
         else:
             height, width = W.shape
-            
+
         self.u_dict[key] = self.rng.normal(0, 1, (height, 1))
         self.u_dict[key] = self.u_dict[key] / np.linalg.norm(self.u_dict[key])
-        
+
         self.v_dict[key] = self.rng.normal(0, 1, (width, 1))
         self.v_dict[key] = self.v_dict[key] / np.linalg.norm(self.v_dict[key])
 
     def __call__(self, W: np.ndarray) -> np.ndarray:
         if W is None:
             return None
-            
+
         original_shape = W.shape
-        
+
         if len(original_shape) == 1:
             W = W.reshape(-1, 1)
-            
+
         if W.size < 2:
             return W.reshape(original_shape)
-            
+
         key = self._get_uv_key(W)
-        
+
         if key not in self.u_dict:
             self._initialize_uv(W, key)
-            
+
         u = self.u_dict[key]
         v = self.v_dict[key]
-            
+
         for _ in range(self.n_power_iterations):
             v = W.T @ u
             v = v / (np.linalg.norm(v) + 1e-12)
             u = W @ v
             u = u / (np.linalg.norm(u) + 1e-12)
-            
+
         self.u_dict[key] = u
         self.v_dict[key] = v
-            
+
         sigma = float(u.T @ W @ v)
         normalized_W = W / (sigma + 1e-12)
-        
+
         return normalized_W.reshape(original_shape)
 
     def reset(self):
@@ -1201,7 +1217,7 @@ class Imputer:
     def __init__(self, strategy: str = "mean", fill_value: float = None, add_indicator: bool = False, random_state: int = None):
         if isinstance(strategy, str):
             strategy = Strategy(strategy)
-        
+
         self.strategy: Strategy = strategy
         self.fill_value: float = fill_value
         self.add_indicator: bool = add_indicator
@@ -1209,20 +1225,21 @@ class Imputer:
         self.statistics_: dict[int, float] = {}
         self.indicators_: dict[int, np.ndarray] = {}
         self.is_1d_: bool = False
-        
+
         if strategy == Strategy.RANDOM and random_state is not None:
             np.random.seed(random_state)
-            
+
     def _compute_mode(self, column: np.ndarray) -> float:
-        unique_vals, counts = np.unique(column[~np.isnan(column)], return_counts=True)
+        unique_vals, counts = np.unique(
+            column[~np.isnan(column)], return_counts=True)
         return unique_vals[np.argmax(counts)]
 
     def _compute_statistics(self, X: np.ndarray, column_idx: int) -> float:
         non_missing = X[~np.isnan(X[:, column_idx]), column_idx]
-        
+
         if len(non_missing) == 0:
             raise ValueError(f"Column {column_idx} has no non-missing values")
-            
+
         if self.strategy == Strategy.MEAN:
             return float(np.mean(non_missing))
         elif self.strategy == Strategy.MEDIAN:
@@ -1238,38 +1255,38 @@ class Imputer:
     def fit(self, X: np.ndarray) -> "Imputer":
         if not isinstance(X, np.ndarray):
             X = np.array(X)
-            
+
         self.is_1d_ = X.ndim == 1
         if self.is_1d_:
             X = X.reshape(-1, 1)
-            
+
         self.random_params_: dict[int, np.ndarray] = {}
-        
+
         if self.add_indicator:
             self.indicators_ = {
                 i: np.isnan(X[:, i]) for i in range(X.shape[1])
             }
-        
+
         for i in range(X.shape[1]):
             self.statistics_[i] = self._compute_statistics(X, i)
-                
+
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         if not isinstance(X, np.ndarray):
             X = np.array(X)
-            
+
         is_1d = X.ndim == 1
         if is_1d:
             X = X.reshape(-1, 1)
-            
+
         X_imputed = X.copy()
-        
+
         if self.strategy in [Strategy.MEAN, Strategy.MEDIAN, Strategy.MODE, Strategy.CONSTANT]:
             for i in range(X.shape[1]):
                 mask = np.isnan(X[:, i])
                 X_imputed[mask, i] = self.statistics_[i]
-                
+
         elif self.strategy == Strategy.RANDOM:
             for i in range(X.shape[1]):
                 mask = np.isnan(X[:, i])
@@ -1282,14 +1299,15 @@ class Imputer:
                         replace=True
                     )
                     X_imputed[mask, i] = random_values
-        
+
         if self.add_indicator:
-            indicators = np.array([self.indicators_[i] for i in range(X.shape[1])]).T
+            indicators = np.array([self.indicators_[i]
+                                  for i in range(X.shape[1])]).T
             X_imputed = np.hstack([X_imputed, indicators.astype(int)])
-        
+
         if is_1d and not self.add_indicator:
             X_imputed = X_imputed.ravel()
-            
+
         return X_imputed
 
     def fit_transform(self, X: np.ndarray) -> np.ndarray:

@@ -17,12 +17,13 @@ class ActivationFunction:
     @staticmethod
     def from_config(config: dict):
         name = config['name']
-        
+
         for activation_class in ActivationFunction.__subclasses__():
             if activation_class.__name__ == name:
-                constructor_params = {k: v for k, v in config.items() if k != 'name'}
+                constructor_params = {k: v for k,
+                                      v in config.items() if k != 'name'}
                 return activation_class(**constructor_params)
-                
+
         raise ValueError(f'Unknown activation function: {name}')
 
 
@@ -34,7 +35,7 @@ class Sigmoid(ActivationFunction):
     def derivative(self, x: np.ndarray) -> np.ndarray:
         activated_x = self(x)
         return activated_x * (1 - activated_x)
-    
+
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
 
@@ -45,7 +46,7 @@ class ReLU(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, 0.0)
-    
+
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
 
@@ -60,14 +61,16 @@ class Tanh(ActivationFunction):
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
 
+
 class Softmax(ActivationFunction):
     def __call__(self, x: np.ndarray) -> np.ndarray:
         exps = np.exp(x - np.max(x, axis=1, keepdims=True))
         return exps / np.sum(exps, axis=1, keepdims=True)
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
-        raise NotImplementedError("Derivative of Softmax is not implemented. It is not needed for backpropagation.")
-    
+        raise NotImplementedError(
+            "Derivative of Softmax is not implemented. It is not needed for backpropagation.")
+
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
 
@@ -78,7 +81,7 @@ class Linear(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.ones_like(x)
-    
+
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
 
@@ -92,13 +95,13 @@ class LeakyReLU(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, self.alpha)
-    
+
     def get_config(self) -> dict:
         return {
             "name": self.__class__.__name__,
             'alpha': self.alpha
         }
-        
+
     def __str__(self):
         return f"{self.__class__.__name__}(alpha={self.alpha})"
 
@@ -109,10 +112,10 @@ class ELU(ActivationFunction):
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, np.exp(x))
-    
+
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
-    
+
     def __str__(self):
         return self.__class__.__name__
 
@@ -138,11 +141,11 @@ class SELU(ActivationFunction):
             'alpha': self.alpha,
             'scale': self.scale
         }
-        
+
     def __str__(self):
         return f"{self.__class__.__name__}(alpha={self.alpha}, scale={self.scale})"
-        
-        
+
+
 class GELU(ActivationFunction):
     def __call__(self, x: np.ndarray) -> np.ndarray:
         return 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)))
