@@ -224,11 +224,10 @@ def clip_gradients(gradients: np.ndarray, threshold: float = 1.0) -> np.ndarray:
     return gradients
 
 
-def normalize_gradient(gradients: np.ndarray, scale: float = 1.0):
-    norm = np.linalg.norm(gradients)
-    if norm > 0:
-        return gradients * scale / norm
-    return gradients
+def normalize_gradient(gradients: np.ndarray, scale: float = 1.0) -> np.ndarray:
+    grad_norm = np.sqrt(np.sum(gradients ** 2, axis=1, keepdims=True) + 1e-8)
+    normalized_gradients = gradients / grad_norm
+    return normalized_gradients * scale
 
 
 def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
