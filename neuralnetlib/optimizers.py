@@ -154,6 +154,9 @@ class Adam(Optimizer):
         return grad
 
     def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, v: np.ndarray) -> tuple:
+        if param is None or grad is None:
+            return None, None, None
+
         grad = self._clip_gradients(grad)
 
         m = self.beta_1 * m + (1 - self.beta_1) * grad
@@ -166,21 +169,21 @@ class Adam(Optimizer):
         v_hat = v / (1 - beta2_t)
 
         denom = np.sqrt(v_hat) + self.epsilon
-        update = self.learning_rate * m_hat / \
-            np.maximum(denom, self._min_denom)
+        update = self.learning_rate * m_hat / np.maximum(denom, self._min_denom)
 
         update = np.nan_to_num(update, nan=0.0, posinf=0.0, neginf=0.0)
         param -= update
 
         return param, m, v
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray) -> None:
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, 
+              bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.v_w[layer_index] = np.zeros_like(weights)
-            self.m_b[layer_index] = np.zeros_like(bias)
-            self.v_b[layer_index] = np.zeros_like(bias)
+            if bias is not None:
+                self.m_b[layer_index] = np.zeros_like(bias)
+                self.v_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
 
@@ -188,9 +191,10 @@ class Adam(Optimizer):
             weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
         )
 
-        bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
-            bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
-        )
+        if bias is not None and bias_grad is not None:
+            bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
+                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
+            )
 
     def get_config(self) -> dict:
         return {

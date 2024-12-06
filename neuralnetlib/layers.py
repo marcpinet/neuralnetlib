@@ -1101,11 +1101,10 @@ class Embedding(Layer):
         self.output_dim = output_dim
         self.input_length = input_length
         self.weights = None
-        self.bias = None
         self.weights_init = weights_init
         self.random_state = random_state
         self.clipped_input = None
-
+        
     def __str__(self) -> str:
         return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim})'
 
@@ -1113,8 +1112,7 @@ class Embedding(Layer):
         self.rng = np.random.default_rng(self.random_state)
 
         scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
-        self.weights = self.rng.normal(
-            0, scale, (self.input_dim, self.output_dim))
+        self.weights = self.rng.normal(0, scale, (self.input_dim, self.output_dim))
 
         self.weights[0] = np.zeros(self.output_dim)
 
@@ -1127,9 +1125,7 @@ class Embedding(Layer):
         norms = np.maximum(norms, epsilon)
         self.weights[4:] = self.weights[4:] / norms * np.sqrt(self.output_dim)
 
-        self.bias = np.zeros((1, 1, self.output_dim))
         self.d_weights = np.zeros_like(self.weights)
-        self.d_bias = np.zeros_like(self.bias)
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
@@ -1139,11 +1135,7 @@ class Embedding(Layer):
         self.clipped_input = input_data.copy()
 
         output = self.weights[input_data]
-
-        output_norm = np.linalg.norm(output, axis=-1, keepdims=True)
-        output = output / np.maximum(output_norm, 1e-7)
-
-        output = output + self.bias
+        
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
@@ -1178,7 +1170,6 @@ class Embedding(Layer):
             grad_weights[1:] = grad_weights[1:] / grad_norm
 
         self.d_weights = grad_weights
-        self.d_bias = np.sum(output_error, axis=(0, 1), keepdims=True)
 
         return np.zeros((batch_size, seq_length))
 
