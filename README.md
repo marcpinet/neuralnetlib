@@ -128,16 +128,6 @@ model.compile(loss_function="mse", optimizer='adam')  # you can either put acron
 model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=['accuracy'])
 ```
 
-You can also save and load models:
-
-```python
-# Save a model
-model.save('my_model.json')
-
-# Load a model
-model = Model.load('my_model.json')
-```
-
 ### Image Compression
 
 ```python
@@ -248,7 +238,18 @@ model.compile(loss_function="cels", optimizer=Adam(learning_rate=5e-5, beta_1=0.
 history = model.fit(x_train, y_train, epochs=50, batch_size=32, verbose=True, callbacks=[EarlyStopping(monitor='loss', patience=20), LearningRateScheduler(schedule="warmup_cosine", initial_learning_rate=5e-5, verbose=True)],validation_data=(x_test, y_test), metrics=['bleu_score'])
 ```
 
-## 📜 Output of the example file
+> [!NOTE]
+> You can also save and load models using the `save` and `load` methods.
+
+```python
+# Save a model
+model.save('my_model.json')
+
+# Load a model
+model = Model.load('my_model.json')
+```
+
+## 📜 Some outputs and easy usages
 
 ### Here is the decision boundary on a Binary Classification (breast cancer dataset):
 
@@ -275,6 +276,10 @@ history = model.fit(x_train, y_train, epochs=50, batch_size=32, verbose=True, ca
 
 ![dino](resources/img/dino.png)
 
+### Here is a MNIST generated image using a GAN.
+
+![mnist_generated](resources/img/mnist_generated.gif)
+
 **You can __of course__ use the library for any dataset you want.**
 
 ## ✏️ Edit the library
@@ -291,6 +296,7 @@ And test your changes on the examples.
 
 - [ ] Add support for stream dataset loading to allow loading large datasets (larger than your RAM)
 - [ ] Visual updates (tabulation of model.summary() parameters calculation, colorized progress bar, etc.)
+- [ ] Better save format (like h5py)
 - [ ] Add cuDNN support to allow the use of GPUs
 
 ## 🐞 Know issues
