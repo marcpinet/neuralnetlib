@@ -138,6 +138,116 @@ model.save('my_model.json')
 model = Model.load('my_model.json')
 ```
 
+### Image Compression
+
+```python
+X, y = fetch_openml('Fashion-MNIST', version=1, return_X_y=True, as_frame=False)
+X = X.astype('float32') / 255.
+
+X = X.reshape(-1, 28, 28, 1)
+
+X_train, X_test = train_test_split(X, test_size=0.2, random_state=42)
+
+autoencoder = Autoencoder(random_state=42, skip_connections=True)
+
+autoencoder.add_encoder_layer(Input((28, 28, 1)))
+autoencoder.add_encoder_layer(Conv2D(16, kernel_size=(3, 3), strides=(2, 2), activation='relu', padding='same'))
+autoencoder.add_encoder_layer(Conv2D(32, kernel_size=(3, 3), strides=(2, 2), activation='relu', padding='same'))
+
+autoencoder.add_encoder_layer(Flatten())
+autoencoder.add_encoder_layer(Dense(64, activation='relu'))  # Bottleneck
+
+autoencoder.add_decoder_layer(Dense(7 * 7 * 32, activation='relu'))
+autoencoder.add_decoder_layer(Reshape((7, 7, 32)))
+
+autoencoder.add_decoder_layer(UpSampling2D(size=(2, 2)))  # Output: 14x14x32
+autoencoder.add_decoder_layer(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same'))
+
+autoencoder.add_decoder_layer(UpSampling2D(size=(2, 2)))  # Output: 28x28x16
+autoencoder.add_decoder_layer(Conv2D(1, kernel_size=(3, 3), activation='sigmoid', padding='same'))  # Output: 28x28x1
+
+autoencoder.compile(encoder_loss='mse', decoder_loss='mse', encoder_optimizer='adam', decoder_optimizer='adam', verbose=True)
+
+history = autoencoder.fit(X_train, epochs=5, batch_size=256, validation_data=(X_test,), verbose=True,)
+```
+
+### Image Generation
+
+```python
+# Load the MNIST dataset
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+n_classes = np.unique(y_train).shape[0]
+
+# Flatten images
+x_train = x_train.reshape(x_train.shape[0], -1)
+x_test = x_test.reshape(x_test.shape[0], -1)
+
+# Normalize pixel values
+x_train = x_train.astype('float32') / 255
+x_test = x_test.astype('float32') / 255
+
+# Labels to categorical
+y_train = one_hot_encode(y_train, n_classes)
+y_test = one_hot_encode(y_test, n_classes)
+
+noise_dim = 32
+
+generator = Sequential()
+generator.add(Input(noise_dim))
+generator.add(Dense(128, input_dim = noise_dim, activation='relu'))
+generator.add(Dense(784, activation = 'sigmoid'))
+
+discriminator = Sequential()
+discriminator.add(Input(784))
+discriminator.add(Dense(128, input_dim=784, activation='relu'))
+discriminator.add(Dense(1, activation='sigmoid'))
+
+gan = GAN(latent_dim=noise_dim)
+
+gan.compile(generator, discriminator, generator_optimizer='adam', discriminator_optimizer='adam', loss_function='bce', verbose=True)
+
+history = gan.fit(x_train, epochs=40, batch_size=128, plot_generated=True)   
+```
+
+### Text Generation (example here is for translation)
+
+```python
+df = pd.read_csv("dataset.tsv", sep="\t")
+df.iloc[:, 1] = df.iloc[:, 1].apply(lambda x: re.sub(r'\\x[a-fA-F0-9]{2}|\\u[a-fA-F0-9]{4}|\xa0|\u202f', ' ', x))  # remove unicode characters
+
+LIMIT = 1000
+fr_sentences = df.iloc[:, 1].values.tolist()[0:LIMIT]
+en_sentences = df.iloc[:, 3].values.tolist()[0:LIMIT]
+
+fr_tokenizer = Tokenizer(filters="", mode="word")  # else the tokenizer would remove the special characters including ponctuation
+en_tokenizer = Tokenizer(filters="", mode="word")  # else the tokenizer would remove the special characters including ponctuation
+
+fr_tokenizer.fit_on_texts(fr_sentences, preprocess_ponctuation=True)
+en_tokenizer.fit_on_texts(en_sentences, preprocess_ponctuation=True)
+
+X = fr_tokenizer.texts_to_sequences(fr_sentences, preprocess_ponctuation=True, add_special_tokens=True)
+y = en_tokenizer.texts_to_sequences(en_sentences, preprocess_ponctuation=True, add_special_tokens=True)
+
+max_len_x = max(len(seq) for seq in X)
+max_len_y = max(len(seq) for seq in y)
+max_seq_len = max(max_len_x, max_len_y)
+
+vocab_size_fr = len(fr_tokenizer.word_index)
+vocab_size_en = len(en_tokenizer.word_index)
+max_vocab_size = max(vocab_size_fr, vocab_size_en)
+
+X = pad_sequences(X, max_length=max_seq_len, padding='post', pad_value=fr_tokenizer.PAD_IDX)
+y = pad_sequences(y, max_length=max_seq_len, padding='post', pad_value=en_tokenizer.PAD_IDX)
+
+x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+model = Transformer(src_vocab_size=vocab_size_fr, tgt_vocab_size=vocab_size_en, d_model=512, n_heads=8, n_encoder_layers=8, n_decoder_layers=10, d_ff=2048, dropout_rate=0.1, max_sequence_length=max_seq_len, random_state=42)
+
+model.compile(loss_function="cels", optimizer=Adam(learning_rate=5e-5, beta_1=0.9, beta_2=0.98, epsilon=1e-9, clip_norm=1.0, ), verbose=True)
+
+history = model.fit(x_train, y_train, epochs=50, batch_size=32, verbose=True, callbacks=[EarlyStopping(monitor='loss', patience=20), LearningRateScheduler(schedule="warmup_cosine", initial_learning_rate=5e-5, verbose=True)],validation_data=(x_test, y_test), metrics=['bleu_score'])
+```
+
 ## 📜 Output of the example file
 
 ### Here is the decision boundary on a Binary Classification (breast cancer dataset):
