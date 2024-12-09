@@ -293,39 +293,18 @@ def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5)
 
 def mean_squared_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
-        y_true_classes = y_true.ravel()
-    else:
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true_classes = np.argmax(y_true, axis=1)
-
-    return np.mean((y_pred_classes - y_true_classes) ** 2)
+    return np.mean((y_pred - y_true) ** 2)
 
 
 def mean_absolute_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
-        y_true_classes = y_true.ravel()
-    else:
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true_classes = np.argmax(y_true, axis=1)
-
-    return np.mean(np.abs(y_pred_classes - y_true_classes))
+    return np.mean(np.abs(y_pred - y_true))
 
 
 def mean_absolute_percentage_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
-        y_true_classes = y_true.ravel()
-    else:
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true_classes = np.argmax(y_true, axis=1)
-
-    mask = y_true_classes != 0
-    return np.mean(np.abs((y_true_classes[mask] - y_pred_classes[mask]) / y_true_classes[mask])) * 100
+    mask = np.abs(y_true) > 1e-10
+    return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
 
 def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
