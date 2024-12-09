@@ -725,3 +725,65 @@ def adjusted_rand_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
         return 0.0
     
     return (nij - expected) / (max_index - expected)
+
+
+def adjusted_mutual_info_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    """Compute the Adjusted Mutual Information between two clusterings.
+
+    Args:
+        y_pred (np.ndarray): Predicted cluster labels
+        y_true (np.ndarray): Ground truth cluster labels
+
+    Raises:
+        ValueError: Input arrays must be 1-dimensional
+        ValueError: Input arrays must have the same length
+
+    Returns:
+        float: Adjusted Mutual Information score
+    """
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_pred = np.asarray(y_pred, dtype=np.int64)
+    
+    if y_pred.ndim != 1 or y_true.ndim != 1:
+        raise ValueError("Input arrays must be 1-dimensional")
+    if len(y_pred) != len(y_true):
+        raise ValueError("Input arrays must have the same length")
+        
+    if np.array_equal(y_true, y_pred):
+        return 1.0
+        
+    classes = np.unique(y_true)
+    clusters = np.unique(y_pred)
+    contingency = np.zeros((len(classes), len(clusters)), dtype=np.int64)
+    
+    for i in range(len(y_true)):
+        contingency[np.nonzero(classes == y_true[i])[0][0],
+                   np.nonzero(clusters == y_pred[i])[0][0]] += 1
+                   
+    contingency = contingency.astype(np.float64)
+    
+    a = np.sum(contingency, axis=1)
+    b = np.sum(contingency, axis=0)
+    n = np.sum(contingency)
+    
+    eps = np.finfo(float).eps
+    h_true = -np.sum((a[a > 0] / n) * np.log(a[a > 0] / n))
+    h_pred = -np.sum((b[b > 0] / n) * np.log(b[b > 0] / n))
+    
+    MI = 0.0
+    for i in range(len(classes)):
+        for j in range(len(clusters)):
+            if contingency[i, j] > 0:
+                MI += (contingency[i, j] / n) * \
+                      np.log((contingency[i, j] * n) / (a[i] * b[j]))
+                      
+    if h_true == 0 or h_pred == 0:
+        return 0.0
+        
+    denominator = (h_true + h_pred) / 2
+    if denominator < eps:
+        return 0.0
+        
+    nmi = MI / denominator
+    
+    return float(np.clip(nmi, 0.0, 1.0))
