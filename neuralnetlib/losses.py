@@ -1,5 +1,4 @@
 import numpy as np
-from neuralnetlib.metrics import mmd_score
 
 
 class LossFunction:
@@ -36,7 +35,11 @@ class LossFunction:
             "cels": "CrossEntropyWithLabelSmoothing",
             "wass": "Wasserstein",
             "focal": "FocalLoss",
-            "fl": "FocalLoss"
+            "fl": "FocalLoss",
+            "bfocal": "BinaryFocalLossPerLabel",
+            "bfl": "BinaryFocalLossPerLabel",
+            "asymmetric": "AsymmetricLoss",
+            "multibce": "MultiLabelBCELoss"
         }
 
         original_name = name
@@ -51,7 +54,7 @@ class LossFunction:
 
         if name in aliases:
             name = aliases[name]
-
+            
         for loss_class in LossFunction.__subclasses__():
             if loss_class.__name__.lower() == name or loss_class.__name__ == name:
                 if loss_class.__name__ == "Huber":
@@ -60,6 +63,12 @@ class LossFunction:
                     return loss_class(label_smoothing=0.1)
                 elif loss_class.__name__ == "FocalLoss":
                     return loss_class(gamma=2.0, alpha=0.25)
+                elif loss_class.__name__ == "AsymmetricLoss":
+                    return loss_class(gamma_pos=1.0, gamma_neg=4.0, clip=0.05)
+                elif loss_class.__name__ == "BinaryFocalLossPerLabel":
+                    return loss_class(gamma=2.0, alpha=0.25)
+                elif loss_class.__name__ == "MultiLabelBCELoss":
+                    return loss_class(pos_weight=1.0)
                 else:
                     return loss_class()
 
@@ -297,3 +306,124 @@ class FocalLoss(LossFunction):
             "gamma": self.gamma,
             "alpha": self.alpha
         }
+
+
+class BinaryFocalLossPerLabel(LossFunction):
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.25, scale: float = 1.0):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.scale = scale
+        
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        bce = y_true * -np.log(y_pred) + (1 - y_true) * -np.log(1 - y_pred)
+        bce = np.clip(bce, -100, 100)
+        
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        p_t = np.clip(p_t, self.EPSILON, 1 - self.EPSILON)
+        focusing_factor = np.power(1 - p_t, self.gamma)
+        focusing_factor = np.clip(focusing_factor, 0, 100)
+        
+        alpha_weight = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
+        
+        focal_loss = alpha_weight * focusing_factor * bce * self.scale
+        
+        return np.mean(focal_loss)
+
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        p_t = np.where(y_true == 1, y_pred, 1 - y_pred)
+        p_t = np.clip(p_t, self.EPSILON, 1 - self.EPSILON)
+        
+        alpha_factor = np.where(y_true == 1, self.alpha, 1 - self.alpha)
+        
+        focusing_factor = np.power(1 - p_t, self.gamma - 1)
+        focusing_factor = np.clip(focusing_factor, 0, 100)
+        
+        sign = np.where(y_true == 1, -1.0, 1.0)
+        
+        modulating = (self.gamma * p_t * np.log(p_t + self.EPSILON) + 1)
+        modulating = np.clip(modulating, -100, 100)
+        
+        grad = (sign * alpha_factor * focusing_factor * modulating) * self.scale
+        
+        grad = grad / (y_true.shape[0] * y_true.shape[1])
+        grad = np.clip(grad, -10, 10)
+        
+        return grad
+
+class MultiLabelBCELoss(LossFunction):
+    def __init__(self, pos_weight: float = 1.0):
+        super().__init__()
+        self.pos_weight = pos_weight
+        
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        weights = np.where(y_true == 1, self.pos_weight, 1.0)
+        
+        bce = -(weights * y_true * np.log(y_pred) + 
+                (1 - y_true) * np.log(1 - y_pred))
+        
+        return np.mean(bce)
+    
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        weights = np.where(y_true == 1, self.pos_weight, 1.0)
+        
+        grad = weights * (y_pred - y_true) / (y_pred * (1 - y_pred) + self.EPSILON)
+        grad = np.clip(grad, -10, 10)
+        
+        return grad / y_true.size
+
+
+class AsymmetricLoss(LossFunction):
+    def __init__(self, gamma_pos: float = 1.0, gamma_neg: float = 4.0, clip: float = 0.05):
+        super().__init__()
+        self.gamma_pos = gamma_pos
+        self.gamma_neg = gamma_neg
+        self.clip = clip
+        
+    def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        if self.clip > 0:
+            y_pred = np.clip(y_pred, self.clip, 1 - self.clip)
+            
+        pos_mask = (y_true == 1)
+        xs_pos = np.where(pos_mask, y_pred, 1)
+        xs_neg = np.where(~pos_mask, 1 - y_pred, 1)
+        
+        pos_focusing = np.where(pos_mask, np.power(1 - xs_pos, self.gamma_pos), 1)
+        neg_focusing = np.where(~pos_mask, np.power(1 - xs_neg, self.gamma_neg), 1)
+        
+        pos_bce = np.where(pos_mask, -np.log(xs_pos), 0)
+        neg_bce = np.where(~pos_mask, -np.log(xs_neg), 0)
+        
+        loss = pos_focusing * pos_bce + neg_focusing * neg_bce
+        return np.mean(loss)
+        
+    def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
+        
+        if self.clip > 0:
+            y_pred = np.clip(y_pred, self.clip, 1 - self.clip)
+            
+        pos_mask = (y_true == 1)
+        
+        d_pos_focusing = self.gamma_pos * np.power(1 - y_pred, self.gamma_pos - 1)
+        d_neg_focusing = self.gamma_neg * np.power(y_pred, self.gamma_neg - 1)
+        
+        d_pos_bce = -1 / y_pred
+        d_neg_bce = 1 / (1 - y_pred)
+        
+        gradient = np.where(pos_mask,
+            d_pos_focusing * d_pos_bce,
+            d_neg_focusing * d_neg_bce
+        )
+        
+        return gradient / y_true.shape[0]

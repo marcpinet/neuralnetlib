@@ -54,6 +54,18 @@ class Metric:
             return rouge_l_score
         elif name in ['mmd', 'mmd_score', 'maximum-mean-discrepancy']:
             return mmd_score
+        elif name in ['hamming-loss', 'hamming_loss', 'hamming']:
+            return hamming_loss
+        elif name in ['exact-match-ratio', 'exact_match_ratio', 'exact-match']:
+            return exact_match_ratio
+        elif name in ['jaccard-similarity', 'jaccard_similarity', 'jaccard']:
+            return jaccard_similarity
+        elif name in ['subset-accuracy', 'subset_accuracy', 'subset']:
+            return subset_accuracy
+        elif name in ['precision-at-k', 'precision_at_k', 'precision-k']:
+            return precision_at_k
+        elif name in ['f1-score-per-label', 'f1_score_per_label', 'f1-per-label']:
+            return f1_score_per_label
         else:
             raise ValueError(f"Metric {name} is not supported.")
 
@@ -614,3 +626,53 @@ def skew(x: np.ndarray) -> float:
 
     skewness = (n * m3) / (m2**1.5)
     return skewness
+
+
+def hamming_loss(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    predictions = (y_pred >= threshold).astype(int)
+    return np.mean(predictions != y_true)
+
+
+def exact_match_ratio(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    predictions = (y_pred >= threshold).astype(int)
+    return np.mean(np.all(predictions == y_true, axis=1))
+
+
+def f1_score_per_label(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+    predictions = (y_pred >= threshold).astype(int)
+    
+    true_positives = np.sum((predictions == 1) & (y_true == 1), axis=0)
+    false_positives = np.sum((predictions == 1) & (y_true == 0), axis=0)
+    false_negatives = np.sum((predictions == 0) & (y_true == 1), axis=0)
+    
+    precision = true_positives / (true_positives + false_positives + 1e-15)
+    recall = true_positives / (true_positives + false_negatives + 1e-15)
+    
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-15)
+    return f1
+
+
+def subset_accuracy(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    predictions = (y_pred >= threshold).astype(int)
+    return np.mean(np.all(predictions == y_true, axis=1))
+
+
+def jaccard_similarity(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+    predictions = (y_pred >= threshold).astype(int)
+    
+    intersection = np.sum(predictions & y_true, axis=1)
+    union = np.sum(predictions | y_true, axis=1)
+    
+    return np.mean(intersection / (union + 1e-15))
+
+
+def precision_at_k(y_pred: np.ndarray, y_true: np.ndarray, k: int) -> float:
+    batch_size = y_true.shape[0]
+    topk_pred = np.zeros_like(y_pred)
+    
+    for i in range(batch_size):
+        top_k_indices = np.argsort(y_pred[i])[-k:]
+        topk_pred[i, top_k_indices] = 1
+        
+    true_positives = np.sum(topk_pred & y_true, axis=1)
+    return np.mean(true_positives / k)
