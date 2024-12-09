@@ -101,8 +101,6 @@ def train_test_split(x: np.ndarray, y: np.ndarray = None, test_size: float = 0.2
     return x_train, x_test, y_train, y_test
 
 
-import numpy as np
-
 def make_blobs(n_samples=100, 
               n_features=2, 
               centers=2, 
@@ -157,6 +155,138 @@ def make_blobs(n_samples=100,
     shuffle_idx = rng.permutation(n_samples)
     X = X[shuffle_idx]
     y = y[shuffle_idx]
+    
+    return X, y
+
+
+def make_classification(n_samples=100,
+                       n_features=20,
+                       n_informative=2,
+                       n_redundant=2,
+                       n_repeated=0,
+                       n_classes=2,
+                       n_clusters_per_class=2,
+                       weights=None,
+                       flip_y=0.01,
+                       class_sep=1.0,
+                       hypercube=True,
+                       shift=0.0,
+                       scale=1.0,
+                       shuffle=True,
+                       random_state=None):
+    """
+    Generate a random n-class classification problem.
+    
+    Args:
+        n_samples: int, default=100: The number of samples
+        n_features: int, default=20: The total number of features
+        n_informative: int, default=2: The number of informative features
+        n_redundant: int, default=2: The number of redundant features
+        n_repeated: int, default=0: The number of duplicated features
+        n_classes: int, default=2: The number of classes
+        n_clusters_per_class: int, default=2: The number of clusters per class
+        weights: list-like of float, default=None: The proportions of samples assigned to each class
+        flip_y: float, default=0.01: The fraction of samples whose class is randomly flipped
+        class_sep: float, default=1.0: The factor multiplying the hypercube size
+        hypercube: bool, default=True: If True, generate clusters in corners of hypercube
+        shift: float, default=0.0: Shift feature means by a random value from [-shift, shift]
+        scale: float, default=1.0: Scale features by a random value from [1-scale, 1+scale]
+        shuffle: bool, default=True: Shuffle samples and features
+        random_state: int, default=None: Random state for reproducibility
+
+    Returns:
+        X: array of shape [n_samples, n_features]: The generated samples
+        y: array of shape [n_samples]: The integer labels for class membership of each sample
+    """
+    
+    rng = np.random.default_rng(random_state)
+    
+    n_features_total = n_informative + n_redundant + n_repeated
+    if n_features_total > n_features:
+        raise ValueError("Sum of informative, redundant and repeated features must be <= n_features")
+    
+    if weights is None:
+        weights = [1.0 / n_classes] * n_classes
+    else:
+        weights = np.asarray(weights)
+        weights = weights / weights.sum()
+    
+    centers = []
+    if hypercube:
+        for i in range(n_classes):
+            for j in range(n_clusters_per_class):
+                center = rng.standard_normal(size=n_informative)
+                center = np.sign(center) * class_sep
+                centers.append(center)
+    else:
+        for i in range(n_classes * n_clusters_per_class):
+            center = rng.standard_normal(size=n_informative) * class_sep
+            centers.append(center)
+    
+    centers = np.array(centers)
+    
+    n_samples_per_cluster = []
+    
+    remaining_samples = n_samples
+    for k in range(n_classes - 1):
+        n_samples_k = int(n_samples * weights[k])
+        remaining_samples -= n_samples_k
+        samples_per_clusters_k = [n_samples_k // n_clusters_per_class] * n_clusters_per_class
+        extra = n_samples_k % n_clusters_per_class
+        for i in range(extra):
+            samples_per_clusters_k[i] += 1
+        n_samples_per_cluster.extend(samples_per_clusters_k)
+    
+    samples_per_clusters_last = [remaining_samples // n_clusters_per_class] * n_clusters_per_class
+    extra = remaining_samples % n_clusters_per_class
+    for i in range(extra):
+        samples_per_clusters_last[i] += 1
+    n_samples_per_cluster.extend(samples_per_clusters_last)
+    
+    X = []
+    y = []
+    
+    for i, n in enumerate(n_samples_per_cluster):
+        if n > 0:
+            X.append(centers[i] + rng.standard_normal(size=(n, n_informative)))
+            y.extend([i // n_clusters_per_class] * n)
+    
+    X = np.vstack(X)
+    y = np.array(y)
+    
+    if n_redundant > 0:
+        B = rng.standard_normal(size=(n_informative, n_redundant))
+        X_redundant = np.dot(X[:, :n_informative], B)
+        X = np.hstack([X, X_redundant])
+    
+    if n_repeated > 0:
+        indices = rng.integers(0, n_informative + n_redundant, size=n_repeated)
+        X_repeated = X[:, indices]
+        X = np.hstack([X, X_repeated])
+    
+    n_noise = n_features - X.shape[1]
+    if n_noise > 0:
+        X_noise = rng.standard_normal(size=(X.shape[0], n_noise))
+        X = np.hstack([X, X_noise])
+    
+    if shift > 0:
+        X += rng.uniform(-shift, shift, size=X.shape)
+    
+    if scale > 1:
+        X *= rng.uniform(1 - scale, 1 + scale, size=X.shape)
+    
+    if flip_y > 0:
+        n_to_flip = int(n_samples * flip_y)
+        indices_to_flip = rng.choice(n_samples, size=n_to_flip, replace=False)
+        y[indices_to_flip] = rng.integers(0, n_classes, size=n_to_flip)
+    
+    if shuffle:
+        indices = rng.permutation(n_samples)
+        X = X[indices]
+        y = y[indices]
+        
+        feature_indices = rng.permutation(n_features)
+        X = X[:, feature_indices]
     
     return X, y
 
