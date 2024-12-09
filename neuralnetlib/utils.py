@@ -101,6 +101,66 @@ def train_test_split(x: np.ndarray, y: np.ndarray = None, test_size: float = 0.2
     return x_train, x_test, y_train, y_test
 
 
+import numpy as np
+
+def make_blobs(n_samples=100, 
+              n_features=2, 
+              centers=2, 
+              cluster_std=1.0, 
+              center_box=(-10.0, 10.0), 
+              random_state=None):
+    """
+    Generate isotropic Gaussian blobs for clustering.
+    
+    Args:
+        n_samples (int): The total number of points to generate
+        n_features (int): The number of features for each sample
+        centers (int or array): The number of centers or array of center locations
+        cluster_std (float or array): The standard deviation of the clusters
+        center_box (tuple): The bounding box for each center when centers are randomly generated
+        random_state (int): Determines random number generation for dataset creation
+    
+    Returns:
+        tuple: (X, y) where X is the array of samples and y is the array of integer labels
+    """
+    rng = np.random.default_rng(random_state)
+    
+    if isinstance(centers, int):
+        n_centers = centers
+        centers = rng.uniform(center_box[0], center_box[1], 
+                            size=(n_centers, n_features))
+    else:
+        centers = np.array(centers)
+        n_centers = centers.shape[0]
+    
+    if np.isscalar(cluster_std):
+        cluster_std = np.array([cluster_std] * n_centers)
+    
+    samples_per_center = np.full(n_centers, n_samples // n_centers, dtype=int)
+    samples_per_center[:n_samples - sum(samples_per_center)] += 1
+    
+    X = np.zeros((n_samples, n_features))
+    y = np.zeros(n_samples, dtype=int)
+    
+    current_pos = 0
+    for i, (n_samples_center, std, center) in enumerate(
+        zip(samples_per_center, cluster_std, centers)):
+        
+        X[current_pos:current_pos + n_samples_center] = (
+            rng.normal(0, std, (n_samples_center, n_features)) + center
+        )
+        
+        y[current_pos:current_pos + n_samples_center] = i
+        
+        current_pos += n_samples_center
+        
+    shuffle_idx = rng.permutation(n_samples)
+    X = X[shuffle_idx]
+    y = y[shuffle_idx]
+    
+    return X, y
+
+
 def log_softmax(x: np.ndarray) -> np.ndarray:
     max_x = np.max(x, axis=-1, keepdims=True)
     exp_x = np.exp(x - max_x)
