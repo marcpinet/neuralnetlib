@@ -6,3 +6,4 @@ scikit-learn
 tqdm
 pillow
 ipython
+seaborn
