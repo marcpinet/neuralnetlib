@@ -7,3 +7,6 @@ tqdm
 pillow
 ipython
 seaborn
+tkinter
+requests
+scipy

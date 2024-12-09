@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import requests
 from scipy.io import arff
-from sklearn.model_selection import train_test_split
 
 from neuralnetlib.activations import ReLU, Sigmoid
 from neuralnetlib.callbacks import EarlyStopping
@@ -11,6 +10,7 @@ from neuralnetlib.losses import BinaryCrossentropy
 from neuralnetlib.metrics import accuracy_score
 from neuralnetlib.models import Sequential
 from neuralnetlib.optimizers import Adam
+from neuralnetlib.utils import train_test_split
 
 
 def main():
