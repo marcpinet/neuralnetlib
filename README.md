@@ -47,13 +47,14 @@ You can also check [this file](examples/models-usages/mlp-classification-regress
 ## Advanced usage
 
 See [this file](examples/models-usages/generation/autoencoder_vae_example.ipynb) for an example of how to use VAE to generate new images.<br>
+Also see [this file](examples/models-usages/generation/gan_mnist_convolutional.ipynb) for an example of how to use GAN to generate new images.<br>
 And [this file](examples/models-usages/rnn-text-generation/dinosaur_names_generator.ipynb) for an example of how to generate new dinosaur names.<br>
 
 More examples in [this folder](examples).
 
 You are free to tweak the hyperparameters and the network architecture to see how it affects the results.
 
-## 🚀 Quick examples (more [here](examples/models-usages/))
+## 🚀 Quick training examples (more [here](examples/models-usages/))
 
 ### Binary Classification
 
@@ -168,35 +169,36 @@ history = autoencoder.fit(X_train, epochs=5, batch_size=256, validation_data=(X_
 (x_train, y_train), (x_test, y_test) = mnist.load_data()
 n_classes = np.unique(y_train).shape[0]
 
+# Concatenate train and test data
+X = np.concatenate([x_train, x_test])
+y = np.concatenate([y_train, y_test])
+
 # Flatten images
-x_train = x_train.reshape(x_train.shape[0], -1)
-x_test = x_test.reshape(x_test.shape[0], -1)
+X = X.reshape(X.shape[0], -1)
 
 # Normalize pixel values
-x_train = x_train.astype('float32') / 255
-x_test = x_test.astype('float32') / 255
+X = X.astype('float32') / 255
 
-# Labels to categorical
-y_train = one_hot_encode(y_train, n_classes)
-y_test = one_hot_encode(y_test, n_classes)
+# Labels to categorical 
+y = one_hot_encode(y, n_classes)
 
 noise_dim = 32
 
 generator = Sequential()
 generator.add(Input(noise_dim))
-generator.add(Dense(128, input_dim = noise_dim, activation='relu'))
-generator.add(Dense(784, activation = 'sigmoid'))
+generator.add(Dense(128, input_dim=noise_dim + n_classes, activation='leakyrelu'))
+generator.add(Dense(784, activation='sigmoid'))
 
 discriminator = Sequential()
-discriminator.add(Input(784))
-discriminator.add(Dense(128, input_dim=784, activation='relu'))
+discriminator.add(Input(784 + n_classes))
+discriminator.add(Dense(128, input_dim=784 + n_classes, activation='leakyrelu'))
 discriminator.add(Dense(1, activation='sigmoid'))
 
-gan = GAN(latent_dim=noise_dim)
+gan = GAN(latent_dim=noise_dim, n_classes=n_classes)
 
 gan.compile(generator, discriminator, generator_optimizer='adam', discriminator_optimizer='adam', loss_function='bce', verbose=True)
 
-history = gan.fit(x_train, epochs=40, batch_size=128, plot_generated=True)   
+history = gan.fit(X, y, epochs=40, batch_size=128, plot_generated=True)   
 ```
 
 ### Text Generation (example here is for translation)
@@ -276,7 +278,7 @@ model = Model.load('my_model.json')
 
 ![dino](resources/img/dino.png)
 
-### Here is a MNIST generated image using a GAN.
+### Here are some MNIST generated images using a cGAN.
 
 ![mnist_generated](resources/img/mnist_generated.gif)
 
