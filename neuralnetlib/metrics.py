@@ -676,3 +676,52 @@ def precision_at_k(y_pred: np.ndarray, y_true: np.ndarray, k: int) -> float:
         
     true_positives = np.sum(topk_pred & y_true, axis=1)
     return np.mean(true_positives / k)
+
+
+def adjusted_rand_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    """
+    Compute the Adjusted Rand Index between two clusterings.
+    
+    Args:
+        y_pred: array-like of shape (n_samples,), predicted cluster labels
+        y_true: array-like of shape (n_samples,), ground truth cluster labels
+    
+    Returns:
+        float: Adjusted Rand Index score (-1 to 1)
+    """
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    
+    if y_pred.ndim != 1 or y_true.ndim != 1:
+        raise ValueError("Input arrays must be 1-dimensional")
+    if len(y_pred) != len(y_true):
+        raise ValueError("Input arrays must have the same length")
+    
+    n_samples = len(y_true)
+    
+    if np.array_equal(y_pred, y_true):
+        return 1.0
+    
+    classes = np.unique(y_true)
+    clusters = np.unique(y_pred)
+    contingency = np.zeros((len(classes), len(clusters)), dtype=np.int64)
+    
+    for i, label in enumerate(classes):
+        for j, cluster in enumerate(clusters):
+            contingency[i, j] = np.sum((y_true == label) & (y_pred == cluster))
+    
+    nij = np.sum(contingency * (contingency - 1)) // 2
+    
+    a = np.sum(contingency, axis=1)
+    b = np.sum(contingency, axis=0)
+    
+    rsum = np.sum(a * (a - 1)) // 2
+    csum = np.sum(b * (b - 1)) // 2
+    expected = (rsum * csum) / (n_samples * (n_samples - 1) / 2)
+    
+    max_index = (rsum + csum) / 2
+    
+    if max_index == expected:
+        return 0.0
+    
+    return (nij - expected) / (max_index - expected)
