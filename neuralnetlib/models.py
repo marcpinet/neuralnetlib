@@ -2324,6 +2324,7 @@ class GAN(BaseModel):
         gp_weight: float = 10.0,
         image_height: int | None = None,
         image_width: int | None = None,
+        label_smoothing: float = 0.9
     ):
         super().__init__(gradient_clip_threshold, enable_padding, padding_size, random_state)
 
@@ -2340,6 +2341,7 @@ class GAN(BaseModel):
         self.gp_weight = gp_weight
         self._image_height = image_height
         self._image_width = image_width
+        self.label_smoothing = label_smoothing
 
         self.spectral_norm = SpectralNorm()
         self._train_step = 0
@@ -2530,7 +2532,8 @@ class GAN(BaseModel):
 
             combined_batch = np.concatenate([real_batch, fake_batch])
             combined_labels = np.zeros((2 * batch_size, 1))
-            combined_labels[:batch_size] = 1.0
+            combined_labels[:batch_size] = self.label_smoothing
+            combined_labels[batch_size:] = 1 - self.label_smoothing
 
             if self.n_classes is not None:
                 if batch_labels is not None:
@@ -2644,7 +2647,7 @@ class GAN(BaseModel):
                     callback.on_epoch_begin(epoch, epoch_logs)
 
                 start_time = time.time()
-                if y_train:
+                if y_train.any():
                     x_train_shuffled, y_train_shuffled = shuffle(
                         x_train, y_train,
                         random_state=random_state if random_state is not None else self.random_state
@@ -2668,7 +2671,7 @@ class GAN(BaseModel):
                     for j in range(0, x_train.shape[0], batch_size):
                         batch_index = j // batch_size
                         x_batch = x_train_shuffled[j:j + batch_size]
-                        if y_train:
+                        if y_train.any():
                             y_batch = y_train_shuffled[j:j + batch_size]
                         else:
                             y_batch = None
