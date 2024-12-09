@@ -1222,7 +1222,7 @@ class BatchNormalization(Layer):
         return f'BatchNormalization(momentum={self.momentum}, epsilon={self.epsilon})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
-        if self.gamma is None:
+        if self.gamma is None or self.running_mean is None or self.running_var is None:
             self.initialize_weights(input_data.shape[1:])
 
         input_data = np.clip(input_data, -10, 10)
