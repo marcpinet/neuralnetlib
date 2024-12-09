@@ -38,8 +38,11 @@ class Optimizer:
 
 
 class SGD(Optimizer):
-    def __init__(self, learning_rate: float = 0.01):
+    def __init__(self, learning_rate: float = 0.01, **kwargs):
         super().__init__(learning_rate)
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
                bias_grad: np.ndarray):
@@ -58,10 +61,13 @@ class SGD(Optimizer):
 
 
 class Momentum(Optimizer):
-    def __init__(self, learning_rate: float = 0.01, momentum: float = 0.9):
+    def __init__(self, learning_rate: float = 0.01, momentum: float = 0.9, **kwargs):
         super().__init__(learning_rate)
         self.momentum = momentum
         self.velocity = None
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
                bias_grad: np.ndarray):
@@ -87,11 +93,14 @@ class Momentum(Optimizer):
 
 
 class RMSprop(Optimizer):
-    def __init__(self, learning_rate: float = 0.01, rho: float = 0.9, epsilon: float = 1e-8):
+    def __init__(self, learning_rate: float = 0.01, rho: float = 0.9, epsilon: float = 1e-8, **kwargs):
         super().__init__(learning_rate)
         self.rho = rho
         self.epsilon = epsilon
         self.sq_grads = None
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
                bias_grad: np.ndarray):
@@ -121,7 +130,7 @@ class RMSprop(Optimizer):
 
 class Adam(Optimizer):
     def __init__(self, learning_rate: float = 0.001, beta_1: float = 0.9, beta_2: float = 0.999,
-                 epsilon: float = 1e-8, clip_norm: float = None, clip_value: float = None) -> None:
+                 epsilon: float = 1e-8, clip_norm: float = None, clip_value: float = None, **kwargs) -> None:
 
         super().__init__(learning_rate)
         self.beta_1 = beta_1
@@ -138,6 +147,9 @@ class Adam(Optimizer):
 
         # Maximum exponent value for float64 = 709
         self._max_exp = np.log(np.finfo(np.float64).max)
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def _clip_gradients(self, grad: np.ndarray) -> np.ndarray:
         if grad is None:
@@ -237,7 +249,7 @@ class Adam(Optimizer):
 
 class AdaBelief(Optimizer):
     def __init__(self, learning_rate: float = 0.001, beta_1: float = 0.9, beta_2: float = 0.999,
-                 epsilon: float = 1e-16, clip_norm: float = None, clip_value: float = None) -> None:
+                 epsilon: float = 1e-16, clip_norm: float = None, clip_value: float = None, **kwargs) -> None:
         super().__init__(learning_rate)
         self.beta_1 = beta_1
         self.beta_2 = beta_2
@@ -251,6 +263,9 @@ class AdaBelief(Optimizer):
 
         self._min_denom = 1e-16
         self._max_exp = np.log(np.finfo(np.float64).max)
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def _clip_gradients(self, grad: np.ndarray) -> np.ndarray:
         if grad is None:
@@ -350,7 +365,7 @@ class AdaBelief(Optimizer):
 
 class RAdam(Optimizer):
     def __init__(self, learning_rate: float = 0.001, beta_1: float = 0.9, beta_2: float = 0.999,
-                 epsilon: float = 1e-8, clip_norm: float = None, clip_value: float = None) -> None:
+                 epsilon: float = 1e-8, clip_norm: float = None, clip_value: float = None, **kwargs) -> None:
         super().__init__(learning_rate)
         self.beta_1 = beta_1
         self.beta_2 = beta_2
@@ -366,6 +381,9 @@ class RAdam(Optimizer):
         self._max_exp = np.log(np.finfo(np.float64).max)
 
         self.rho_inf = 2/(1-beta_2) - 1
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def _clip_gradients(self, grad: np.ndarray) -> np.ndarray:
         if grad is None:

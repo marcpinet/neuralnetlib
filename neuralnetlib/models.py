@@ -1,3 +1,4 @@
+import os
 import inspect
 import json
 import time
@@ -5,7 +6,6 @@ import logging
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-
 from abc import ABC, abstractmethod
 
 from neuralnetlib.activations import ActivationFunction
@@ -665,6 +665,8 @@ class Sequential(BaseModel):
 
         with open(filename, 'w') as f:
             json.dump(model_state, f, indent=4)
+            
+        return model_state
 
     @classmethod
     def load(cls, filename: str) -> 'Sequential':
@@ -2739,7 +2741,7 @@ class GAN(BaseModel):
                             len(x_train) if n_gen_samples is None else n_gen_samples, y_train)
                         generated_samples = self.forward_pass(noise, training=False)
 
-                        for metric in metrics:
+                        for metric in metrics:  
                             metric_value = metric(generated_samples, x_train)
                             metric_values[f'generator_{metric.name}'] = metric_value
                             metric_values[f'discriminator_{metric.name}'] = metric_value
@@ -2839,8 +2841,18 @@ class GAN(BaseModel):
         plt.close()
 
     def predict(self, n_samples: int, labels: np.ndarray | None = None, temperature: float = 1.0) -> np.ndarray:
+        if labels is not None:
+            if labels.ndim == 1:
+                one_hot_labels = np.zeros((len(labels), self.n_classes))
+                one_hot_labels[np.arange(len(labels)), labels] = 1
+                labels = one_hot_labels
+            elif labels.shape[1] != self.n_classes:
+                raise ValueError(f"Labels must have {self.n_classes} columns when one-hot encoded")
+        
         latent_points, _ = self._generate_latent_points(n_samples, labels)
-        return self.generator.predict(latent_points, temperature)
+        
+        samples = self.generator.forward_pass(latent_points, training=False)
+        return samples
 
     def evaluate(
         self,
@@ -2883,6 +2895,8 @@ class GAN(BaseModel):
         return discriminator_loss, generator_loss
 
     def save(self, filename: str):
+        base, ext = os.path.splitext(filename)
+        
         model_state = {
             'type': 'GAN',
             'latent_dim': self.latent_dim,
@@ -2890,8 +2904,8 @@ class GAN(BaseModel):
             'enable_padding': self.enable_padding,
             'padding_size': self.padding_size,
             'random_state': self.random_state,
-            'generator': self.generator.save(filename + '_generator') if self.generator else None,
-            'discriminator': self.discriminator.save(filename + '_discriminator') if self.discriminator else None,
+            'generator': self.generator.save(f"{base}_generator{ext}") if self.generator else None,
+            'discriminator': self.discriminator.save(f"{base}_discriminator{ext}") if self.discriminator else None,
             'generator_optimizer': self.generator_optimizer.get_config() if self.generator_optimizer else None,
             'discriminator_optimizer': self.discriminator_optimizer.get_config() if self.discriminator_optimizer else None,
             'generator_loss': self.generator_loss.get_config() if self.generator_loss else None,
@@ -2903,6 +2917,8 @@ class GAN(BaseModel):
 
     @classmethod
     def load(cls, filename: str) -> 'GAN':
+        base, ext = os.path.splitext(filename)
+
         with open(filename, 'r') as f:
             model_state = json.load(f)
 
@@ -2914,11 +2930,9 @@ class GAN(BaseModel):
             random_state=model_state['random_state']
         )
 
-        if model_state.get('generator'):
-            model.generator = Sequential.load(filename + '_generator')
+        model.generator = Sequential.load(f"{base}_generator{ext}")
 
-        if model_state.get('discriminator'):
-            model.discriminator = Sequential.load(filename + '_discriminator')
+        model.discriminator = Sequential.load(f"{base}_discriminator{ext}")
 
         if model_state.get('generator_optimizer'):
             model.generator_optimizer = Optimizer.from_config(
