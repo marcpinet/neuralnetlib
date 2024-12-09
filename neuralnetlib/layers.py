@@ -2540,6 +2540,165 @@ class Attention(Layer):
         )
 
 
+class Conv2DTranspose(Layer):
+    def __init__(self, filters: int, kernel_size: int | tuple, strides: int | tuple = 1,
+                 padding: str = 'valid', weights_init: str = "default", bias_init: str = "default",
+                 random_state: int = None, **kwargs):
+        self.filters = filters
+        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        self.strides = (strides, strides) if isinstance(strides, int) else strides
+        self.padding = padding
+        
+        self.weights = None
+        self.bias = None
+        self.d_weights = None
+        self.d_bias = None
+        
+        self.weights_init = weights_init
+        self.bias_init = bias_init
+        self.random_state = random_state
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    
+    def initialize_weights(self, input_shape: tuple):
+        _, _, _, in_channels = input_shape
+        
+        self.rng = np.random.default_rng(
+            self.random_state if self.random_state is not None else int(time.time_ns()))
+        
+        if self.weights_init == "xavier":
+            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * self.filters)),
+                                        (*self.kernel_size, self.filters, in_channels))
+        elif self.weights_init == "he":
+            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))),
+                                        (*self.kernel_size, self.filters, in_channels))
+        elif self.weights_init == "default":
+            self.weights = self.rng.normal(0, 0.01, (*self.kernel_size, self.filters, in_channels))
+        else:
+            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            
+        if self.bias_init == "default":
+            self.bias = np.zeros((1, 1, 1, self.filters))
+        elif self.bias_init == "normal":
+            self.bias = self.rng.normal(0, 0.01, (1, 1, 1, self.filters))
+        elif self.bias_init == "uniform":
+            self.bias = self.rng.uniform(-0.1, 0.1, (1, 1, 1, self.filters))
+        elif self.bias_init == "small":
+            self.bias = np.full((1, 1, 1, self.filters), 0.01)
+        else:
+            raise ValueError("Invalid bias_init value.")
+            
+        self.d_weights = np.zeros_like(self.weights)
+        self.d_bias = np.zeros_like(self.bias)
+
+    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        if self.weights is None:
+            assert len(input_data.shape) == 4, "Conv2DTranspose input must be 4D (batch_size, height, width, channels)"
+            self.initialize_weights(input_data.shape)
+            
+        self.input = input_data
+        batch_size, in_height, in_width, in_channels = input_data.shape
+        kernel_height, kernel_width, out_channels, _ = self.weights.shape
+        
+        if self.padding == 'same':
+            out_height = in_height * self.strides[0]
+            out_width = in_width * self.strides[1]
+            pad_height = max((in_height - 1) * self.strides[0] + kernel_height - out_height, 0)
+            pad_width = max((in_width - 1) * self.strides[1] + kernel_width - out_width, 0)
+            pad_top = pad_height // 2
+            pad_bottom = pad_height - pad_top
+            pad_left = pad_width // 2
+            pad_right = pad_width - pad_left
+        else:
+            out_height = (in_height - 1) * self.strides[0] + kernel_height
+            out_width = (in_width - 1) * self.strides[1] + kernel_width
+            pad_top = pad_bottom = pad_left = pad_right = 0
+
+        padded_output = np.zeros((batch_size, out_height + pad_top + pad_bottom,
+                                out_width + pad_left + pad_right, out_channels))
+
+        for h in range(in_height):
+            for w in range(in_width):
+                h_start = h * self.strides[0]
+                w_start = w * self.strides[1]
+                
+                out_slice = padded_output[:, h_start:h_start + kernel_height,
+                                        w_start:w_start + kernel_width, :]
+                
+                for c in range(in_channels):
+                    weight_slice = self.weights[:, :, :, c]
+                    input_val = input_data[:, h, w, c:c+1]
+                    out_slice += np.expand_dims(weight_slice, 0) * np.expand_dims(input_val, (1, 2))
+
+        if self.padding == 'valid':
+            output = padded_output
+        else:
+            output = padded_output[:, pad_top:pad_top + out_height,
+                                 pad_left:pad_left + out_width, :]
+
+        return output + self.bias
+
+    def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        batch_size = output_error.shape[0]
+        kernel_height, kernel_width, out_channels, in_channels = self.weights.shape
+
+        d_input = np.zeros_like(self.input)
+        self.d_weights = np.zeros_like(self.weights)
+        self.d_bias = np.sum(output_error, axis=(0, 1, 2), keepdims=True)
+
+        for h in range(d_input.shape[1]):
+            for w in range(d_input.shape[2]):
+                h_start = h * self.strides[0]
+                w_start = w * self.strides[1]
+                
+                error_field = output_error[:, h_start:h_start + kernel_height,
+                                        w_start:w_start + kernel_width, :]
+                
+                if error_field.shape[1:3] == (kernel_height, kernel_width):
+                    for c in range(in_channels):
+                        weight_slice = self.weights[:, :, :, c]
+                        d_input[:, h, w, c] = np.sum(error_field * weight_slice, axis=(1, 2, 3))
+                        
+                        for b in range(batch_size):
+                            self.d_weights[:, :, :, c] += error_field[b] * self.input[b, h, w, c]
+
+        return d_input
+
+    def __str__(self) -> str:
+        return f'Conv2DTranspose(filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
+
+    def get_config(self) -> dict:
+        return {
+            'name': self.__class__.__name__,
+            'weights': self.weights.tolist() if self.weights is not None else None,
+            'bias': self.bias.tolist() if self.bias is not None else None,
+            'filters': self.filters,
+            'kernel_size': self.kernel_size,
+            'strides': self.strides,
+            'padding': self.padding,
+            'weights_init': self.weights_init,
+            'bias_init': self.bias_init,
+            'random_state': self.random_state
+        }
+
+    @staticmethod
+    def from_config(config: dict):
+        layer = Conv2DTranspose(
+            config['filters'],
+            config['kernel_size'],
+            config['strides'],
+            config['padding'],
+            config['weights_init'],
+            config['bias_init'],
+            config['random_state']
+        )
+        if config['weights'] is not None:
+            layer.weights = np.array(config['weights'])
+            layer.bias = np.array(config['bias'])
+        return layer
+
+
 class UpSampling2D(Layer):
     def __init__(self, size=(2, 2), interpolation="nearest", **kwargs):
         super().__init__()
@@ -3627,6 +3786,8 @@ incompatibility_dict = {
     Conv2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
 
     UpSampling2D: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
+    
+    Conv2DTranspose: [Conv1D, LSTM, GRU, Bidirectional, Unidirectional],
 
     MaxPooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
 
@@ -3634,19 +3795,19 @@ incompatibility_dict = {
 
     GlobalAveragePooling2D: [Conv1D, MaxPooling1D, AveragePooling1D, LSTM, GRU, Bidirectional, Unidirectional],
 
-    Conv1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    Conv1D: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
 
-    MaxPooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    MaxPooling1D: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
 
-    AveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
+    AveragePooling1D: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D],
 
-    GlobalAveragePooling1D: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    GlobalAveragePooling1D: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
     Flatten: [],
 
     Dropout: [],
 
-    Embedding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    Embedding: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
     BatchNormalization: [],
 
@@ -3654,29 +3815,29 @@ incompatibility_dict = {
 
     Permute: [],
 
-    TextVectorization: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    TextVectorization: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
     Reshape: [],
 
-    LSTM: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    LSTM: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    GRU: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    GRU: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    Bidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    Bidirectional: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    Unidirectional: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    Unidirectional: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    Attention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    Attention: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    MultiHeadAttention: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    MultiHeadAttention: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    PositionalEncoding: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    PositionalEncoding: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    FeedForward: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    FeedForward: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    AddNorm: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    AddNorm: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    TransformerEncoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    TransformerEncoderLayer: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 
-    TransformerDecoderLayer: [Conv2D, UpSampling2D, MaxPooling2D, AveragePooling2D],
+    TransformerDecoderLayer: [Conv2D, UpSampling2D, Conv2DTranspose, MaxPooling2D, AveragePooling2D],
 }
