@@ -275,6 +275,7 @@ class Dropout(Layer):
         self.adaptive = adaptive
         self.random_state = random_state
         self.mask = None
+        self.input = None
 
         if adaptive:
             self.dropout_impl = AdaptiveDropout(
@@ -296,6 +297,8 @@ class Dropout(Layer):
         return f'Dropout(rate={self.rate})'
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
+        self.input = input_data
+        
         if not training:
             return input_data
 
@@ -311,6 +314,13 @@ class Dropout(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.adaptive:
             return self.dropout_impl.gradient(output_error)
+
+        if output_error.shape[0] != self.mask.shape[0]:
+            rng = np.random.default_rng(
+                self.random_state if self.random_state is not None else int(time.time_ns()))
+            self.mask = rng.binomial(1, 1 - self.rate,
+                                    size=(output_error.shape[0], self.mask.shape[1])) / (1 - self.rate)
+                                    
         return output_error * self.mask
 
     def get_config(self) -> dict:
