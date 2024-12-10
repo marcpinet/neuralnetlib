@@ -270,9 +270,9 @@ model = Model.load('my_model.json')
 
 ![gui](resources/img/gui.gif)
 
-### Here, I decided to print the first 10 predictions and their respective labels to see how the network is performing.
+### Here, I replaced Keras/Tensorflow with this library for my [Handigits](https://github.com/marcpinet/handigits) project...
 
-![plot](resources/img/plot.png)
+![plot](resources/img/handigits.gif)
 
 ### Here is the generated dinosaur names using a simple RNN and a list of existing dinosaur names.
 
