@@ -2996,36 +2996,48 @@ class GAN(BaseModel):
         if n_gen_samples is None:
             n_gen_samples = len(x_test)
 
-        latent_points = self._generate_latent_points(n_gen_samples)
-        generated_samples = self.generator.forward_pass(
-            latent_points, training=False)
+        total_d_loss = 0
+        total_g_loss = 0
+        n_batches = 0
 
-        y_real = np.ones((len(x_test), 1))
-        y_fake = np.zeros((n_gen_samples, 1))
+        for start_idx in range(0, len(x_test), batch_size):
+            end_idx = min(start_idx + batch_size, len(x_test))
+            current_batch_size = end_idx - start_idx
+            
+            x_batch = x_test[start_idx:end_idx]
+            
+            latent_points, _ = self._generate_latent_points(current_batch_size)
+            fake_samples = self.generator.forward_pass(latent_points, training=False)
 
-        d_loss_real = self.discriminator_loss(
-            y_real,
-            self.discriminator.forward_pass(x_test, training=False)
-        )
+            y_real = np.ones((current_batch_size, 1))
+            y_fake = np.zeros((current_batch_size, 1))
 
-        d_loss_fake = self.discriminator_loss(
-            y_fake,
-            self.discriminator.forward_pass(generated_samples, training=False)
-        )
+            d_loss_real = self.discriminator_loss(
+                y_real,
+                self.discriminator.forward_pass(x_batch, training=False)
+            )
+            d_loss_fake = self.discriminator_loss(
+                y_fake,
+                self.discriminator.forward_pass(fake_samples, training=False)
+            )
+            d_loss = 0.5 * (d_loss_real + d_loss_fake)
 
-        discriminator_loss = 0.5 * (d_loss_real + d_loss_fake)
+            y_gan = np.ones((current_batch_size, 1))
+            latent_points, _ = self._generate_latent_points(current_batch_size)
+            fake_samples = self.generator.forward_pass(latent_points, training=False)
+            g_loss = self.generator_loss(
+                y_gan,
+                self.discriminator.forward_pass(fake_samples, training=False)
+            )
 
-        latent_points = self._generate_latent_points(n_gen_samples)
-        y_gan = np.ones((n_gen_samples, 1))
+            total_d_loss += d_loss * current_batch_size
+            total_g_loss += g_loss * current_batch_size
+            n_batches += current_batch_size
 
-        generated_samples = self.generator.forward_pass(
-            latent_points, training=False)
-        discriminator_output = self.discriminator.forward_pass(
-            generated_samples, training=False)
+        avg_d_loss = total_d_loss / n_batches
+        avg_g_loss = total_g_loss / n_batches
 
-        generator_loss = self.generator_loss(y_gan, discriminator_output)
-
-        return discriminator_loss, generator_loss
+        return avg_d_loss, avg_g_loss
 
     def save(self, filename: str):
         base, ext = os.path.splitext(filename)
