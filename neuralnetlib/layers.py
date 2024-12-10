@@ -564,10 +564,6 @@ class MaxPooling2D(Layer):
         return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
-    def from_config(config: dict):
-        return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
-
-    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
         batch_size, in_height, in_width, channels = input_data.shape
 
@@ -1181,7 +1177,6 @@ class Embedding(Layer):
         return {
             'name': self.__class__.__name__,
             'weights': self.weights.tolist() if self.weights is not None else None,
-            'bias': self.bias.tolist() if self.bias is not None else None,
             'input_dim': self.input_dim,
             'output_dim': self.output_dim,
             'input_length': self.input_length,
@@ -1191,11 +1186,15 @@ class Embedding(Layer):
 
     @staticmethod
     def from_config(config: dict):
-        layer = Embedding(config['input_dim'], config['output_dim'], config['input_length'], config['weights_init'],
-                          config['random_state'])
+        layer = Embedding(
+            input_dim=config['input_dim'], 
+            output_dim=config['output_dim'], 
+            input_length=config['input_length'], 
+            weights_init=config['weights_init'],
+            random_state=config['random_state']
+        )
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
-            layer.bias = np.array(config['bias'])
         return layer
 
 
@@ -1518,7 +1517,7 @@ class TextVectorization(Layer):
             return np.array([[1 if token > 0 else 0 for token in seq] for seq in vectorized])
         elif self.output_mode == 'count':
             return np.array([[seq.count(token) for token in range(1, len(self.vocabulary))] for seq in vectorized])
-        elif self.output_mode == 'tfidf':
+        elif self.output_mode == 'tfidf' or self.output_mode == 'freq' or self.output_mode == 'tf-idf':
             tf = np.array([[seq.count(token) for token in range(
                 1, len(self.vocabulary))] for seq in vectorized])
             idf = np.log(len(vectorized) / (1 + np.array([[(token in seq) for seq in vectorized].count(
@@ -1531,21 +1530,29 @@ class TextVectorization(Layer):
         return output_error
 
     def get_config(self) -> dict:
+        word_index_serializable = {str(k): v for k, v in self.word_index.items()} if self.word_index is not None else None
+        
         return {
             'name': self.__class__.__name__,
             'max_tokens': self.max_tokens,
             'output_mode': self.output_mode,
             'output_sequence_length': self.output_sequence_length,
-            'vocabulary': self.vocabulary,
-            'word_index': self.word_index
+            'vocabulary': self.vocabulary if self.vocabulary is not None else None,
+            'word_index': word_index_serializable
         }
 
     @staticmethod
     def from_config(config: dict):
         layer = TextVectorization(
-            config['max_tokens'], config['output_mode'], config['output_sequence_length'])
-        layer.vocabulary = config['vocabulary']
-        layer.word_index = config['word_index']
+            config['max_tokens'], 
+            config['output_mode'], 
+            config['output_sequence_length']
+        )
+        
+        if config['vocabulary'] is not None:
+            layer.vocabulary = config['vocabulary']
+            layer.word_index = {k: v for k, v in config['word_index'].items()}
+        
         return layer
 
 
@@ -2089,15 +2096,13 @@ class Bidirectional(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'forward_layer': self.forward_layer.get_config(),
-            'backward_layer': self.backward_layer.get_config()
+            'layer': self.forward_layer.get_config()
         }
 
     @staticmethod
     def from_config(config: dict) -> 'Bidirectional':
-        forward_layer = Layer.from_config(config['forward_layer'])
+        forward_layer = LSTM.from_config(config['layer'])
         layer = Bidirectional(forward_layer)
-        layer.backward_layer = Layer.from_config(config['backward_layer'])
         return layer
 
 
@@ -3055,7 +3060,7 @@ class MultiHeadAttention(Layer):
         return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'num_heads': self.num_heads,
             'key_dim': self.key_dim,
@@ -3066,12 +3071,26 @@ class MultiHeadAttention(Layer):
             'attention_axes': self.attention_axes,
             'kernel_initializer': self.kernel_initializer,
             'bias_initializer': self.bias_initializer,
+            'normalize_attention': self.normalize_attention,
             'random_state': self.random_state
         }
+        
+        if self.query_dense is not None:
+            config.update({
+                'query_dense': self.query_dense.get_config(),
+                'key_dense': self.key_dense.get_config(),
+                'value_dense': self.value_dense.get_config(),
+                'output_dense': self.output_dense.get_config()
+            })
+        
+        if self.dropout is not None:
+            config['dropout'] = self.dropout.get_config()
+        
+        return config
 
     @staticmethod
     def from_config(config: dict) -> "MultiHeadAttention":
-        return MultiHeadAttention(
+        layer = MultiHeadAttention(
             num_heads=config['num_heads'],
             key_dim=config['key_dim'],
             value_dim=config['value_dim'],
@@ -3081,8 +3100,20 @@ class MultiHeadAttention(Layer):
             attention_axes=config['attention_axes'],
             kernel_initializer=config['kernel_initializer'],
             bias_initializer=config['bias_initializer'],
-            random_state=config['random_state'],
+            normalize_attention=config.get('normalize_attention', False),
+            random_state=config['random_state']
         )
+        
+        if 'query_dense' in config:
+            layer.query_dense = Dense.from_config(config['query_dense'])
+            layer.key_dense = Dense.from_config(config['key_dense'])
+            layer.value_dense = Dense.from_config(config['value_dense'])
+            layer.output_dense = Dense.from_config(config['output_dense'])
+        
+        if 'dropout' in config:
+            layer.dropout = Dropout.from_config(config['dropout'])
+        
+        return layer
 
 
 class PositionalEncoding(Layer):
@@ -3208,7 +3239,8 @@ class PositionalEncoding(Layer):
         return output_error
 
     def get_config(self) -> dict:
-        return {
+        config = {
+            'name': self.__class__.__name__,
             'max_sequence_length': self.max_sequence_length,
             'embedding_dim': self.embedding_dim,
             'warmup_steps': self.warmup_steps,
@@ -3218,8 +3250,35 @@ class PositionalEncoding(Layer):
             'trainable': self.trainable,
             'random_state': self.random_state,
             'current_step': self.current_step,
-            'current_scale': self.current_scale
+            'current_scale': self.current_scale,
         }
+        
+        if hasattr(self, 'weights'):
+            config['weights'] = self.weights.tolist() if self.weights is not None else None
+        
+        return config
+
+    @staticmethod
+    def from_config(config: dict) -> 'PositionalEncoding':
+        layer = PositionalEncoding(
+            max_sequence_length=config['max_sequence_length'],
+            embedding_dim=config['embedding_dim'],
+            warmup_steps=config['warmup_steps'],
+            initial_scale=config['initial_scale'],
+            final_scale=config['final_scale'],
+            scale_embeddings=config['scale_embeddings'],
+            trainable=config['trainable'],
+            random_state=config['random_state']
+        )
+        
+        layer.current_step = config['current_step']
+        layer.current_scale = config['current_scale']
+        
+        if config.get('weights') is not None:
+            layer.weights = np.array(config['weights'])
+            layer.d_weights = np.zeros_like(layer.weights)
+        
+        return layer
 
     def __str__(self) -> str:
         return (
@@ -3297,28 +3356,47 @@ class FeedForward(Layer):
         return dx
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'd_ff': self.d_ff,
             'd_model': self.d_model,
             'dropout_rate': self.dropout_rate,
             'activation': self.activation_name,
             'kernel_initializer': self.kernel_initializer,
+            'output_initializer': self.output_initializer,
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
+        
+        config.update({
+            'dense1': self.dense1.get_config(),
+            'dense2': self.dense2.get_config(),
+            'activation': self.activation.get_config(),
+            'dropout': self.dropout.get_config() if self.dropout is not None else None
+        })
+        
+        return config
 
     @staticmethod
     def from_config(config: dict) -> "FeedForward":
-        return FeedForward(
+        layer = FeedForward(
             d_ff=config['d_ff'],
             d_model=config['d_model'],
             dropout_rate=config['dropout_rate'],
             activation=config['activation'],
             kernel_initializer=config['kernel_initializer'],
+            output_initializer=config['output_initializer'],
             bias_initializer=config['bias_initializer'],
             random_state=config['random_state']
         )
+        
+        layer.dense1 = Dense.from_config(config['dense1'])
+        layer.dense2 = Dense.from_config(config['dense2'])
+        layer.activation = Activation.from_config(config['activation'])
+        if config['dropout'] is not None:
+            layer.dropout = Dropout.from_config(config['dropout'])
+        
+        return layer
 
 
 class AddNorm(Layer):
@@ -3445,18 +3523,53 @@ class AddNorm(Layer):
         return f'AddNorm(epsilon={self.epsilon}, random_state={self.random_state})'
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'epsilon': self.epsilon,
-            'random_state': self.random_state
+            'gamma_init_std': self.gamma_init_std,
+            'beta_init_std': self.beta_init_std,
+            'grad_clip': self.grad_clip,
+            'grad_scale': self.grad_scale,
+            'warmup_steps': self.warmup_steps,
+            'random_state': self.random_state,
+            'step': self.step
         }
+        
+        if self.gamma is not None:
+            config.update({
+                'gamma': self.gamma.tolist(),
+                'beta': self.beta.tolist(),
+                'grad_ema': self.grad_ema.tolist() if self.grad_ema is not None else None,
+                'grad_emv': self.grad_emv.tolist() if self.grad_emv is not None else None
+            })
+        
+        return config
 
     @staticmethod
     def from_config(config: dict) -> "AddNorm":
-        return AddNorm(
+        layer = AddNorm(
             epsilon=config['epsilon'],
+            gamma_init_std=config['gamma_init_std'],
+            beta_init_std=config['beta_init_std'],
+            grad_clip=config['grad_clip'],
+            grad_scale=config['grad_scale'],
+            warmup_steps=config['warmup_steps'],
             random_state=config['random_state']
         )
+        
+        layer.step = config['step']
+        
+        if 'gamma' in config:
+            layer.gamma = np.array(config['gamma'])
+            layer.beta = np.array(config['beta'])
+            layer.d_gamma = np.zeros_like(layer.gamma)
+            layer.d_beta = np.zeros_like(layer.beta)
+            
+            if config['grad_ema'] is not None:
+                layer.grad_ema = np.array(config['grad_ema'])
+                layer.grad_emv = np.array(config['grad_emv'])
+        
+        return layer
 
 
 class TransformerEncoderLayer(Layer):
@@ -3566,7 +3679,7 @@ class TransformerEncoderLayer(Layer):
         return f'TransformerEncoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'd_model': self.d_model,
             'num_heads': self.num_heads,
@@ -3578,10 +3691,21 @@ class TransformerEncoderLayer(Layer):
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
+        
+        config.update({
+            'attention': self.attention.get_config(),
+            'ffn': self.ffn.get_config(),
+            'attention_dropout': self.attention_dropout.get_config(),
+            'ffn_dropout': self.ffn_dropout.get_config(),
+            'attention_norm': self.attention_norm.get_config(),
+            'ffn_norm': self.ffn_norm.get_config()
+        })
+        
+        return config
 
     @staticmethod
     def from_config(config: dict) -> "TransformerEncoderLayer":
-        return TransformerEncoderLayer(
+        layer = TransformerEncoderLayer(
             d_model=config['d_model'],
             num_heads=config['num_heads'],
             d_ff=config['d_ff'],
@@ -3592,6 +3716,15 @@ class TransformerEncoderLayer(Layer):
             bias_initializer=config['bias_initializer'],
             random_state=config['random_state']
         )
+        
+        layer.attention = MultiHeadAttention.from_config(config['attention'])
+        layer.ffn = FeedForward.from_config(config['ffn'])
+        layer.attention_dropout = Dropout.from_config(config['attention_dropout'])
+        layer.ffn_dropout = Dropout.from_config(config['ffn_dropout'])
+        layer.attention_norm = AddNorm.from_config(config['attention_norm'])
+        layer.ffn_norm = AddNorm.from_config(config['ffn_norm'])
+        
+        return layer
 
 
 class TransformerDecoderLayer(Layer):
@@ -3759,7 +3892,7 @@ class TransformerDecoderLayer(Layer):
         return d_x, d_combined
 
     def get_config(self) -> dict:
-        return {
+        config = {
             'name': self.__class__.__name__,
             'd_model': self.d_model,
             'num_heads': self.num_heads,
@@ -3771,10 +3904,24 @@ class TransformerDecoderLayer(Layer):
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
+        
+        config.update({
+            'self_attention': self.self_attention.get_config(),
+            'cross_attention': self.cross_attention.get_config(),
+            'ffn': self.ffn.get_config(),
+            'dropout1': self.dropout1.get_config(),
+            'dropout2': self.dropout2.get_config(),
+            'dropout3': self.dropout3.get_config(),
+            'norm1': self.norm1.get_config(),
+            'norm2': self.norm2.get_config(),
+            'norm3': self.norm3.get_config()
+        })
+        
+        return config
 
     @staticmethod
     def from_config(config: dict) -> "TransformerDecoderLayer":
-        return TransformerDecoderLayer(
+        layer = TransformerDecoderLayer(
             d_model=config['d_model'],
             num_heads=config['num_heads'],
             d_ff=config['d_ff'],
@@ -3785,7 +3932,20 @@ class TransformerDecoderLayer(Layer):
             bias_initializer=config['bias_initializer'],
             random_state=config['random_state']
         )
-
+        
+        layer.self_attention = MultiHeadAttention.from_config(config['self_attention'])
+        layer.cross_attention = MultiHeadAttention.from_config(config['cross_attention'])
+        layer.ffn = FeedForward.from_config(config['ffn'])
+        layer.dropout1 = Dropout.from_config(config['dropout1'])
+        layer.dropout2 = Dropout.from_config(config['dropout2'])
+        layer.dropout3 = Dropout.from_config(config['dropout3'])
+        layer.norm1 = AddNorm.from_config(config['norm1'])
+        layer.norm2 = AddNorm.from_config(config['norm2'])
+        layer.norm3 = AddNorm.from_config(config['norm3'])
+        
+        layer.cache = {}
+        
+        return layer
 
 # --------------------------------------------------------------------------------------------------------------
 
