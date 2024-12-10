@@ -245,6 +245,12 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
     def __str__(self):
         return f"CrossEntropyWithLabelSmoothing(label_smoothing={self.label_smoothing})"
 
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            "label_smoothing": self.label_smoothing
+        }
+
 
 class Wasserstein(LossFunction):
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -355,6 +361,15 @@ class BinaryFocalLossPerLabel(LossFunction):
         
         return grad
 
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "scale": self.scale
+        }
+
+
 class MultiLabelBCELoss(LossFunction):
     def __init__(self, pos_weight: float = 1.0):
         super().__init__()
@@ -379,6 +394,12 @@ class MultiLabelBCELoss(LossFunction):
         grad = np.clip(grad, -10, 10)
         
         return grad / y_true.size
+    
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            "pos_weight": self.pos_weight
+        }
 
 
 class AsymmetricLoss(LossFunction):
@@ -427,3 +448,11 @@ class AsymmetricLoss(LossFunction):
         )
         
         return gradient / y_true.shape[0]
+
+    def get_config(self) -> dict:
+        return {
+            "name": self.__class__.__name__,
+            "gamma_pos": self.gamma_pos,
+            "gamma_neg": self.gamma_neg,
+            "clip": self.clip
+        }
