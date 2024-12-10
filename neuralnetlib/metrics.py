@@ -482,33 +482,51 @@ def rouge_l_score(y_pred: list[list[str]], y_true: list[list[list[str]]]) -> flo
     return rouge_l
 
 
-def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None) -> float:
+def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None, random_state: float = None) -> float:
+    def normalize(x):
+        x_min = x.min()
+        x_max = x.max()
+        return 2 * (x - x_min) / (x_max - x_min + 1e-8) - 1
+    
     y_pred = y_pred.reshape(len(y_pred), -1)
     y_true = y_true.reshape(len(y_true), -1)
-
+    
+    y_pred = normalize(y_pred)
+    y_true = normalize(y_true)
+    
     def gaussian_kernel(x: np.ndarray, y: np.ndarray, sigma: float) -> np.ndarray:
-        x_norm = np.sum(x ** 2, axis=1).reshape(-1, 1)
-        y_norm = np.sum(y ** 2, axis=1).reshape(1, -1)
-        dist_matrix = x_norm + y_norm - 2 * np.dot(x, y.T)
-        return np.exp(-dist_matrix / (2 * sigma ** 2))
-
+        x_squared = np.sum(x**2, axis=1, keepdims=True)
+        y_squared = np.sum(y**2, axis=1, keepdims=True).T
+        xy = np.dot(x, y.T)
+        dist_matrix = x_squared + y_squared - 2 * xy
+        dist_matrix = np.clip(dist_matrix, 0, None)
+        return np.exp(-dist_matrix / (2 * sigma**2))
+    
     if sigma is None:
-        combined = np.vstack((y_pred, y_true))
-        pairwise_dists = np.linalg.norm(combined[:, None] - combined, axis=2)
-        sigma = np.median(pairwise_dists)
-
+        n_samples = min(1000, len(y_pred))
+        rng = np.random.default_rng(random_state)
+        indices = rng.choice(len(y_pred), n_samples, replace=False)
+        subset = y_pred[indices]
+        dists = np.linalg.norm(subset[:, np.newaxis] - subset, axis=2)
+        sigma = np.median(dists[dists > 0])
+        if sigma < 1e-10:
+            sigma = 1.0
+    
     n = len(y_pred)
     m = len(y_true)
-
+    
     k_xx = gaussian_kernel(y_pred, y_pred, sigma)
     k_yy = gaussian_kernel(y_true, y_true, sigma)
     k_xy = gaussian_kernel(y_pred, y_true, sigma)
-
-    xx_term = (np.sum(k_xx) - np.sum(np.diag(k_xx))) / (n * (n - 1) + 1e-8)
-    yy_term = (np.sum(k_yy) - np.sum(np.diag(k_yy))) / (m * (m - 1) + 1e-8)
-    xy_term = np.sum(k_xy) / (n * m + 1e-8)
-
-    return float(xx_term + yy_term - 2 * xy_term)
+    
+    eps = 1e-8
+    xx_term = (np.sum(k_xx) - np.trace(k_xx)) / (n * (n - 1) + eps)
+    yy_term = (np.sum(k_yy) - np.trace(k_yy)) / (m * (m - 1) + eps)
+    xy_term = np.mean(k_xy)
+    
+    mmd = xx_term + yy_term - 2 * xy_term
+    
+    return float(np.clip(mmd, 0, None))
 
 
 def pearsonr(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

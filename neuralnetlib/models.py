@@ -2570,6 +2570,8 @@ class GAN(BaseModel):
 
         if verbose:
             print(str(self))
+            
+        self.last_activation = self.generator.layers[-1].activation_function.get_config()['name'].lower()
 
     def forward_pass(self, latent_vectors: np.ndarray, training: bool = True) -> np.ndarray:
         if self.generator is None:
@@ -2990,6 +2992,14 @@ class GAN(BaseModel):
             latent_points = noise
 
         generated = self.generator.forward_pass(latent_points, training=False)
+        
+        if self.last_activation == 'tanh':
+            generated = (generated + 1) * 0.5
+        elif self.last_activation == 'sigmoid':
+            pass
+        else:
+            generated = generated - generated.min()
+            generated = generated / (generated.max() + 1e-8)
         
         height, width = self.image_dimensions
         figure = np.zeros((height * n_rows, width * n_cols))
