@@ -342,6 +342,9 @@ class LearningRateScheduler(Callback):
         elif hasattr(model, 'encoder_optimizer') and hasattr(model, 'decoder_optimizer'):
             model.encoder_optimizer.learning_rate = new_lr
             model.decoder_optimizer.learning_rate = new_lr
+        elif hasattr(model, 'generator_optimizer') and hasattr(model, 'discriminator_optimizer'):
+            model.generator_optimizer.learning_rate = new_lr
+            model.discriminator_optimizer.learning_rate = new_lr
 
     def on_epoch_begin(self, epoch: int, logs: dict = None) -> None:
         if not logs:
