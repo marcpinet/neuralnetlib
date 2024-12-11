@@ -41,6 +41,7 @@ class Input(Layer):
         if isinstance(input_shape, int):
             input_shape = (input_shape,)
         self.input_shape = input_shape
+        self.input_dim = np.prod(input_shape)
 
     def __str__(self) -> str:
         return f'Input(input_shape={self.input_shape})'
@@ -54,7 +55,8 @@ class Input(Layer):
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'input_shape': self.input_shape
+            'input_shape': self.input_shape,
+            'input_dim': self.input_dim
         }
 
     @staticmethod

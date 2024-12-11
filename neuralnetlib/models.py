@@ -82,7 +82,8 @@ class Sequential(BaseModel):
     def __init__(self, gradient_clip_threshold: float = 5.0,
                  enable_padding: bool = False,
                  padding_size: int = 32,
-                 random_state: int | None = None):
+                 random_state: int | None = None,
+                 n_classes: int | None = None):
         super().__init__(gradient_clip_threshold,
                          enable_padding, padding_size, random_state)
         self.layers = []
@@ -91,6 +92,7 @@ class Sequential(BaseModel):
         self.y_true = None
         self.predictions = None
         self._initialized = False
+        self.n_classes = n_classes
 
     def __str__(self) -> str:
         model_summary = f'Sequential(gradient_clip_threshold={self.gradient_clip_threshold}, enable_padding={self.enable_padding}, padding_size={self.padding_size}, random_state={self.random_state})\n'
@@ -111,6 +113,12 @@ class Sequential(BaseModel):
             if not isinstance(layer, Input):
                 raise ValueError("The first layer must be an Input layer.")
         else:
+            if self.random_state and hasattr(layer, 'random_state'):
+                layer.random_state = self.random_state
+                
+            if isinstance(layer, Dense) and isinstance(self.layers[0], Input):
+                layer.input_dim = self.layers[0].input_dim
+            
             previous_layer = self.layers[-1]
             previous_type = type(previous_layer)
             current_type = type(layer)
@@ -148,7 +156,20 @@ class Sequential(BaseModel):
         if verbose:
             print(str(self))
 
-    def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward_pass(self, X: np.ndarray, training: bool = True, labels: np.ndarray | None = None) -> np.ndarray:
+        if self.n_classes is not None and labels is not None:
+            if len(X.shape) != 2:
+                raise ValueError("Input shape must be (batch_size, features) for conditional models")
+                
+            if labels.ndim == 1:
+                one_hot = np.zeros((labels.shape[0], self.n_classes))
+                one_hot[np.arange(labels.shape[0]), labels] = 1
+                labels = one_hot
+            elif labels.shape[1] != self.n_classes:
+                raise ValueError(f"Labels must have {self.n_classes} classes")
+                
+            X = np.concatenate([X, labels], axis=1)
+
         if self.enable_padding:
             original_shape = X.shape
             padded_shape = ((original_shape[0] + self.padding_size - 1) //
@@ -172,6 +193,9 @@ class Sequential(BaseModel):
         return X
 
     def backward_pass(self, error: np.ndarray, gan: bool = False, compute_only: bool = False) -> np.ndarray:
+        if self.n_classes is not None and error.shape[1] > error.shape[1] - self.n_classes:
+            error = error[:, :-self.n_classes]
+        
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):
                 if not gan:
@@ -657,7 +681,8 @@ class Sequential(BaseModel):
             'gradient_clip_threshold': self.gradient_clip_threshold,
             'enable_padding': self.enable_padding,
             'padding_size': self.padding_size,
-            'random_state': self.random_state
+            'random_state': self.random_state,
+            'n_classes': self.n_classes
         }
 
         for layer in self.layers:
@@ -2505,6 +2530,10 @@ class GAN(BaseModel):
         verbose: bool = False,
         metrics: list | None = None
     ):
+        if self.n_classes is not None:
+            generator.n_classes = self.n_classes
+            discriminator.n_classes = self.n_classes
+            
         self.generator = generator
         self.discriminator = discriminator
 
@@ -2515,15 +2544,11 @@ class GAN(BaseModel):
                     f"Inferred image dimensions: {self._image_height}x{self._image_width}")
 
         if self.n_classes is not None:
-            if len(discriminator.layers[0].input_shape) > 1:
-                input_shape = discriminator.layers[0].input_shape[1]
-            else:
-                input_shape = discriminator.layers[0].input_shape[0]
-            expected_shape = self._image_height * self._image_width + self.n_classes
-            if input_shape != expected_shape:
+            noise_size = self.latent_dim + self.n_classes
+            if generator.layers[0].input_dim != noise_size:
                 raise ValueError(
-                    f"Discriminator input shape ({input_shape}) does not match "
-                    f"expected shape for conditional GAN ({expected_shape})"
+                    f"Generator input dimension ({generator.layers[0].input_dim}) "
+                    f"does not match expected size (latent_dim + n_classes = {noise_size})"
                 )
 
         last_dense = None
@@ -2587,24 +2612,48 @@ class GAN(BaseModel):
 
     def _generate_latent_points(self, n_samples: int, labels: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(self.random_state)
-        latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
         
         if self.n_classes is not None:
-            if labels is None:
-                labels = rng.integers(0, self.n_classes, n_samples)
-            elif labels.ndim == 2 and labels.shape[1] == self.n_classes:
-                return np.concatenate([latent_points, labels], axis=1), labels
+            if labels is not None:
+                if labels.ndim == 1:
+                    one_hot_labels = np.zeros((len(labels), self.n_classes))
+                    one_hot_labels[np.arange(len(labels)), labels] = 1
+                    labels = one_hot_labels
+                elif labels.shape[1] != self.n_classes:
+                    raise ValueError(f"Labels must have {self.n_classes} columns when one-hot encoded")
+                    
+                latent_points = rng.normal(0, 1, (len(labels), self.latent_dim))
+                latent_points = np.concatenate([latent_points, labels], axis=1)
+                return latent_points, labels
             
-            one_hot_labels = np.zeros((n_samples, self.n_classes))
-            if labels.ndim == 1:
-                one_hot_labels[np.arange(n_samples), labels] = 1
-            else:
-                one_hot_labels = labels
+            samples_per_class = n_samples // self.n_classes
+            remaining_samples = n_samples % self.n_classes
+            
+            all_latent_points = []
+            all_labels = []
+            
+            for class_idx in range(self.n_classes):
+                n_samples_this_class = samples_per_class
+                if class_idx < remaining_samples:
+                    n_samples_this_class += 1
+                    
+                class_noise = rng.normal(0, 1, (n_samples_this_class, self.latent_dim))
                 
-            latent_points = np.concatenate([latent_points, one_hot_labels], axis=1)
-            return latent_points, one_hot_labels
+                class_labels = np.zeros((n_samples_this_class, self.n_classes))
+                class_labels[:, class_idx] = 1
+                
+                class_latent = np.concatenate([class_noise, class_labels], axis=1)
+                
+                all_latent_points.append(class_latent)
+                all_labels.append(class_labels)
             
-        return latent_points, None
+            latent_points = np.concatenate(all_latent_points, axis=0)
+            labels = np.concatenate(all_labels, axis=0)
+            
+            return latent_points, labels
+        else:
+            latent_points = rng.normal(0, 1, (n_samples, self.latent_dim))
+            return latent_points, None
 
     def _apply_spectral_norm(self, model: 'Sequential'):
         if not self.use_spectral_norm:
@@ -2663,21 +2712,22 @@ class GAN(BaseModel):
             real_batch = real_samples[idx]
             batch_labels = labels[idx] if labels is not None else None
 
-            noise, gen_labels = self._generate_latent_points(batch_size, batch_labels)
-            fake_batch = self.generator.forward_pass(noise, training=False)
+            latent_points, gen_labels = self._generate_latent_points(batch_size, batch_labels)
+            fake_batch = self.generator.forward_pass(latent_points, training=False)
 
             combined_batch = np.concatenate([real_batch, fake_batch])
+            if self.n_classes is not None and batch_labels is not None:
+                disc_labels = np.concatenate([batch_labels, gen_labels])
+                discriminator_input = np.concatenate([combined_batch, disc_labels], axis=1)
+            else:
+                discriminator_input = combined_batch
+
             combined_labels = np.zeros((2 * batch_size, 1))
             combined_labels[:batch_size] = self.label_smoothing
             combined_labels[batch_size:] = 1 - self.label_smoothing
 
-            if self.n_classes is not None:
-                if batch_labels is not None:
-                    combined_cond = np.concatenate([batch_labels, gen_labels])
-                    combined_batch = np.concatenate([combined_batch, combined_cond], axis=1)
-
             self.discriminator.y_true = combined_labels
-            predictions = self.discriminator.forward_pass(combined_batch, training=True)
+            predictions = self.discriminator.forward_pass(discriminator_input, training=True)
             d_loss = self.discriminator_loss(combined_labels, predictions)
             d_grad = self.discriminator_loss.derivative(combined_labels, predictions)
             self.discriminator.backward_pass(d_grad)
@@ -2686,24 +2736,23 @@ class GAN(BaseModel):
 
         d_loss_avg = d_loss_total / n_critic
 
-        noise, gen_labels = self._generate_latent_points(batch_size)
-        fake_samples = self.generator.forward_pass(noise, training=True)
+        latent_points, gen_labels = self._generate_latent_points(batch_size)
+        fake_samples = self.generator.forward_pass(latent_points, training=True)
 
         if self.n_classes is not None:
-            fake_samples_with_cond = np.concatenate([fake_samples, gen_labels], axis=1)
+            discriminator_input = np.concatenate([fake_samples, gen_labels], axis=1)
         else:
-            fake_samples_with_cond = fake_samples
+            discriminator_input = fake_samples
 
         target_labels = np.ones((batch_size, 1))
 
-        disc_predictions = self.discriminator.forward_pass(fake_samples_with_cond, training=False)
+        disc_predictions = self.discriminator.forward_pass(discriminator_input, training=False)
+        
         self.discriminator.y_true = target_labels
         g_loss = self.generator_loss(target_labels, disc_predictions)
         g_grad = self.generator_loss.derivative(target_labels, disc_predictions)
 
         d_grad = self.discriminator.backward_pass(g_grad, compute_only=True)
-        if self.n_classes is not None:
-            d_grad = d_grad[:, :-self.n_classes]
         self.generator.backward_pass(d_grad, gan=True)
 
         return d_loss_avg, g_loss
@@ -2742,9 +2791,18 @@ class GAN(BaseModel):
         if validation_data is not None and validation_split is not None:
             raise ValueError("Cannot specify both validation_data and validation_split")
         elif validation_data is None and validation_split is not None:
-            x_train, x_val = train_test_split(
-                x_train, test_size=validation_split, random_state=random_state)
-            validation_data = (x_val, None)
+            if y_train is not None:
+                x_train, x_val, y_train, y_val = train_test_split(
+                    x_train, y_train, 
+                    test_size=validation_split, 
+                    random_state=random_state
+                )
+                validation_data = (x_val, y_val)
+            else:
+                x_train, x_val = train_test_split(
+                    x_train, test_size=validation_split, random_state=random_state
+                )
+                validation_data = (x_val, None)
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
@@ -2760,23 +2818,20 @@ class GAN(BaseModel):
 
         if plot_generated:
             if fixed_noise is None:
-                if self.n_classes is not None:
-                    base_samples = visualization_grid[0] * visualization_grid[1]
-                    n_samples = ((base_samples + self.n_classes - 1) // self.n_classes) * self.n_classes
-                    n_rows = int(np.sqrt(n_samples))
-                    while n_samples % n_rows != 0:
-                        n_rows += 1
-                    n_cols = n_samples // n_rows
-                    visualization_grid = (n_rows, n_cols)
-                else:
-                    n_samples = visualization_grid[0] * visualization_grid[1]
+                n_rows = self.n_classes if self.n_classes is not None else visualization_grid[0]
+                n_cols = visualization_grid[1]
+                n_samples = n_rows * n_cols
                     
                 rng = np.random.default_rng(self.random_state)
                 fixed_noise = rng.normal(0, 1, (n_samples, self.latent_dim))
                 
             if self.n_classes is not None and fixed_labels is None:
-                samples_per_class = fixed_noise.shape[0] // self.n_classes
-                fixed_labels = np.repeat(np.arange(self.n_classes), samples_per_class)
+                fixed_labels = []
+                for class_idx in range(self.n_classes):
+                    class_labels = np.zeros((visualization_grid[1], self.n_classes))
+                    class_labels[:, class_idx] = 1
+                    fixed_labels.append(class_labels)
+                fixed_labels = np.concatenate(fixed_labels, axis=0)
 
         callbacks = callbacks if callbacks is not None else []
         
@@ -2922,9 +2977,16 @@ class GAN(BaseModel):
                 })
 
                 if validation_data is not None:
-                    x_val = validation_data[0] if isinstance(validation_data, tuple) else validation_data
+                    if isinstance(validation_data, tuple):
+                        x_val, y_val = validation_data
+                    else:
+                        x_val = validation_data
+                        y_val = None
+                        
                     x_val = np.array(x_val)
-                    val_d_loss, val_g_loss = self.evaluate(x_val, batch_size)
+                    
+                    val_d_loss, val_g_loss = self.evaluate(x_val, y_val, batch_size)
+                    
                     history['val_discriminator_loss'].append(val_d_loss)
                     history['val_generator_loss'].append(val_g_loss)
                     epoch_logs.update({
@@ -2964,34 +3026,21 @@ class GAN(BaseModel):
 
         return history
 
-    def _plot_samples(
-        self, 
-        noise: np.ndarray, 
-        epoch: int, 
-        labels: np.ndarray | None = None,
-        grid_size: tuple[int, int] = (8, 8)
-    ):
+    def _plot_samples(self, noise: np.ndarray, epoch: int, labels: np.ndarray | None = None,
+                    grid_size: tuple[int, int] = (8, 8)):
         n_rows, n_cols = grid_size
-        if noise.shape[0] != n_rows * n_cols:
-            raise ValueError("The number of samples must match the grid size.")
-
+        n_samples = n_rows * n_cols
+        
+        if noise.shape[0] != n_samples:
+            raise ValueError(f"The number of noise samples ({noise.shape[0]}) must match the grid size ({n_samples})")
+        
         if self.n_classes is not None:
-            if labels is None:
-                samples_per_class = noise.shape[0] // self.n_classes
-                labels = np.repeat(np.arange(self.n_classes), samples_per_class)
+            latent_points, _ = self._generate_latent_points(n_samples, 
+                np.repeat(np.arange(self.n_classes), n_cols))
             
-            one_hot_labels = np.zeros((len(labels), self.n_classes))
-            one_hot_labels[np.arange(len(labels)), labels] = 1
-            
-            sorted_indices = np.argsort(labels)
-            noise = noise[sorted_indices]
-            one_hot_labels = one_hot_labels[sorted_indices]
-            
-            latent_points = np.concatenate([noise, one_hot_labels], axis=1)
+            generated = self.generator.forward_pass(latent_points, training=False)
         else:
-            latent_points = noise
-
-        generated = self.generator.forward_pass(latent_points, training=False)
+            generated = self.generator.forward_pass(noise, training=False)
         
         if self.last_activation == 'tanh':
             generated = (generated + 1) * 0.5
@@ -3015,7 +3064,6 @@ class GAN(BaseModel):
         plt.axis('off')
         
         if self.n_classes is not None:
-            samples_per_class = n_cols
             for i in range(n_rows):
                 plt.text(-width/2, i * height + height/2, 
                         f'Class {i}', 
@@ -3041,56 +3089,69 @@ class GAN(BaseModel):
         return samples
 
     def evaluate(
-        self,
-        x_test: np.ndarray,
-        batch_size: int = 32,
-        n_gen_samples: int | None = None
-    ) -> tuple[float, float]:
-        if n_gen_samples is None:
-            n_gen_samples = len(x_test)
+       self,
+       x_test: np.ndarray,
+       y_test: np.ndarray | None = None,
+       batch_size: int = 32,
+       n_gen_samples: int | None = None
+   ) -> tuple[float, float]:
 
-        total_d_loss = 0
-        total_g_loss = 0
-        n_batches = 0
+       total_d_loss = 0 
+       total_g_loss = 0
+       n_batches = 0
 
-        for start_idx in range(0, len(x_test), batch_size):
-            end_idx = min(start_idx + batch_size, len(x_test))
-            current_batch_size = end_idx - start_idx
-            
-            x_batch = x_test[start_idx:end_idx]
-            
-            latent_points, _ = self._generate_latent_points(current_batch_size)
-            fake_samples = self.generator.forward_pass(latent_points, training=False)
+       for start_idx in range(0, len(x_test), batch_size):
+           end_idx = min(start_idx + batch_size, len(x_test))
+           current_batch_size = end_idx - start_idx
+           
+           x_batch = x_test[start_idx:end_idx]
+           batch_labels = y_test[start_idx:end_idx] if y_test is not None else None
+           
+           latent_points, gen_labels = self._generate_latent_points(current_batch_size, batch_labels)
+           fake_samples = self.generator.forward_pass(latent_points, training=False)
 
-            y_real = np.ones((current_batch_size, 1))
-            y_fake = np.zeros((current_batch_size, 1))
+           y_real = np.ones((current_batch_size, 1))
+           y_fake = np.zeros((current_batch_size, 1))
 
-            d_loss_real = self.discriminator_loss(
-                y_real,
-                self.discriminator.forward_pass(x_batch, training=False)
-            )
-            d_loss_fake = self.discriminator_loss(
-                y_fake,
-                self.discriminator.forward_pass(fake_samples, training=False)
-            )
-            d_loss = 0.5 * (d_loss_real + d_loss_fake)
+           if self.n_classes is not None and batch_labels is not None:
+               discriminator_real_input = np.concatenate([x_batch, batch_labels], axis=1)
+               discriminator_fake_input = np.concatenate([fake_samples, gen_labels], axis=1)
+           else:
+               discriminator_real_input = x_batch
+               discriminator_fake_input = fake_samples
 
-            y_gan = np.ones((current_batch_size, 1))
-            latent_points, _ = self._generate_latent_points(current_batch_size)
-            fake_samples = self.generator.forward_pass(latent_points, training=False)
-            g_loss = self.generator_loss(
-                y_gan,
-                self.discriminator.forward_pass(fake_samples, training=False)
-            )
+           d_loss_real = self.discriminator_loss(
+               y_real,
+               self.discriminator.forward_pass(discriminator_real_input, training=False)
+           )
+           d_loss_fake = self.discriminator_loss(
+               y_fake,
+               self.discriminator.forward_pass(discriminator_fake_input, training=False)
+           )
+           d_loss = 0.5 * (d_loss_real + d_loss_fake)
 
-            total_d_loss += d_loss * current_batch_size
-            total_g_loss += g_loss * current_batch_size
-            n_batches += current_batch_size
+           y_gan = np.ones((current_batch_size, 1))
+           latent_points, gen_labels = self._generate_latent_points(current_batch_size, batch_labels)
+           fake_samples = self.generator.forward_pass(latent_points, training=False)
 
-        avg_d_loss = total_d_loss / n_batches
-        avg_g_loss = total_g_loss / n_batches
+           if self.n_classes is not None:
+               discriminator_gen_input = np.concatenate([fake_samples, gen_labels], axis=1)
+           else:
+               discriminator_gen_input = fake_samples
 
-        return avg_d_loss, avg_g_loss
+           g_loss = self.generator_loss(
+               y_gan,
+               self.discriminator.forward_pass(discriminator_gen_input, training=False)
+           )
+
+           total_d_loss += d_loss * current_batch_size
+           total_g_loss += g_loss * current_batch_size
+           n_batches += current_batch_size
+
+       avg_d_loss = total_d_loss / n_batches
+       avg_g_loss = total_g_loss / n_batches
+
+       return avg_d_loss, avg_g_loss
 
     def save(self, filename: str):
         base, ext = os.path.splitext(filename)
