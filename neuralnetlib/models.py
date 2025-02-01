@@ -2265,13 +2265,13 @@ class Transformer(BaseModel):
             if not all_candidates:
                 break
 
-            ordered = sorted(all_candidates, key=lambda x: x[1])
+            ordered = sorted(all_candidates, key=lambda x: x[1], reverse=True)
             beam_sequences.append(ordered[:beam_size])
 
             if all(seq[0, -1] == self.EOS_IDX for seq, _ in beam_sequences[-1]):
                 break
 
-        best_seq = min(beam_sequences[-1], key=lambda x: x[1])[0]
+        best_seq = max(beam_sequences[-1], key=lambda x: x[1])[0]
 
         if best_seq[0, -1] == self.EOS_IDX:
             return best_seq[:, 1:-1]
