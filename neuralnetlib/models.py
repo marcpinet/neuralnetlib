@@ -204,8 +204,7 @@ class Sequential(BaseModel):
                         error = self.predictions - self.y_true
                     elif (type(layer.activation_function).__name__ == "Sigmoid" and
                           isinstance(self.loss_function, BinaryCrossentropy)):
-                        error = (self.predictions - self.y_true) / (self.predictions *
-                                                                    (1 - self.predictions) + 1e-15)
+                        error = self.predictions - self.y_true
                     elif isinstance(self.loss_function, SparseCategoricalCrossentropy):
                         y_true_one_hot = np.zeros_like(self.predictions)
                         y_true_one_hot[np.arange(
