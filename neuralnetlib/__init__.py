@@ -9,3 +9,10 @@ from . import preprocessing
 from . import regularizers
 from . import utils
 from . import learners
+
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("neuralnetlib")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
