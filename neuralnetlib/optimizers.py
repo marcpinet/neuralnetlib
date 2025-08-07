@@ -70,18 +70,22 @@ class Momentum(Optimizer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray,
-            bias: np.ndarray = None, bias_grad: np.ndarray = None):
-        if not hasattr(self, 'velocity_w'):
-            self.velocity_w = np.zeros_like(weights)
-        self.velocity_w = self.momentum * self.velocity_w - self.learning_rate * weights_grad
-        weights += self.velocity_w
+    def update(self, layer_index, weights, weights_grad, bias=None, bias_grad=None):
+        if layer_index not in self.velocity_w:
+            self.velocity_w[layer_index] = np.zeros_like(weights)
+        if bias is not None and layer_index not in self.velocity_b:
+            self.velocity_b[layer_index] = np.zeros_like(bias)
 
-        if bias is not None and bias_grad is not None:
-            if not hasattr(self, 'velocity_b') or self.velocity_b is None or self.velocity_b.shape != bias.shape:
-                self.velocity_b = np.zeros_like(bias)
-            self.velocity_b = self.momentum * self.velocity_b - self.learning_rate * bias_grad
-            bias += self.velocity_b
+        self.velocity_w[layer_index] = (
+            self.momentum * self.velocity_w[layer_index] - self.learning_rate * weights_grad
+        )
+        weights += self.velocity_w[layer_index]
+
+        if bias is not None:
+            self.velocity_b[layer_index] = (
+                self.momentum * self.velocity_b[layer_index] - self.learning_rate * bias_grad
+            )
+            bias += self.velocity_b[layer_index]
 
     def get_config(self) -> dict:
         return {
@@ -115,17 +119,28 @@ class RMSprop(Optimizer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None):
-        if not hasattr(self, 'sq_grads_w'):
-            self.sq_grads_w = np.zeros_like(weights)
-        self.sq_grads_w = self.rho * self.sq_grads_w + (1 - self.rho) * np.square(weights_grad)
-        weights -= self.learning_rate * weights_grad / (np.sqrt(self.sq_grads_w) + self.epsilon)
+    def update(self, layer_index, weights, weights_grad, bias=None, bias_grad=None):
+        if layer_index not in self.sq_grads_w:
+            self.sq_grads_w[layer_index] = np.zeros_like(weights)
+        if bias is not None and layer_index not in self.sq_grads_b:
+            self.sq_grads_b[layer_index] = np.zeros_like(bias)
 
-        if bias is not None and bias_grad is not None:
-            if not hasattr(self, 'sq_grads_b') or self.sq_grads_b is None or self.sq_grads_b.shape != bias.shape:
-                self.sq_grads_b = np.zeros_like(bias)
-            self.sq_grads_b = self.rho * self.sq_grads_b + (1 - self.rho) * np.square(bias_grad)
-            bias -= self.learning_rate * bias_grad / (np.sqrt(self.sq_grads_b) + self.epsilon)
+        self.sq_grads_w[layer_index] = (
+            self.rho * self.sq_grads_w[layer_index] + (1 - self.rho) * np.square(weights_grad)
+        )
+        weights -= (
+            self.learning_rate * weights_grad
+            / (np.sqrt(self.sq_grads_w[layer_index]) + self.epsilon)
+        )
+
+        if bias is not None:
+            self.sq_grads_b[layer_index] = (
+                self.rho * self.sq_grads_b[layer_index] + (1 - self.rho) * np.square(bias_grad)
+            )
+            bias -= (
+                self.learning_rate * bias_grad
+                / (np.sqrt(self.sq_grads_b[layer_index]) + self.epsilon)
+            )
 
     def get_config(self) -> dict:
         return {
