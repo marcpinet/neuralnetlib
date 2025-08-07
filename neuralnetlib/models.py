@@ -814,6 +814,8 @@ class Autoencoder(BaseModel):
         self.skip_cache = {}
 
         self.epsilon = 1e-7
+        
+        self.latent_dim = None
 
     def _calculate_kl_divergence(self):
         if not self.variational:
@@ -971,6 +973,8 @@ class Autoencoder(BaseModel):
 
         if verbose:
             print(str(self))
+            
+        self.latent_dim = self.encoder_layers[-1].units if self.variational else self.encoder_layers[-1].output_shape[-1]
 
     def forward_pass(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         if self.enable_padding:
@@ -1548,11 +1552,11 @@ class Autoencoder(BaseModel):
 
         rng = np.random.default_rng(
             seed if seed is not None else self.random_state)
-        noise = rng.standard_normal(size=(n_samples, 32))
+        noise = rng.standard_normal(size=(n_samples, self.latent_dim))
 
         latent_samples = np.concatenate([
             latent_mean_repeated + noise *
-            latent_std_repeated, np.zeros((n_samples, 32))
+            latent_std_repeated, np.zeros((n_samples, self.latent_dim))
         ], axis=1)
 
         generated = latent_samples
