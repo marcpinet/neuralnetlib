@@ -1935,8 +1935,7 @@ class LSTM(Layer):
             return self.last_h
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        output_error = self.check_numerical_stability(
-            output_error, "output_error")
+        output_error = self.check_numerical_stability(output_error, "output_error")
         batch_size, timesteps, input_dim = self.input_shape
 
         if len(output_error.shape) == 2:
@@ -1944,12 +1943,11 @@ class LSTM(Layer):
             full_dout[:, -1, :] = output_error
             output_error = full_dout
 
-        dx = np.zeros((batch_size, timesteps, input_dim))
+        dx = np.zeros_like(x, dtype=np.float64)
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
 
         self.cell._init_gradients()
-        all_gradients = {}
 
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
@@ -1957,48 +1955,20 @@ class LSTM(Layer):
 
             self.cell.cache = self.cache[t]
             dx_t, dh_next, dc_next = self.cell.backward(dh, dc_next)
-
             dx[:, t, :] = dx_t
 
-            # Collect gradients for normalization
-            t_gradients = {
-                f'dWf_{t}': self.cell.dWf,
-                f'dUf_{t}': self.cell.dUf,
-                f'dbf_{t}': self.cell.dbf,
-                f'dWi_{t}': self.cell.dWi,
-                f'dUi_{t}': self.cell.dUi,
-                f'dbi_{t}': self.cell.dbi,
-                f'dWc_{t}': self.cell.dWc,
-                f'dUc_{t}': self.cell.dUc,
-                f'dbc_{t}': self.cell.dbc,
-                f'dWo_{t}': self.cell.dWo,
-                f'dUo_{t}': self.cell.dUo,
-                f'dbo_{t}': self.cell.dbo,
-                f'dx_{t}': dx_t
-            }
+        final_gradients = {
+            'dWf': self.cell.dWf, 'dUf': self.cell.dUf, 'dbf': self.cell.dbf,
+            'dWi': self.cell.dWi, 'dUi': self.cell.dUi, 'dbi': self.cell.dbi,
+            'dWc': self.cell.dWc, 'dUc': self.cell.dUc, 'dbc': self.cell.dbc,
+            'dWo': self.cell.dWo, 'dUo': self.cell.dUo, 'dbo': self.cell.dbo
+        }
+        
+        normalized_gradients = self.normalize_gradients(final_gradients)
 
-            all_gradients.update(t_gradients)
-
-        # Normalize all gradients together
-        normalized_gradients = self.normalize_gradients(all_gradients)
-
-        # Update cell gradients and dx with normalized values
-        for t in range(timesteps):
-            dx[:, t, :] = normalized_gradients[f'dx_{t}']
-            if t == 0:  # Update cell gradients only once
-                self.cell.dWf = normalized_gradients[f'dWf_{t}']
-                self.cell.dUf = normalized_gradients[f'dUf_{t}']
-                self.cell.dbf = normalized_gradients[f'dbf_{t}']
-                self.cell.dWi = normalized_gradients[f'dWi_{t}']
-                self.cell.dUi = normalized_gradients[f'dUi_{t}']
-                self.cell.dbi = normalized_gradients[f'dbi_{t}']
-                self.cell.dWc = normalized_gradients[f'dWc_{t}']
-                self.cell.dUc = normalized_gradients[f'dUc_{t}']
-                self.cell.dbc = normalized_gradients[f'dbc_{t}']
-                self.cell.dWo = normalized_gradients[f'dWo_{t}']
-                self.cell.dUo = normalized_gradients[f'dUo_{t}']
-                self.cell.dbo = normalized_gradients[f'dbo_{t}']
-
+        for key, value in normalized_gradients.items():
+            setattr(self.cell, key, value)
+        
         return self.check_numerical_stability(dx, "final_dx")
 
     def get_config(self) -> dict:

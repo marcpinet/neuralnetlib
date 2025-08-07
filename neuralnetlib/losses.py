@@ -436,16 +436,13 @@ class AsymmetricLoss(LossFunction):
             
         pos_mask = (y_true == 1)
         
-        d_pos_focusing = self.gamma_pos * np.power(1 - y_pred, self.gamma_pos - 1)
-        d_neg_focusing = self.gamma_neg * np.power(y_pred, self.gamma_neg - 1)
+        grad_pos = (self.gamma_pos * np.power(1 - y_pred, self.gamma_pos - 1) * np.log(y_pred + self.EPSILON) - 
+                    np.power(1 - y_pred, self.gamma_pos) / (y_pred + self.EPSILON))
+
+        grad_neg = (-self.gamma_neg * np.power(y_pred, self.gamma_neg - 1) * np.log(1 - y_pred + self.EPSILON) + 
+                    np.power(y_pred, self.gamma_neg) / (1 - y_pred + self.EPSILON))
         
-        d_pos_bce = -1 / y_pred
-        d_neg_bce = 1 / (1 - y_pred)
-        
-        gradient = np.where(pos_mask,
-            d_pos_focusing * d_pos_bce,
-            d_neg_focusing * d_neg_bce
-        )
+        gradient = np.where(pos_mask, grad_pos, grad_neg)
         
         return gradient / y_true.shape[0]
 
