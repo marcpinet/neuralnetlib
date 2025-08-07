@@ -1541,22 +1541,17 @@ class Autoencoder(BaseModel):
     def generate_image(self, x_train: np.ndarray, n_samples: int = 10, seed: int | None = None, n_examples: int = 1000) -> np.ndarray:
         _ = self.forward_pass(x_train[:n_examples])
 
-        latent_mean_stats = np.mean(self.latent_mean, axis=0)
-        latent_std_stats = np.exp(0.5 * np.mean(self.latent_log_var, axis=0))
+        if not self.variational:
+            raise ValueError("generate_image requires variational=True")
 
-        latent_mean_repeated = np.tile(latent_mean_stats, (n_samples, 1))
-        latent_std_repeated = np.tile(latent_std_stats, (n_samples, 1))
+        mu = np.mean(self.latent_mean, axis=0)
+        sigma = np.exp(0.5 * np.mean(self.latent_log_var, axis=0))
 
-        rng = np.random.default_rng(
-            seed if seed is not None else self.random_state)
+        rng = np.random.default_rng(seed if seed is not None else self.random_state)
         noise = rng.standard_normal(size=(n_samples, self.latent_dim))
+        z = mu[None, :] + noise * sigma[None, :]
 
-        latent_samples = np.concatenate([
-            latent_mean_repeated + noise *
-            latent_std_repeated, np.zeros((n_samples, self.latent_dim))
-        ], axis=1)
-
-        generated = latent_samples
+        generated = z
         for layer in self.decoder_layers:
             if isinstance(layer, (Dropout, LSTM, Bidirectional, GRU)):
                 generated = layer.forward_pass(generated, training=False)
