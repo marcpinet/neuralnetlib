@@ -6,124 +6,131 @@ from neuralnetlib.layers import Layer
 
 class ModelWeightManager:
     @staticmethod
-    def get_model_weights(model) -> list[np.ndarray]:
-        """Extract weights from any model type."""
-        weights = []
+    def get_model_weights(model) -> list[tuple[np.ndarray, np.ndarray | None]]:
+        """Extract weights and biases from any model type."""
+        params = []
 
-        if hasattr(model, 'layers'):  # Sequential model
-            weights.extend(
-                [layer.weights for layer in model.layers if hasattr(layer, 'weights')])
+        def get_params_from_layer(layer):
+            if hasattr(layer, 'weights'):
+                weights = layer.weights.copy()
+                bias = layer.bias.copy() if hasattr(layer, 'bias') else None
+                return (weights, bias)
+            return None
 
-        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
-            weights.extend(
-                [layer.weights for layer in model.encoder_layers if hasattr(layer, 'weights')])
-            weights.extend(
-                [layer.weights for layer in model.decoder_layers if hasattr(layer, 'weights')])
-
-        elif hasattr(model, 'embedding'):  # Transformer
-            if hasattr(model.embedding, 'weights'):
-                weights.append(model.embedding.weights)
-
-            for encoder_layer in model.encoder_layers:
-                if hasattr(encoder_layer, 'attention'):
-                    weights.extend([
-                        encoder_layer.attention.query_dense.weights,
-                        encoder_layer.attention.key_dense.weights,
-                        encoder_layer.attention.value_dense.weights,
-                        encoder_layer.attention.output_dense.weights
-                    ])
-                if hasattr(encoder_layer, 'ffn'):
-                    weights.extend([
-                        encoder_layer.ffn.dense1.weights,
-                        encoder_layer.ffn.dense2.weights
-                    ])
-
-            for decoder_layer in model.decoder_layers:
-                if hasattr(decoder_layer, 'self_attention'):
-                    weights.extend([
-                        decoder_layer.self_attention.query_dense.weights,
-                        decoder_layer.self_attention.key_dense.weights,
-                        decoder_layer.self_attention.value_dense.weights,
-                        decoder_layer.self_attention.output_dense.weights
-                    ])
-                if hasattr(decoder_layer, 'cross_attention'):
-                    weights.extend([
-                        decoder_layer.cross_attention.query_dense.weights,
-                        decoder_layer.cross_attention.key_dense.weights,
-                        decoder_layer.cross_attention.value_dense.weights,
-                        decoder_layer.cross_attention.output_dense.weights
-                    ])
-                if hasattr(decoder_layer, 'ffn'):
-                    weights.extend([
-                        decoder_layer.ffn.dense1.weights,
-                        decoder_layer.ffn.dense2.weights
-                    ])
-
-            if hasattr(model.output_layer, 'weights'):
-                weights.append(model.output_layer.weights)
-
-        return weights
-
-    @staticmethod
-    def set_model_weights(model, weights: list[np.ndarray]) -> None:
-        """Restore weights to any model type."""
-        weight_idx = 0
+        def get_params_from_dense_layers(layers):
+            layer_params = []
+            for layer in layers:
+                p = get_params_from_layer(layer)
+                if p:
+                    layer_params.append(p)
+            return layer_params
 
         if hasattr(model, 'layers'):  # Sequential model
             for layer in model.layers:
-                if hasattr(layer, 'weights'):
-                    layer.weights = weights[weight_idx]
-                    weight_idx += 1
+                p = get_params_from_layer(layer)
+                if p:
+                    params.append(p)
 
         elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
             for layer in model.encoder_layers:
-                if hasattr(layer, 'weights'):
-                    layer.weights = weights[weight_idx]
-                    weight_idx += 1
-
+                p = get_params_from_layer(layer)
+                if p:
+                    params.append(p)
             for layer in model.decoder_layers:
-                if hasattr(layer, 'weights'):
-                    layer.weights = weights[weight_idx]
-                    weight_idx += 1
+                p = get_params_from_layer(layer)
+                if p:
+                    params.append(p)
 
-        elif hasattr(model, 'embedding'):
-            if hasattr(model.embedding, 'weights'):
-                model.embedding.weights = weights[weight_idx]
-                weight_idx += 1
+        elif hasattr(model, 'src_embedding'):  # Transformer
+            params.append(get_params_from_layer(model.src_embedding))
+            params.append(get_params_from_layer(model.tgt_embedding))
 
             for encoder_layer in model.encoder_layers:
-                if hasattr(encoder_layer, 'attention'):
-                    encoder_layer.attention.query_dense.weights = weights[weight_idx]
-                    encoder_layer.attention.key_dense.weights = weights[weight_idx + 1]
-                    encoder_layer.attention.value_dense.weights = weights[weight_idx + 2]
-                    encoder_layer.attention.output_dense.weights = weights[weight_idx + 3]
-                    weight_idx += 4
-                if hasattr(encoder_layer, 'ffn'):
-                    encoder_layer.ffn.dense1.weights = weights[weight_idx]
-                    encoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
-                    weight_idx += 2
+                params.extend(get_params_from_dense_layers([
+                    encoder_layer.attention.query_dense,
+                    encoder_layer.attention.key_dense,
+                    encoder_layer.attention.value_dense,
+                    encoder_layer.attention.output_dense,
+                    encoder_layer.ffn.dense1,
+                    encoder_layer.ffn.dense2
+                ]))
 
             for decoder_layer in model.decoder_layers:
-                if hasattr(decoder_layer, 'self_attention'):
-                    decoder_layer.self_attention.query_dense.weights = weights[weight_idx]
-                    decoder_layer.self_attention.key_dense.weights = weights[weight_idx + 1]
-                    decoder_layer.self_attention.value_dense.weights = weights[weight_idx + 2]
-                    decoder_layer.self_attention.output_dense.weights = weights[weight_idx + 3]
-                    weight_idx += 4
-                if hasattr(decoder_layer, 'cross_attention'):
-                    decoder_layer.cross_attention.query_dense.weights = weights[weight_idx]
-                    decoder_layer.cross_attention.key_dense.weights = weights[weight_idx + 1]
-                    decoder_layer.cross_attention.value_dense.weights = weights[weight_idx + 2]
-                    decoder_layer.cross_attention.output_dense.weights = weights[weight_idx + 3]
-                    weight_idx += 4
-                if hasattr(decoder_layer, 'ffn'):
-                    decoder_layer.ffn.dense1.weights = weights[weight_idx]
-                    decoder_layer.ffn.dense2.weights = weights[weight_idx + 1]
-                    weight_idx += 2
+                params.extend(get_params_from_dense_layers([
+                    decoder_layer.self_attention.query_dense,
+                    decoder_layer.self_attention.key_dense,
+                    decoder_layer.self_attention.value_dense,
+                    decoder_layer.self_attention.output_dense,
+                    decoder_layer.cross_attention.query_dense,
+                    decoder_layer.cross_attention.key_dense,
+                    decoder_layer.cross_attention.value_dense,
+                    decoder_layer.cross_attention.output_dense,
+                    decoder_layer.ffn.dense1,
+                    decoder_layer.ffn.dense2
+                ]))
 
-            # Restore output layer weights
-            if hasattr(model.output_layer, 'weights'):
-                model.output_layer.weights = weights[weight_idx]
+            params.append(get_params_from_layer(model.output_layer))
+
+        return [p for p in params if p is not None]
+
+    @staticmethod
+    def set_model_weights(model, params: list[tuple[np.ndarray, np.ndarray | None]]) -> None:
+        """Restore weights and biases to any model type."""
+        param_idx = 0
+
+        def set_params_for_layer(layer):
+            nonlocal param_idx
+            if hasattr(layer, 'weights'):
+                if param_idx < len(params):
+                    weights, bias = params[param_idx]
+                    layer.weights = weights.copy()
+                    if hasattr(layer, 'bias') and bias is not None:
+                        layer.bias = bias.copy()
+                    param_idx += 1
+        
+        def set_params_for_dense_layers(layers):
+            for layer in layers:
+                set_params_for_layer(layer)
+
+        if hasattr(model, 'layers'):  # Sequential model
+            for layer in model.layers:
+                set_params_for_layer(layer)
+
+        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
+            for layer in model.encoder_layers:
+                set_params_for_layer(layer)
+            for layer in model.decoder_layers:
+                set_params_for_layer(layer)
+
+        elif hasattr(model, 'src_embedding'): # Transformer
+            set_params_for_layer(model.src_embedding)
+            set_params_for_layer(model.tgt_embedding)
+
+            for encoder_layer in model.encoder_layers:
+                set_params_for_dense_layers([
+                    encoder_layer.attention.query_dense,
+                    encoder_layer.attention.key_dense,
+                    encoder_layer.attention.value_dense,
+                    encoder_layer.attention.output_dense,
+                    encoder_layer.ffn.dense1,
+                    encoder_layer.ffn.dense2
+                ])
+
+            for decoder_layer in model.decoder_layers:
+                set_params_for_dense_layers([
+                    decoder_layer.self_attention.query_dense,
+                    decoder_layer.self_attention.key_dense,
+                    decoder_layer.self_attention.value_dense,
+                    decoder_layer.self_attention.output_dense,
+                    decoder_layer.cross_attention.query_dense,
+                    decoder_layer.cross_attention.key_dense,
+                    decoder_layer.cross_attention.value_dense,
+                    decoder_layer.cross_attention.output_dense,
+                    decoder_layer.ffn.dense1,
+                    decoder_layer.ffn.dense2
+                ])
+            
+            set_params_for_layer(model.output_layer)
 
 
 class Callback:

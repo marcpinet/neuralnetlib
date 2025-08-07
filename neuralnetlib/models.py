@@ -193,8 +193,6 @@ class Sequential(BaseModel):
         return X
 
     def backward_pass(self, error: np.ndarray, gan: bool = False, compute_only: bool = False) -> np.ndarray:
-        if self.n_classes is not None and error.shape[1] > error.shape[1] - self.n_classes:
-            error = error[:, :-self.n_classes]
         
         for i, layer in enumerate(reversed(self.layers)):
             if i == 0 and isinstance(layer, Activation):

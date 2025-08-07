@@ -44,10 +44,10 @@ class SGD(Optimizer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray):
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None):
         weights -= self.learning_rate * weights_grad
-        bias -= self.learning_rate * bias_grad
+        if bias is not None and bias_grad is not None:
+            bias -= self.learning_rate * bias_grad
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__, "learning_rate": self.learning_rate}
@@ -64,21 +64,24 @@ class Momentum(Optimizer):
     def __init__(self, learning_rate: float = 0.01, momentum: float = 0.9, **kwargs):
         super().__init__(learning_rate)
         self.momentum = momentum
-        self.velocity = None
+        self.velocity_w = {}
+        self.velocity_b = {}
 
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray):
-        if self.velocity is None:
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray,
+            bias: np.ndarray = None, bias_grad: np.ndarray = None):
+        if not hasattr(self, 'velocity_w'):
             self.velocity_w = np.zeros_like(weights)
-            self.velocity_b = np.zeros_like(bias)
-        self.velocity_w = self.momentum * self.velocity_w - \
-            self.learning_rate * weights_grad
+        self.velocity_w = self.momentum * self.velocity_w - self.learning_rate * weights_grad
         weights += self.velocity_w
-        self.velocity_b = self.momentum * self.velocity_b - self.learning_rate * bias_grad
-        bias += self.velocity_b
+
+        if bias is not None and bias_grad is not None:
+            if not hasattr(self, 'velocity_b') or self.velocity_b is None or self.velocity_b.shape != bias.shape:
+                self.velocity_b = np.zeros_like(bias)
+            self.velocity_b = self.momentum * self.velocity_b - self.learning_rate * bias_grad
+            bias += self.velocity_b
 
     def get_config(self) -> dict:
         return {
@@ -106,24 +109,23 @@ class RMSprop(Optimizer):
         super().__init__(learning_rate)
         self.rho = rho
         self.epsilon = epsilon
-        self.sq_grads = None
+        self.sq_grads_w = {}
+        self.sq_grads_b = {}
         
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray):
-        if self.sq_grads is None:
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None):
+        if not hasattr(self, 'sq_grads_w'):
             self.sq_grads_w = np.zeros_like(weights)
-            self.sq_grads_b = np.zeros_like(bias)
-        self.sq_grads_w = self.rho * self.sq_grads_w + \
-            (1 - self.rho) * np.square(weights_grad)
-        weights -= self.learning_rate * weights_grad / \
-            (np.sqrt(self.sq_grads_w) + self.epsilon)
-        self.sq_grads_b = self.rho * self.sq_grads_b + \
-            (1 - self.rho) * np.square(bias_grad)
-        bias -= self.learning_rate * bias_grad / \
-            (np.sqrt(self.sq_grads_b) + self.epsilon)
+        self.sq_grads_w = self.rho * self.sq_grads_w + (1 - self.rho) * np.square(weights_grad)
+        weights -= self.learning_rate * weights_grad / (np.sqrt(self.sq_grads_w) + self.epsilon)
+
+        if bias is not None and bias_grad is not None:
+            if not hasattr(self, 'sq_grads_b') or self.sq_grads_b is None or self.sq_grads_b.shape != bias.shape:
+                self.sq_grads_b = np.zeros_like(bias)
+            self.sq_grads_b = self.rho * self.sq_grads_b + (1 - self.rho) * np.square(bias_grad)
+            bias -= self.learning_rate * bias_grad / (np.sqrt(self.sq_grads_b) + self.epsilon)
 
     def get_config(self) -> dict:
         return {
@@ -324,13 +326,13 @@ class AdaBelief(Optimizer):
 
         return param, m, s
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray) -> None:
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.s_w[layer_index] = np.zeros_like(weights)
-            self.m_b[layer_index] = np.zeros_like(bias)
-            self.s_b[layer_index] = np.zeros_like(bias)
+            if bias is not None:
+                self.m_b[layer_index] = np.zeros_like(bias)
+                self.s_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
 
@@ -338,9 +340,10 @@ class AdaBelief(Optimizer):
             weights, weights_grad, self.m_w[layer_index], self.s_w[layer_index]
         )
 
-        bias, self.m_b[layer_index], self.s_b[layer_index] = self._compute_moments(
-            bias, bias_grad, self.m_b[layer_index], self.s_b[layer_index]
-        )
+        if bias is not None and bias_grad is not None:
+            bias, self.m_b[layer_index], self.s_b[layer_index] = self._compute_moments(
+                bias, bias_grad, self.m_b[layer_index], self.s_b[layer_index]
+            )
 
     def get_config(self) -> dict:
         return {
@@ -447,13 +450,13 @@ class RAdam(Optimizer):
 
         return param, m, v
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray,
-               bias_grad: np.ndarray) -> None:
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.v_w[layer_index] = np.zeros_like(weights)
-            self.m_b[layer_index] = np.zeros_like(bias)
-            self.v_b[layer_index] = np.zeros_like(bias)
+            if bias is not None:
+                self.m_b[layer_index] = np.zeros_like(bias)
+                self.v_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
 
@@ -461,9 +464,10 @@ class RAdam(Optimizer):
             weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
         )
 
-        bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
-            bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
-        )
+        if bias is not None and bias_grad is not None:
+            bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
+                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
+            )
 
     def get_config(self) -> dict:
         return {

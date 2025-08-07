@@ -307,18 +307,24 @@ def mean_absolute_percentage_error(y_pred: np.ndarray, y_true: np.ndarray, thres
     return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
 
-def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
+def r2_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
-        y_true_classes = y_true.ravel()
-    else:
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true_classes = np.argmax(y_true, axis=1)
 
-    ss_res = np.sum((y_true_classes - y_pred_classes) ** 2)
-    ss_tot = np.sum((y_true_classes - np.mean(y_true_classes)) ** 2)
-    return 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+    if y_pred.shape[1] == 1:
+        y_pred_ = y_pred.ravel()
+        y_true_ = y_true.ravel()
+        ss_res = np.sum((y_true_ - y_pred_) ** 2)
+        ss_tot = np.sum((y_true_ - np.mean(y_true_)) ** 2)
+        return 1.0 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+    r2s = []
+    for j in range(y_pred.shape[1]):
+        yp = y_pred[:, j]
+        yt = y_true[:, j]
+        ss_res = np.sum((yt - yp) ** 2)
+        ss_tot = np.sum((yt - np.mean(yt)) ** 2)
+        r2s.append(1.0 - (ss_res / ss_tot) if ss_tot != 0 else 0.0)
+    return float(np.mean(r2s)) if r2s else 0.0
 
 
 def bleu_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float | None = None, n_gram: int = 4, smooth: bool = False) -> float:

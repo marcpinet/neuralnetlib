@@ -81,7 +81,7 @@ class MeanSquaredError(LossFunction):
         return np.mean(np.square(y_true - y_pred))
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        return 2 * (y_pred - y_true) / y_true.shape[0]
+        return 2 * (y_pred - y_true) / y_true.size
 
     def __str__(self):
         return "MeanSquaredError"

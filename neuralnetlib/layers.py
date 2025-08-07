@@ -153,9 +153,8 @@ class Dense(Layer):
         self.input_shape = input_data.shape
         self.input = input_data
 
-        if len(input_data.shape) == 1 and self.input_dim:
-            batch_size = input_data.shape[0]
-            input_data = input_data.reshape(batch_size, self.input_dim)
+        if input_data.ndim == 1:
+            input_data = input_data.reshape(1, -1)
             self.input = input_data
 
         if len(input_data.shape) == 3:
@@ -316,13 +315,7 @@ class Dropout(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.adaptive:
             return self.dropout_impl.gradient(output_error)
-
-        if output_error.shape[0] != self.mask.shape[0]:
-            rng = np.random.default_rng(
-                self.random_state if self.random_state is not None else int(time.time_ns()))
-            self.mask = rng.binomial(1, 1 - self.rate,
-                                    size=(output_error.shape[0], self.mask.shape[1])) / (1 - self.rate)
-                                    
+        
         return output_error * self.mask
 
     def get_config(self) -> dict:
@@ -373,22 +366,21 @@ class Conv2D(Layer):
 
     def initialize_weights(self, input_shape: tuple):
         _, _, _, in_channels = input_shape
+        fan_in = np.prod(self.kernel_size) * in_channels
+        fan_out = np.prod(self.kernel_size) * self.filters
 
         self.rng = np.random.default_rng(
             self.random_state if self.random_state is not None else int(time.time_ns()))
 
-        if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * in_channels)),
-                                           (*self.kernel_size, in_channels, self.filters))
+        if self.weights_init == "glorot_uniform" or self.weights_init == "xavier":
+            limit = np.sqrt(6 / (fan_in + fan_out))
+            self.weights = self.rng.uniform(-limit, limit, (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * np.prod(self.kernel_size))),
-                                           (*self.kernel_size, in_channels, self.filters))
+            self.weights = self.rng.normal(0, np.sqrt(2 / fan_in), (*self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "default":
-            self.weights = self.rng.normal(
-                0, 0.01, (*self.kernel_size, in_channels, self.filters))
+            self.weights = self.rng.normal(0, 0.01, (*self.kernel_size, in_channels, self.filters))
         else:
-            raise ValueError(
-                "Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
+            raise ValueError("Invalid weights_init value. Possible values are 'xavier', 'he', and 'default'.")
 
         if self.bias_init == "default":
             self.bias = np.zeros((1, self.filters))
