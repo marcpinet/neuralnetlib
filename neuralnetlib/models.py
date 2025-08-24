@@ -1657,7 +1657,7 @@ class Transformer(BaseModel):
     def create_masks(self, inp: np.ndarray, tar: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         batch_size = inp.shape[0]
         enc_padding_mask = self.create_padding_mask(inp)
-        dec_padding_mask = self.create_padding_mask(inp)
+        dec_padding_mask = self.create_padding_mask(tar)
         look_ahead_mask = self.create_look_ahead_mask(tar.shape[1])
         dec_target_padding_mask = self.create_padding_mask(tar)
 
@@ -1792,213 +1792,123 @@ class Transformer(BaseModel):
         if verbose:
             print(str(self))
 
-    def train_on_batch(self, x_batch: tuple[np.ndarray, np.ndarray], y_batch: np.ndarray, print_logging: bool = False) -> float:
+    def update_weights(self) -> None:
+        layer_index = 0
+        
+        # 1. Embeddings
+        if hasattr(self.src_embedding, 'weights') and hasattr(self.src_embedding, 'd_weights'):
+            if self.src_embedding.d_weights is not None:
+                self.optimizer.update(layer_index, self.src_embedding.weights, self.src_embedding.d_weights)
+                layer_index += 1
+        
+        if hasattr(self.tgt_embedding, 'weights') and hasattr(self.tgt_embedding, 'd_weights'):
+            if self.tgt_embedding.d_weights is not None:
+                self.optimizer.update(layer_index, self.tgt_embedding.weights, self.tgt_embedding.d_weights)
+                layer_index += 1
+        
+        # 2. Positional Encoding
+        if hasattr(self.positional_encoding, 'weights') and hasattr(self.positional_encoding, 'd_weights'):
+            if self.positional_encoding.d_weights is not None and self.positional_encoding.trainable:
+                self.optimizer.update(layer_index, self.positional_encoding.weights, self.positional_encoding.d_weights)
+                layer_index += 1
+        
+        # 3. Encoder layers
+        for encoder_layer in self.encoder_layers:
+            layer_index = self._update_encoder_layer_weights(encoder_layer, layer_index)
+        
+        # 4. Decoder layers  
+        for decoder_layer in self.decoder_layers:
+            layer_index = self._update_decoder_layer_weights(decoder_layer, layer_index)
+        
+        # 5. Output layer
+        if hasattr(self.output_layer, 'weights') and hasattr(self.output_layer, 'd_weights'):
+            if self.output_layer.d_weights is not None:
+                bias = getattr(self.output_layer, 'bias', None)
+                bias_grad = getattr(self.output_layer, 'd_bias', None)
+                self.optimizer.update(layer_index, self.output_layer.weights, self.output_layer.d_weights, bias, bias_grad)
+
+    def _update_encoder_layer_weights(self, encoder_layer, layer_index: int) -> int:
+        
+        # Attention layers (query, key, value, output)
+        attention = encoder_layer.attention
+        for dense_layer in [attention.query_dense, attention.key_dense, attention.value_dense, attention.output_dense]:
+            if dense_layer is not None and hasattr(dense_layer, 'weights') and hasattr(dense_layer, 'd_weights'):
+                if dense_layer.d_weights is not None:
+                    bias = getattr(dense_layer, 'bias', None)
+                    bias_grad = getattr(dense_layer, 'd_bias', None)
+                    self.optimizer.update(layer_index, dense_layer.weights, dense_layer.d_weights, bias, bias_grad)
+                    layer_index += 1
+        
+        # Feed forward layers
+        ffn = encoder_layer.ffn
+        for dense_layer in [ffn.dense1, ffn.dense2]:
+            if dense_layer is not None and hasattr(dense_layer, 'weights') and hasattr(dense_layer, 'd_weights'):
+                if dense_layer.d_weights is not None:
+                    bias = getattr(dense_layer, 'bias', None)
+                    bias_grad = getattr(dense_layer, 'd_bias', None)
+                    self.optimizer.update(layer_index, dense_layer.weights, dense_layer.d_weights, bias, bias_grad)
+                    layer_index += 1
+        
+        # Layer norm parameters
+        for norm_layer in [encoder_layer.attention_norm, encoder_layer.ffn_norm]:
+            if norm_layer is not None and hasattr(norm_layer, 'gamma') and hasattr(norm_layer, 'd_gamma'):
+                if norm_layer.d_gamma is not None:
+                    self.optimizer.update(layer_index, norm_layer.gamma, norm_layer.d_gamma, norm_layer.beta, norm_layer.d_beta)
+                    layer_index += 1
+        
+        return layer_index
+
+    def _update_decoder_layer_weights(self, decoder_layer, layer_index: int) -> int:
+        # Self attention + Cross attention
+        for attention in [decoder_layer.self_attention, decoder_layer.cross_attention]:
+            if attention is not None:
+                for dense_layer in [attention.query_dense, attention.key_dense, attention.value_dense, attention.output_dense]:
+                    if dense_layer is not None and hasattr(dense_layer, 'weights') and hasattr(dense_layer, 'd_weights'):
+                        if dense_layer.d_weights is not None:
+                            bias = getattr(dense_layer, 'bias', None)
+                            bias_grad = getattr(dense_layer, 'd_bias', None)
+                            self.optimizer.update(layer_index, dense_layer.weights, dense_layer.d_weights, bias, bias_grad)
+                            layer_index += 1
+        
+        # Feed forward
+        ffn = decoder_layer.ffn
+        if ffn is not None:
+            for dense_layer in [ffn.dense1, ffn.dense2]:
+                if dense_layer is not None and hasattr(dense_layer, 'weights') and hasattr(dense_layer, 'd_weights'):
+                    if dense_layer.d_weights is not None:
+                        bias = getattr(dense_layer, 'bias', None)
+                        bias_grad = getattr(dense_layer, 'd_bias', None)
+                        self.optimizer.update(layer_index, dense_layer.weights, dense_layer.d_weights, bias, bias_grad)
+                        layer_index += 1
+        
+        # Layer norms
+        for norm_layer in [decoder_layer.norm1, decoder_layer.norm2, decoder_layer.norm3]:
+            if norm_layer is not None and hasattr(norm_layer, 'gamma') and hasattr(norm_layer, 'd_gamma'):
+                if norm_layer.d_gamma is not None:
+                    self.optimizer.update(layer_index, norm_layer.gamma, norm_layer.d_gamma, norm_layer.beta, norm_layer.d_beta)
+                    layer_index += 1
+        
+        return layer_index
+    
+    def train_on_batch(self, x_batch: tuple[np.ndarray, np.ndarray], y_batch: np.ndarray) -> float:
         self.gradient_norms = {}
 
         if isinstance(x_batch, list) and len(x_batch) == 2:
             encoder_input, decoder_input = x_batch
         else:
-            raise ValueError(
-                "x_batch must be a list of [encoder_input, decoder_input]")
+            raise ValueError("x_batch must be a list of [encoder_input, decoder_input]")
 
         decoder_target = y_batch
-
-        self.enc_seq_length = encoder_input.shape[1]
-        self.dec_seq_length = decoder_input.shape[1]
-
-        self.predictions = self.forward_pass(
-            (encoder_input, decoder_input), training=True)
-
+        
+        self.predictions = self.forward_pass((encoder_input, decoder_input), training=True)
+        
         loss = self.loss_function(decoder_target, self.predictions)
         error = self.loss_function.derivative(decoder_target, self.predictions)
+        
         self.backward_pass(error)
-
-        def update_with_monitoring(name: str, layer_idx: int, weights: np.ndarray,
-                                   d_weights: np.ndarray, bias: np.ndarray, d_bias: np.ndarray) -> None:
-            weight_norm = np.linalg.norm(d_weights)
-            bias_norm = np.linalg.norm(d_bias) if d_bias is not None else 0
-
-            self.gradient_norms[name] = {
-                'weights': float(weight_norm),
-                'bias': float(bias_norm)
-            }
-
-            if print_logging and weight_norm > self.gradient_clip_threshold:
-                logging.warning(
-                    f"Large gradient norm in {name}: {weight_norm:.4f}")
-
-            self.optimizer.update(layer_idx, weights, d_weights, bias, d_bias)
-
-        layer_idx = 0
-
-        update_with_monitoring(
-            'src_embedding', layer_idx,
-            self.src_embedding.weights, self.src_embedding.d_weights,
-            self.src_embedding.bias, self.src_embedding.d_bias
-        )
-        layer_idx += 1
-
-        update_with_monitoring(
-            'tgt_embedding', layer_idx,
-            self.tgt_embedding.weights, self.tgt_embedding.d_weights,
-            self.tgt_embedding.bias, self.tgt_embedding.d_bias
-        )
-        layer_idx += 1
-
-        for i, encoder_layer in enumerate(self.encoder_layers):
-            update_with_monitoring(
-                f'encoder_{i}_self_attn_Q', layer_idx,
-                encoder_layer.attention.query_dense.weights,
-                encoder_layer.attention.query_dense.d_weights,
-                encoder_layer.attention.query_dense.bias,
-                encoder_layer.attention.query_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'encoder_{i}_self_attn_K', layer_idx,
-                encoder_layer.attention.key_dense.weights,
-                encoder_layer.attention.key_dense.d_weights,
-                encoder_layer.attention.key_dense.bias,
-                encoder_layer.attention.key_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'encoder_{i}_self_attn_V', layer_idx,
-                encoder_layer.attention.value_dense.weights,
-                encoder_layer.attention.value_dense.d_weights,
-                encoder_layer.attention.value_dense.bias,
-                encoder_layer.attention.value_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'encoder_{i}_self_attn_O', layer_idx,
-                encoder_layer.attention.output_dense.weights,
-                encoder_layer.attention.output_dense.d_weights,
-                encoder_layer.attention.output_dense.bias,
-                encoder_layer.attention.output_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'encoder_{i}_ffn_1', layer_idx,
-                encoder_layer.ffn.dense1.weights,
-                encoder_layer.ffn.dense1.d_weights,
-                encoder_layer.ffn.dense1.bias,
-                encoder_layer.ffn.dense1.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'encoder_{i}_ffn_2', layer_idx,
-                encoder_layer.ffn.dense2.weights,
-                encoder_layer.ffn.dense2.d_weights,
-                encoder_layer.ffn.dense2.bias,
-                encoder_layer.ffn.dense2.d_bias
-            )
-            layer_idx += 1
-
-        for i, decoder_layer in enumerate(self.decoder_layers):
-            update_with_monitoring(
-                f'decoder_{i}_self_attn_Q', layer_idx,
-                decoder_layer.self_attention.query_dense.weights,
-                decoder_layer.self_attention.query_dense.d_weights,
-                decoder_layer.self_attention.query_dense.bias,
-                decoder_layer.self_attention.query_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_self_attn_K', layer_idx,
-                decoder_layer.self_attention.key_dense.weights,
-                decoder_layer.self_attention.key_dense.d_weights,
-                decoder_layer.self_attention.key_dense.bias,
-                decoder_layer.self_attention.key_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_self_attn_V', layer_idx,
-                decoder_layer.self_attention.value_dense.weights,
-                decoder_layer.self_attention.value_dense.d_weights,
-                decoder_layer.self_attention.value_dense.bias,
-                decoder_layer.self_attention.value_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_self_attn_O', layer_idx,
-                decoder_layer.self_attention.output_dense.weights,
-                decoder_layer.self_attention.output_dense.d_weights,
-                decoder_layer.self_attention.output_dense.bias,
-                decoder_layer.self_attention.output_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_cross_attn_Q', layer_idx,
-                decoder_layer.cross_attention.query_dense.weights,
-                decoder_layer.cross_attention.query_dense.d_weights,
-                decoder_layer.cross_attention.query_dense.bias,
-                decoder_layer.cross_attention.query_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_cross_attn_K', layer_idx,
-                decoder_layer.cross_attention.key_dense.weights,
-                decoder_layer.cross_attention.key_dense.d_weights,
-                decoder_layer.cross_attention.key_dense.bias,
-                decoder_layer.cross_attention.key_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_cross_attn_V', layer_idx,
-                decoder_layer.cross_attention.value_dense.weights,
-                decoder_layer.cross_attention.value_dense.d_weights,
-                decoder_layer.cross_attention.value_dense.bias,
-                decoder_layer.cross_attention.value_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_cross_attn_O', layer_idx,
-                decoder_layer.cross_attention.output_dense.weights,
-                decoder_layer.cross_attention.output_dense.d_weights,
-                decoder_layer.cross_attention.output_dense.bias,
-                decoder_layer.cross_attention.output_dense.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_ffn_1', layer_idx,
-                decoder_layer.ffn.dense1.weights,
-                decoder_layer.ffn.dense1.d_weights,
-                decoder_layer.ffn.dense1.bias,
-                decoder_layer.ffn.dense1.d_bias
-            )
-            layer_idx += 1
-
-            update_with_monitoring(
-                f'decoder_{i}_ffn_2', layer_idx,
-                decoder_layer.ffn.dense2.weights,
-                decoder_layer.ffn.dense2.d_weights,
-                decoder_layer.ffn.dense2.bias,
-                decoder_layer.ffn.dense2.d_bias
-            )
-            layer_idx += 1
-
-        update_with_monitoring(
-            'output', layer_idx,
-            self.output_layer.weights,
-            self.output_layer.d_weights,
-            self.output_layer.bias,
-            self.output_layer.d_bias
-        )
-
+        
+        self.update_weights()
+        
         return loss
 
     def fit(self, x_train: np.ndarray | list, y_train: np.ndarray | list,
@@ -2203,28 +2113,28 @@ class Transformer(BaseModel):
         return history
 
     def predict(self, inp: np.ndarray, max_length: int = 50, beam_size: int = 5,
-                alpha: float = 0.6, min_length: int = 2, temperature: float = 0.7) -> np.ndarray:
+                alpha: float = 0.6, min_length: int = 3, temperature: float = 0.5) -> np.ndarray:
+    
         enc_output = self.encode(inp, training=False)
-
         input_length = np.sum(inp[0] != self.PAD_IDX)
-        adaptive_max_length = min(max_length, input_length * 2)
-
+        adaptive_max_length = min(max_length, max(input_length * 2, 10))
+    
         beam_sequences = [[(np.array([[self.SOS_IDX]]), 0.0)]]
-
+    
         for i in range(adaptive_max_length - 1):
             all_candidates = []
-
-            for sequences in beam_sequences[-1]:
-                seq, score = sequences
-
+        
+            for seq, score in beam_sequences[-1]:
+            
                 if seq[0, -1] == self.EOS_IDX:
-                    if len(seq[0]) >= min_length:
+                    if len(seq[0]) >= min_length + 1:
                         all_candidates.append((seq, score))
                     continue
-
+            
+                current_score = score
                 if len(seq[0]) > input_length * 1.5:
-                    score -= (len(seq[0]) - input_length * 1.5) * 0.1
-
+                    current_score -= (len(seq[0]) - input_length * 1.5) * 0.2
+            
                 dec_output = self.decode(
                     seq,
                     enc_output,
@@ -2232,46 +2142,49 @@ class Transformer(BaseModel):
                     look_ahead_mask=self.create_look_ahead_mask(seq.shape[1]),
                     padding_mask=self.create_padding_mask(inp)
                 )
-
+            
                 logits = self.output_layer.forward_pass(dec_output)[:, -1, :]
-
-                invalid_tokens = np.array(
-                    [self.PAD_IDX, self.SOS_IDX, self.UNK_IDX])
-
-                logits[:, invalid_tokens] = -np.inf
-
+            
+                invalid_tokens = [self.PAD_IDX, self.SOS_IDX, self.UNK_IDX]
+            
+                for token in invalid_tokens:
+                    logits[:, token] = -np.inf
+            
+                if len(seq[0]) < min_length:
+                    logits[:, self.EOS_IDX] = -np.inf
+            
                 log_probs = log_softmax(logits[0] / temperature)
-
+            
                 top_k = min(beam_size * 2, self.tgt_vocab_size)
                 top_indices = np.argpartition(log_probs, -top_k)[-top_k:]
-
-                valid_tokens = np.ones(len(top_indices), dtype=bool)
-                valid_tokens[top_indices == self.SOS_IDX] = False
-                if len(seq[0]) < min_length:
-                    valid_tokens[top_indices == self.EOS_IDX] = False
-
-                for idx, is_valid in zip(top_indices[valid_tokens], valid_tokens[valid_tokens]):
-                    candidate_score = score + log_probs[idx]
+            
+                for idx in top_indices:
+                    candidate_score = current_score + log_probs[idx]
                     length_penalty = ((5 + len(seq[0]) + 1) / 6) ** alpha
                     candidate_score = candidate_score / length_penalty
-
+                
                     candidate_seq = np.concatenate([seq, [[idx]]], axis=1)
                     all_candidates.append((candidate_seq, candidate_score))
-
+                
             if not all_candidates:
                 break
-
+        
             ordered = sorted(all_candidates, key=lambda x: x[1], reverse=True)
             beam_sequences.append(ordered[:beam_size])
-
+        
             if all(seq[0, -1] == self.EOS_IDX for seq, _ in beam_sequences[-1]):
                 break
-
+    
+        if not beam_sequences[-1]:
+            return np.array([[]])
+    
         best_seq = max(beam_sequences[-1], key=lambda x: x[1])[0]
-
-        if best_seq[0, -1] == self.EOS_IDX:
-            return best_seq[:, 1:-1]
-        return best_seq[:, 1:]
+    
+        result = best_seq[:, 1:]
+        if result.shape[1] > 0 and result[0, -1] == self.EOS_IDX:
+            result = result[:, :-1]
+    
+        return result
 
     def evaluate(self, x_test: list[np.ndarray], y_test: np.ndarray, batch_size: int = 32) -> tuple[float, np.ndarray]:
         if isinstance(x_test, list) and len(x_test) == 2:

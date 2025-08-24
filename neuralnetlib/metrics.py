@@ -327,86 +327,74 @@ def r2_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     return float(np.mean(r2s)) if r2s else 0.0
 
 
-def bleu_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float | None = None, n_gram: int = 4, smooth: bool = False) -> float:
-    """Compute BLEU score for machine translation evaluation.
+def bleu_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float | None = None, 
+               n_gram: int = 4, smooth: bool = False) -> float:
+    """Compute BLEU score for machine translation evaluation."""
 
-    Args:
-        y_pred: Model predictions (batch_size, seq_length, vocab_size) or (batch_size, seq_length)
-        y_true: True sequences (batch_size, seq_length)
-        threshold: Optional threshold parameter (ignored for BLEU score)
-        n_gram: Maximum n-gram length. Defaults to 4.
-        smooth: Whether to apply smoothing. Defaults to False.
-
-    Returns:
-        float: BLEU score.
-    """
     special_tokens = {0, 1, 2, 3}  # PAD, UNK, SOS, EOS
-    weights = [0.25] * n_gram
+    weights = [1.0/n_gram] * n_gram
 
     if y_pred.ndim == 3:
         y_pred = np.argmax(y_pred, axis=-1)
-
+    
     def filter_special_tokens(seq):
         return [token for token in seq if token not in special_tokens]
-
-    pred_sequences = [filter_special_tokens(
-        [int(token) for token in seq]) for seq in y_pred]
-    true_sequences = [[filter_special_tokens(
-        [int(token) for token in seq])] for seq in y_true]
-
+    
+    pred_sequences = [filter_special_tokens([int(token) for token in seq]) for seq in y_pred]
+    true_sequences = [filter_special_tokens([int(token) for token in seq]) for seq in y_true]
+    
     def get_ngrams(sequence, n):
+        if len(sequence) < n:
+            return []
         return [tuple(sequence[i:i + n]) for i in range(len(sequence) - n + 1)]
-
+    
     def smooth_precision(matches, total, n):
-        k = 1
-        return (matches + k) / (total + k)
+        return (matches + 1) / (total + 1)
 
     precisions = []
-    for n in range(1, int(n_gram) + 1):
+    for n in range(1, n_gram + 1):
         matches = 0
         total = 0
-        for pred, refs in zip(pred_sequences, true_sequences):
-            if len(pred) < n:
-                continue
-
+        
+        for pred, ref in zip(pred_sequences, true_sequences):
             pred_ngrams = get_ngrams(pred, n)
-            ref_ngrams_list = [get_ngrams(ref, n) for ref in refs]
-
+            ref_ngrams = get_ngrams(ref, n)
+            
+            if not pred_ngrams:
+                continue
+                
             pred_count = {}
             for ngram in pred_ngrams:
                 pred_count[ngram] = pred_count.get(ngram, 0) + 1
-
-            max_ref_count = {}
-            for ref_ngrams in ref_ngrams_list:
-                ref_count = {}
-                for ngram in ref_ngrams:
-                    ref_count[ngram] = ref_count.get(ngram, 0) + 1
-                for ngram, count in ref_count.items():
-                    max_ref_count[ngram] = max(
-                        max_ref_count.get(ngram, 0), count)
-
+                
+            ref_count = {}
+            for ngram in ref_ngrams:
+                ref_count[ngram] = ref_count.get(ngram, 0) + 1
+            
             for ngram, count in pred_count.items():
-                matches += min(count, max_ref_count.get(ngram, 0))
+                matches += min(count, ref_count.get(ngram, 0))
+            
             total += len(pred_ngrams)
-
-        if smooth:
+        
+        if smooth and total > 0:
             precisions.append(smooth_precision(matches, total, n))
         else:
-            precisions.append(matches / total if total > 0 else 0)
+            precisions.append(matches / total if total > 0 else 0.0)
+    
+    pred_length = sum(len(seq) for seq in pred_sequences)
+    ref_length = sum(len(seq) for seq in true_sequences)
 
-    pred_length = sum(len(pred) for pred in pred_sequences)
-    ref_length = sum(min(len(ref) for ref in refs) for refs in true_sequences)
-
-    brevity_penalty = np.exp(
-        min(1 - ref_length/pred_length, 0)) if pred_length > 0 else 0
-
+    if pred_length == 0:
+        return 0.0
+        
+    brevity_penalty = min(1.0, np.exp(1 - ref_length/pred_length))
+    
     if all(p == 0 for p in precisions):
         return 0.0
-
-    weighted_scores = [w * np.log(p if p > 0 else 1e-10)
-                       for w, p in zip(weights, precisions)]
-    bleu = brevity_penalty * np.exp(sum(weighted_scores))
-
+    
+    log_precisions = [w * np.log(max(p, 1e-10)) for w, p in zip(weights, precisions)]
+    bleu = brevity_penalty * np.exp(sum(log_precisions))
+    
     return float(bleu)
 
 

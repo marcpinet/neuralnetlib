@@ -192,63 +192,75 @@ class KullbackLeiblerDivergence(LossFunction):
 
 
 class CrossEntropyWithLabelSmoothing(LossFunction):
-    def __init__(self, label_smoothing: float = 0.1):
+    def __init__(self, label_smoothing: float = 0.1, ignore_index: int = 0):
         self.label_smoothing = label_smoothing
+        self.ignore_index = ignore_index
         self.epsilon = 1e-15
-
+    
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_true = np.asarray(y_true, dtype=np.int32)
         y_pred = np.clip(np.asarray(y_pred, dtype=np.float32),
                          self.epsilon, 1 - self.epsilon)
-
+        
         if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
-            raise ValueError(
-                f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
-
-        n_classes = y_pred.shape[-1]
+            raise ValueError(f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
+        
         batch_size, seq_length = y_true.shape
-
+        n_classes = y_pred.shape[-1]
+        
+        mask = (y_true != self.ignore_index).astype(np.float32)
+        valid_tokens = np.sum(mask)
+        
+        if valid_tokens == 0:
+            return 0.0
+        
         one_hot = np.zeros_like(y_pred)
-        one_hot[np.arange(batch_size)[:, None],
-                np.arange(seq_length), y_true] = 1.0
-
-        smooth_one_hot = (1.0 - self.label_smoothing) * \
-            one_hot + self.label_smoothing / n_classes
-
-        loss = -np.sum(smooth_one_hot * np.log(y_pred)) / \
-            (batch_size * seq_length)
-        return loss
-
+        one_hot[np.arange(batch_size)[:, None], np.arange(seq_length), y_true] = 1.0
+        
+        smooth_one_hot = (1.0 - self.label_smoothing) * one_hot + self.label_smoothing / n_classes
+        
+        loss_per_token = -np.sum(smooth_one_hot * np.log(y_pred), axis=-1)
+        masked_loss = loss_per_token * mask
+        
+        total_loss = np.sum(masked_loss) / valid_tokens
+        
+        return float(total_loss)
+    
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_true = np.asarray(y_true, dtype=np.int32)
         y_pred = np.clip(np.asarray(y_pred, dtype=np.float32),
                          self.epsilon, 1 - self.epsilon)
-
+        
         if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
-            raise ValueError(
-                f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
-
-        n_classes = y_pred.shape[-1]
+            raise ValueError(f"Shape mismatch: y_true {y_true.shape}, y_pred {y_pred.shape}")
+        
         batch_size, seq_length = y_true.shape
-
+        n_classes = y_pred.shape[-1]
+        
+        mask = (y_true != self.ignore_index).astype(np.float32)
+        valid_tokens = np.sum(mask)
+        
+        if valid_tokens == 0:
+            return np.zeros_like(y_pred)
+        
         one_hot = np.zeros_like(y_pred)
-        one_hot[np.arange(batch_size)[:, None],
-                np.arange(seq_length), y_true] = 1.0
-
-        smooth_one_hot = (1.0 - self.label_smoothing) * \
-            one_hot + self.label_smoothing / n_classes
-
-        grad = -smooth_one_hot * \
-            (1.0 / (y_pred + self.epsilon)) / (batch_size * seq_length)
+        one_hot[np.arange(batch_size)[:, None], np.arange(seq_length), y_true] = 1.0
+        smooth_one_hot = (1.0 - self.label_smoothing) * one_hot + self.label_smoothing / n_classes
+        
+        grad = -smooth_one_hot / (y_pred + self.epsilon) / valid_tokens
+        
+        grad = grad * mask[:, :, np.newaxis]
+        
         return grad
-
+    
     def __str__(self):
-        return f"CrossEntropyWithLabelSmoothing(label_smoothing={self.label_smoothing})"
-
+        return f"CrossEntropyWithLabelSmoothing(label_smoothing={self.label_smoothing}, ignore_index={self.ignore_index})"
+    
     def get_config(self) -> dict:
         return {
             "name": self.__class__.__name__,
-            "label_smoothing": self.label_smoothing
+            "label_smoothing": self.label_smoothing,
+            "ignore_index": self.ignore_index
         }
 
 

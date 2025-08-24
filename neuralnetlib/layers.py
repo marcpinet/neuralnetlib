@@ -2901,15 +2901,14 @@ class MultiHeadAttention(Layer):
             query_normalized = query / query_norm
             key_normalized = key / key_norm
 
-            matmul_qk = np.matmul(query_normalized, np.transpose(
+            scaled_attention_logits = np.matmul(query_normalized, np.transpose(
                 key_normalized, (0, 1, 3, 2)))
         else:
             matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-
-        d_k = key.shape[-1]
-
-        scaling_factor = np.sqrt(d_k)
-        scaled_attention_logits = matmul_qk / scaling_factor
+            
+            d_k = key.shape[-1]
+            scaling_factor = np.sqrt(d_k)
+            scaled_attention_logits = matmul_qk / scaling_factor
 
         MASKING_VALUE = -1e9
         if mask is not None:
@@ -3095,140 +3094,175 @@ class PositionalEncoding(Layer):
         self,
         max_sequence_length: int,
         embedding_dim: int,
-        warmup_steps: int = 1000,
-        initial_scale: float = 0.1,
-        final_scale: float = 0.2,
         scale_embeddings: bool = True,
         trainable: bool = False,
+        dropout_rate: float = 0.0,
+        warmup_steps: int = 1000,
+        initial_scale: float = 0.1,
+        final_scale: float = 1.0,
         random_state: int = None,
         **kwargs
     ) -> None:
         super().__init__()
         self.max_sequence_length = max_sequence_length
         self.embedding_dim = embedding_dim
+        self.scale_embeddings = scale_embeddings
+        self.trainable = trainable
+        self.dropout_rate = dropout_rate
         self.warmup_steps = warmup_steps
         self.initial_scale = initial_scale
         self.final_scale = final_scale
-        self.scale_embeddings = scale_embeddings
-        self.trainable = trainable
         self.random_state = random_state
 
         self.current_step = 0
-        self.current_scale = initial_scale
+        self.current_scale = initial_scale if trainable else final_scale
 
-        self.base_scale_factor = 1.0 if not scale_embeddings else 1.0 / \
-            np.sqrt(embedding_dim)
+        self.embedding_scale = np.sqrt(embedding_dim) if scale_embeddings else 1.0
 
-        if trainable:
-            self.rng = np.random.default_rng(random_state)
-            self.initialize_weights()
-        else:
-            self._build_sinusoidal_encoding()
+        self.weights = None
+        self.d_weights = None
+        
+        self.dropout = Dropout(dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+        
+        self.metadata = {}
+
+        self._build_positional_encoding()
 
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    def _build_sinusoidal_encoding(self) -> None:
-        position = np.arange(self.max_sequence_length)[:, np.newaxis]
-
+    def _build_positional_encoding(self) -> None:
+        """Construit l'encodage positionnel sinusoïdal standard"""
+        position = np.arange(self.max_sequence_length, dtype=np.float32)[:, np.newaxis]
+        
         div_term = np.power(
             10000.0,
-            np.arange(0, self.embedding_dim, 2, dtype=np.float32) /
-            self.embedding_dim
+            np.arange(0, self.embedding_dim, 2, dtype=np.float32) / self.embedding_dim
         )
-
-        pe = np.zeros((self.max_sequence_length,
-                      self.embedding_dim), dtype=np.float32)
-        pe[:, 0::2] = np.sin(position * div_term)
-        pe[:, 1::2] = np.cos(position * div_term)
-
+        
+        pe = np.zeros((self.max_sequence_length, self.embedding_dim), dtype=np.float32)
+        pe[:, 0::2] = np.sin(position / div_term)
+        pe[:, 1::2] = np.cos(position / div_term)
+        
         self.weights = pe[np.newaxis, :, :]
+        
+        if self.trainable:
+            rng = np.random.default_rng(self.random_state)
+            noise = rng.normal(0, 0.02, self.weights.shape)
+            self.weights = self.weights + noise
+            
         self.d_weights = np.zeros_like(self.weights)
 
-    def initialize_weights(self) -> None:
-        if self.trainable:
-            self._build_sinusoidal_encoding()
-
-            noise = self.rng.normal(
-                0,
-                0.01,
-                self.weights.shape
-            )
-            self.weights = self.weights + noise
-            self.d_weights = np.zeros_like(self.weights)
-
-    def get_warmup_scale(self) -> float:
+    def get_current_scale(self) -> float:
+        if not self.trainable:
+            return self.final_scale
+            
         if self.current_step >= self.warmup_steps:
             return self.final_scale
-
+            
         progress = self.current_step / self.warmup_steps
         return self.initial_scale + (self.final_scale - self.initial_scale) * progress
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
-        batch_size, seq_len, _ = input_data.shape
-
+        batch_size, seq_len, embedding_dim = input_data.shape
+        
         if seq_len > self.max_sequence_length:
             raise ValueError(
-                f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}")
+                f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}"
+            )
+        
+        if embedding_dim != self.embedding_dim:
+            raise ValueError(
+                f"Input embedding dimension {embedding_dim} doesn't match expected {self.embedding_dim}"
+            )
 
-        input_norm = np.sqrt(
-            np.sum(input_data**2, axis=-1, keepdims=True) + 1e-6)
-        normalized_input = input_data / input_norm
-
+        scaled_embeddings = input_data * self.embedding_scale
+        
         pos_encoding = self.weights[:, :seq_len, :]
+        
         if batch_size > 1:
-            pos_encoding = np.repeat(pos_encoding, batch_size, axis=0)
-
-        if self.trainable:
-            self.current_scale = self.get_warmup_scale()
-        else:
-            self.current_scale = self.final_scale
-
-        effective_scale = self.current_scale * self.base_scale_factor
-
-        scaled_pe = pos_encoding * effective_scale
-        output = normalized_input + scaled_pe
-
-        self.metadata = {
-            'step': self.current_step,
-            'scale': self.current_scale,
-            'effective_scale': effective_scale,
-            'embedding_contribution': np.mean(np.abs(scaled_pe)) / np.mean(np.abs(normalized_input))
-        }
-
+            pos_encoding = np.broadcast_to(pos_encoding, (batch_size, seq_len, embedding_dim))
+        
+        self.current_scale = self.get_current_scale()
+        scaled_pos_encoding = pos_encoding * self.current_scale
+        
+        output = scaled_embeddings + scaled_pos_encoding
+        
+        if self.dropout is not None:
+            output = self.dropout.forward_pass(output, training=True)
+        
+        self._update_metadata(input_data, scaled_pos_encoding)
+        
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if self.dropout is not None:
+            output_error = self.dropout.backward_pass(output_error)
+        
         if self.trainable:
-            _, seq_len, _ = output_error.shape
-
-            effective_scale = self.current_scale * self.base_scale_factor
-            scaled_error = output_error * effective_scale
-
-            self.d_weights[:, :seq_len,
-                           :] += np.sum(scaled_error, axis=0, keepdims=True)
-
+            batch_size, seq_len, _ = output_error.shape
+            
+            pos_gradient = output_error * self.current_scale
+            
+            self.d_weights[:, :seq_len, :] += np.sum(pos_gradient, axis=0, keepdims=True)
+            
             self.current_step += 1
+        
+        dx = output_error * self.embedding_scale
+        
+        return dx
 
-        return output_error
+    def _update_metadata(self, input_embeddings: np.ndarray, pos_encodings: np.ndarray) -> None:
+        embedding_magnitude = np.mean(np.linalg.norm(input_embeddings, axis=-1))
+        pos_magnitude = np.mean(np.linalg.norm(pos_encodings, axis=-1))
+        
+        self.metadata = {
+            'step': self.current_step,
+            'current_scale': self.current_scale,
+            'embedding_scale': self.embedding_scale,
+            'warmup_progress': min(1.0, self.current_step / self.warmup_steps) if self.trainable else 1.0,
+            'embedding_magnitude': float(embedding_magnitude),
+            'positional_magnitude': float(pos_magnitude),
+            'pos_to_emb_ratio': float(pos_magnitude / (embedding_magnitude + 1e-8)),
+            'effective_contribution': float(pos_magnitude / (embedding_magnitude + pos_magnitude + 1e-8))
+        }
+
+    def reset_step(self) -> None:
+        self.current_step = 0
+
+    def __str__(self) -> str:
+        return (
+            f'PositionalEncoding('
+            f'max_length={self.max_sequence_length}, '
+            f'embedding_dim={self.embedding_dim}, '
+            f'trainable={self.trainable}, '
+            f'scale_embeddings={self.scale_embeddings}, '
+            f'warmup_steps={self.warmup_steps}, '
+            f'current_step={self.current_step}, '
+            f'current_scale={self.current_scale:.4f})'
+        )
 
     def get_config(self) -> dict:
         config = {
             'name': self.__class__.__name__,
             'max_sequence_length': self.max_sequence_length,
             'embedding_dim': self.embedding_dim,
+            'scale_embeddings': self.scale_embeddings,
+            'trainable': self.trainable,
+            'dropout_rate': self.dropout_rate,
             'warmup_steps': self.warmup_steps,
             'initial_scale': self.initial_scale,
             'final_scale': self.final_scale,
-            'scale_embeddings': self.scale_embeddings,
-            'trainable': self.trainable,
             'random_state': self.random_state,
             'current_step': self.current_step,
-            'current_scale': self.current_scale,
+            'current_scale': self.current_scale
         }
         
-        if hasattr(self, 'weights'):
-            config['weights'] = self.weights.tolist() if self.weights is not None else None
+        if self.weights is not None:
+            config['weights'] = self.weights.tolist()
+        
+        if self.dropout is not None:
+            config['dropout'] = self.dropout.get_config()
         
         return config
 
@@ -3237,33 +3271,26 @@ class PositionalEncoding(Layer):
         layer = PositionalEncoding(
             max_sequence_length=config['max_sequence_length'],
             embedding_dim=config['embedding_dim'],
+            scale_embeddings=config['scale_embeddings'],
+            trainable=config['trainable'],
+            dropout_rate=config.get('dropout_rate', 0.0),
             warmup_steps=config['warmup_steps'],
             initial_scale=config['initial_scale'],
             final_scale=config['final_scale'],
-            scale_embeddings=config['scale_embeddings'],
-            trainable=config['trainable'],
             random_state=config['random_state']
         )
         
         layer.current_step = config['current_step']
         layer.current_scale = config['current_scale']
         
-        if config.get('weights') is not None:
+        if 'weights' in config and config['weights'] is not None:
             layer.weights = np.array(config['weights'])
             layer.d_weights = np.zeros_like(layer.weights)
         
+        if 'dropout' in config and config['dropout'] is not None:
+            layer.dropout = Dropout.from_config(config['dropout'])
+        
         return layer
-
-    def __str__(self) -> str:
-        return (
-            f'PositionalEncodingWithWarmup('
-            f'seq_length={self.seq_length}, '
-            f'embedding_dim={self.embedding_dim}, '
-            f'trainable={self.trainable}, '
-            f'warmup_steps={self.warmup_steps}, '
-            f'current_step={self.current_step}, '
-            f'current_scale={self.current_scale:.4f})'
-        )
 
 
 class FeedForward(Layer):
@@ -3811,59 +3838,21 @@ class TransformerDecoderLayer(Layer):
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         d_norm3, d_residual3 = self.norm3.backward_pass(output_error)
         d_ffn = self.dropout3.backward_pass(d_norm3)
-
         d_ffn = self.ffn.backward_pass(d_ffn)
-
         d_out2 = d_residual3 + d_ffn
 
         d_norm2, d_residual2 = self.norm2.backward_pass(d_out2)
         d_attn2 = self.dropout2.backward_pass(d_norm2)
-
-        d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(
-            d_attn2)
-        d_out1 = d_residual2 + normalize_gradient(d_attn2_query)
+        
+        d_attn2_query, d_attn2_key, d_attn2_value = self.cross_attention.backward_pass(d_attn2)
+        d_out1 = d_residual2 + d_attn2_query
 
         d_norm1, d_residual1 = self.norm1.backward_pass(d_out1)
         d_attn1 = self.dropout1.backward_pass(d_norm1)
-
         d_x = self.self_attention.backward_pass(d_attn1)
-
         d_x = d_residual1 + d_x
 
-        batch_size, seq_len, hidden_dim = d_attn2_key.shape
-        attention_weights = self.cross_attention.attention_weights
-        num_heads = self.cross_attention.num_heads
-        head_dim = hidden_dim // num_heads
-
-        if attention_weights is None:
-            attention_weights = np.ones(
-                (batch_size, num_heads, seq_len, seq_len))
-
-        head_importance = np.mean(
-            attention_weights, axis=(2, 3), keepdims=True)
-        head_importance = head_importance.reshape(batch_size, num_heads, 1, 1)
-
-        d_key_reshaped = d_attn2_key.reshape(
-            batch_size * seq_len, num_heads * head_dim)
-        d_key_heads = d_key_reshaped.reshape(
-            batch_size, seq_len, num_heads, head_dim)
-        d_key_heads = np.transpose(d_key_heads, (0, 2, 1, 3))
-
-        d_value_reshaped = d_attn2_value.reshape(
-            batch_size * seq_len, num_heads * head_dim)
-        d_value_heads = d_value_reshaped.reshape(
-            batch_size, seq_len, num_heads, head_dim)
-        d_value_heads = np.transpose(d_value_heads, (0, 2, 1, 3))
-
-        d_key_weighted = head_importance * d_key_heads
-        d_value_weighted = (1.0 - head_importance) * d_value_heads
-
-        d_combined_heads = d_key_weighted + d_value_weighted
-
-        d_combined = np.transpose(d_combined_heads, (0, 2, 1, 3))
-        d_combined = d_combined.reshape(batch_size, seq_len, hidden_dim)
-
-        return d_x, d_combined
+        return d_x, d_attn2_key + d_attn2_value
 
     def get_config(self) -> dict:
         config = {
