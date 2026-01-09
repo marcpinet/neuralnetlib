@@ -1935,7 +1935,7 @@ class LSTM(Layer):
             full_dout[:, -1, :] = output_error
             output_error = full_dout
 
-        dx = np.zeros_like(x, dtype=np.float64)
+        dx = np.zeros((batch_size, timesteps, input_dim), dtype=np.float64)
         dh_next = np.zeros((batch_size, self.units))
         dc_next = np.zeros((batch_size, self.units))
 
