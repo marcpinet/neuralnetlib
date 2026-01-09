@@ -71,9 +71,8 @@ from neuralnetlib.metrics import accuracy_score
 # Create a model
 model = Sequential()
 model.add(Input(10))  # 10 features
-model.add(Dense(8))
-model.add(Dense(1))
-model.add(Activation(Sigmoid()))  # many ways to tell the model which Activation Function you'd like, see the next example
+model.add(Dense(8), activation='relu')
+model.add(Dense(1), activation='sigmoid')
 
 # Compile the model
 model.compile(loss_function='bce', optimizer='sgd')
