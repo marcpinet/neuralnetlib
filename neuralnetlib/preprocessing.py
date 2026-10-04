@@ -12,6 +12,7 @@ def one_hot_encode(indices: np.ndarray, num_classes: int) -> np.ndarray:
     """One-hot encode 1D or 2D indices. One hot encoded labels are binary vectors representing categorical values,
     with exactly one high (or "hot" = 1) bit indicating the presence of a specific category
     and all other bits low (or "cold" = 0)."""
+    indices = np.asarray(indices).astype(int)
     if indices.ndim == 1:
         one_hot = np.zeros((indices.size, num_classes))
         one_hot[np.arange(indices.size), indices] = 1
@@ -201,6 +202,8 @@ def pad_sequences(sequences: np.ndarray, max_length: int, pad_value: int = 0, pa
     """
     padded_sequences = []
     for seq in sequences:
+        # works on lists: with numpy arrays, `list + array` would be an element-wise addition
+        seq = list(seq)
         if len(seq) > max_length:
             if truncating == 'pre':
                 seq = seq[-max_length:]
@@ -262,8 +265,11 @@ class StandardScaler:
     def fit(self, X):
         self.mean_ = np.mean(X, axis=0)
         self.scale_ = np.std(X, axis=0)
+        # constant features would produce a division by zero (NaN), leave them unscaled instead
+        self.scale_ = np.where(self.scale_ == 0, 1.0, self.scale_)
+        return self
 
-    def transform(self, X: np.ndarray) -> None:
+    def transform(self, X: np.ndarray) -> np.ndarray:
         if self.mean_ is None or self.scale_ is None:
             raise ValueError("StandardScaler has not been fitted yet.")
         return (X - self.mean_) / self.scale_
@@ -285,10 +291,11 @@ class MinMaxScaler:
         self.scale_ = None
         self.EPSILON = 1e-8
 
-    def fit(self, X: np.ndarray) -> None:
+    def fit(self, X: np.ndarray) -> "MinMaxScaler":
         self.min_ = np.min(X, axis=0)
         self.scale_ = np.max(X, axis=0) - self.min_
         self.scale_ = np.where(self.scale_ == 0, self.EPSILON, self.scale_)
+        return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         if self.min_ is None or self.scale_ is None:
@@ -315,11 +322,11 @@ class PCA:
         self.explained_variance_ratio = None
 
     def fit(self, X: np.ndarray):
-        if self.n_components is None:
-            self.n_components = X.shape[1]
-
         self.input_shape = X.shape[1:]
         X = X.reshape(X.shape[0], -1)
+
+        if self.n_components is None:
+            self.n_components = X.shape[1]
 
         self.mean = np.mean(X, axis=0)
         X_centered = X - self.mean
@@ -356,51 +363,97 @@ class PCA:
 
 
 class TSNE:
-    def __init__(self, n_components: int = 2, perplexity: float = 30.0, learning_rate: float = 200.0, n_iter: int = 1000, random_state: int = None):
+    def __init__(self, n_components: int = 2, perplexity: float = 30.0, learning_rate: float = 200.0, n_iter: int = 1000,
+                 random_state: int = None, early_exaggeration: float = 12.0, n_iter_exaggeration: int = 250):
         self.n_components = n_components
         self.perplexity = perplexity
         self.learning_rate = learning_rate
         self.n_iter = n_iter
         self.random_state = random_state
+        self.early_exaggeration = early_exaggeration
+        self.n_iter_exaggeration = n_iter_exaggeration
         self.embedding_ = None
         self.kl_div = None
 
-    def _calculate_pairwise_affinities(self, X):
-        distances = np.sum(
-            (X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis=2)
-        P = np.exp(-distances / (2 * self.perplexity ** 2))
-        np.fill_diagonal(P, 0)
-        P /= np.sum(P, axis=1, keepdims=True)
-        return P
+    @staticmethod
+    def _squared_distances(X: np.ndarray) -> np.ndarray:
+        sum_X = np.sum(np.square(X), axis=1)
+        distances = sum_X[:, np.newaxis] + sum_X[np.newaxis, :] - 2 * np.dot(X, X.T)
+        return np.maximum(distances, 0)
+
+    def _calculate_pairwise_affinities(self, X: np.ndarray, tol: float = 1e-5, max_iter: int = 100) -> np.ndarray:
+        """Conditional probabilities p_j|i whose entropy matches log(perplexity) (binary search on the precision of
+        each Gaussian), then symmetrized into the joint probabilities p_ij."""
+        n_samples = X.shape[0]
+        distances = self._squared_distances(X)
+        target_entropy = np.log(min(self.perplexity, n_samples - 1))
+
+        P = np.zeros((n_samples, n_samples))
+        for i in range(n_samples):
+            d_i = np.delete(distances[i], i)
+            d_i = d_i - d_i.min()  # numerical stability, the normalized probabilities are unchanged
+            beta, beta_min, beta_max = 1.0, -np.inf, np.inf
+
+            for _ in range(max_iter):
+                p = np.exp(-d_i * beta)
+                sum_p = max(np.sum(p), 1e-12)
+                entropy = np.log(sum_p) + beta * np.sum(d_i * p) / sum_p
+                entropy_diff = entropy - target_entropy
+
+                if abs(entropy_diff) < tol:
+                    break
+
+                if entropy_diff > 0:
+                    beta_min = beta
+                    beta = beta * 2 if beta_max == np.inf else (beta + beta_max) / 2
+                else:
+                    beta_max = beta
+                    beta = beta / 2 if beta_min == -np.inf else (beta + beta_min) / 2
+
+            P[i, np.arange(n_samples) != i] = p / sum_p
+
+        P = (P + P.T) / (2 * n_samples)
+        return np.maximum(P, 1e-12)
 
     def _kl_divergence(self, P, Q):
-        return np.sum(P * np.log((P + 1e-8) / (Q + 1e-8)))
+        return np.sum(P * np.log((P + 1e-12) / (Q + 1e-12)))
 
     def fit_transform(self, X):
-        np.random.seed(self.random_state)
-        n_samples, n_features = X.shape
+        X = np.asarray(X, dtype=np.float64)
+        X = X.reshape(X.shape[0], -1)
+        n_samples = X.shape[0]
+
         P = self._calculate_pairwise_affinities(X)
+
         rng = np.random.default_rng(self.random_state)
         Y = rng.standard_normal((n_samples, self.n_components)) * 1e-4
+        update = np.zeros_like(Y)
+        gains = np.ones_like(Y)
+
+        # the early exaggeration phase must leave enough iterations to optimize the embedding
+        n_iter_exaggeration = min(self.n_iter_exaggeration, self.n_iter // 4)
 
         for i in range(self.n_iter):
-            distances = np.sum(
-                (Y[:, np.newaxis, :] - Y[np.newaxis, :, :]) ** 2, axis=2)
-            Q = 1 / (1 + distances)
-            np.fill_diagonal(Q, 0)
-            Q /= np.sum(Q)
+            exaggeration = self.early_exaggeration if i < n_iter_exaggeration else 1.0
+            momentum = 0.5 if i < n_iter_exaggeration else 0.8
 
-            PQ_diff = (P - Q) * Q
-            grad = np.zeros_like(Y)
-            for j in range(n_samples):
-                grad[j] = np.sum(
-                    (Y[j] - Y) * PQ_diff[j, :, np.newaxis], axis=0)
+            num = 1 / (1 + self._squared_distances(Y))  # Student-t kernel
+            np.fill_diagonal(num, 0)
+            Q = np.maximum(num / np.sum(num), 1e-12)
 
-            Y -= self.learning_rate * grad
+            W = (exaggeration * P - Q) * num
+            grad = 4 * (np.sum(W, axis=1, keepdims=True) * Y - np.dot(W, Y))
 
-            if (i + 1) % 100 == 0:
-                kl_div = self._kl_divergence(P, Q)
-                self.kl_div = kl_div
+            same_sign = (grad > 0) == (update > 0)
+            gains = np.where(same_sign, gains * 0.8, gains + 0.2)
+            gains = np.maximum(gains, 0.01)
+
+            update = momentum * update - self.learning_rate * gains * grad
+            Y = Y + update
+            Y = Y - np.mean(Y, axis=0)
+
+            if (i + 1) % 100 == 0 or i == self.n_iter - 1:
+                self.kl_div = self._kl_divergence(P, Q)
 
         self.embedding_ = Y
         return self.embedding_
@@ -453,6 +506,10 @@ class Tokenizer:
         for token, (text, idx) in self.SPECIAL_TOKENS.items():
             self.word_index[text] = idx
             self.index_word[idx] = text
+
+    def _is_filtered(self, token: str) -> bool:
+        """Empty tokens and tokens only made of filtered characters are ignored."""
+        return token == '' or all(char in self.filters for char in token)
 
     def preprocess_text(self, text: str) -> str:
         text = re.sub(r"([!\"#$%&()*+,-./:;<=>?@\[\]^_`{|}~])", r" \1 ", text)
@@ -569,16 +626,19 @@ class Tokenizer:
             else:
                 seq = text.split(self.split)
 
+            seen_in_document = set()
             for w in seq:
                 if self.lower:
                     w = w.lower()
-                if w in self.filters:
+                if self._is_filtered(w):
                     continue
                 if w in [token for token, _ in self.SPECIAL_TOKENS.values()]:
                     continue
 
                 self.word_counts[w] = self.word_counts.get(w, 0) + 1
-                self.word_docs[w] = self.word_docs.get(w, 0) + 1
+                if w not in seen_in_document:
+                    self.word_docs[w] = self.word_docs.get(w, 0) + 1
+                    seen_in_document.add(w)
 
         wcounts = sorted(self.word_counts.items(),
                          key=lambda x: x[1], reverse=True)
@@ -620,6 +680,10 @@ class Tokenizer:
                 if self.lower:
                     w = w.lower()
 
+                # same filtering as in fit_on_texts, otherwise filtered tokens would become <UNK>
+                if self._is_filtered(w) and w not in self.word_index:
+                    continue
+
                 i = self.word_index.get(w)
 
                 if i is not None:
@@ -655,8 +719,10 @@ class Tokenizer:
         for seq in sequences:
             vect = []
             for num in seq:
+                if num == self.PAD_IDX:
+                    continue
                 word = self.index_word.get(num)
-                if word is not None and word not in {self.pad_token}:
+                if word is not None:
                     vect.append(word)
                 else:
                     vect.append(self.unk_token)
@@ -720,13 +786,14 @@ class CountVectorizer:
                     term_freq[term] += count
                     doc_freq[term] += 1
 
+        # proportions are compared without truncation (e.g. min_df=0.5 on 3 documents means at least 1.5 documents)
         if isinstance(self.max_df, float):
-            max_doc_count = int(self.max_df * self.document_count_)
+            max_doc_count = self.max_df * self.document_count_
         else:
             max_doc_count = self.max_df
 
         if isinstance(self.min_df, float):
-            min_doc_count = int(self.min_df * self.document_count_)
+            min_doc_count = self.min_df * self.document_count_
         else:
             min_doc_count = self.min_df
 
@@ -947,12 +1014,14 @@ class ImageDataGenerator:
         else:
             rng = self.rng
 
-        if x.ndim == 2:
+        input_was_2d = x.ndim == 2
+        if input_was_2d:
             x = np.expand_dims(x, axis=2)
 
         img_row_axis, img_col_axis, img_channel_axis = 0, 1, 2
         h, w = x.shape[img_row_axis], x.shape[img_col_axis]
 
+        # the transformation matrices work on (row, col, 1) coordinates
         transform_matrix = np.eye(3)
 
         if self.rotation_range:
@@ -961,25 +1030,25 @@ class ImageDataGenerator:
             transform_matrix = np.dot(transform_matrix, rotation_matrix)
 
         if self.width_shift_range or self.height_shift_range:
-            tx = 0
-            ty = 0
+            shift_cols = 0
+            shift_rows = 0
             if self.width_shift_range:
                 if isinstance(self.width_shift_range, int):
-                    tx = rng.integers(-self.width_shift_range,
-                                      self.width_shift_range + 1)
+                    shift_cols = rng.integers(-self.width_shift_range,
+                                              self.width_shift_range + 1)
                 else:
-                    tx = rng.uniform(-self.width_shift_range,
-                                     self.width_shift_range) * w
+                    shift_cols = rng.uniform(-self.width_shift_range,
+                                             self.width_shift_range) * w
             if self.height_shift_range:
                 if isinstance(self.height_shift_range, int):
-                    ty = rng.integers(-self.height_shift_range,
-                                      self.height_shift_range + 1)
+                    shift_rows = rng.integers(-self.height_shift_range,
+                                              self.height_shift_range + 1)
                 else:
-                    ty = rng.uniform(-self.height_shift_range,
-                                     self.height_shift_range) * h
+                    shift_rows = rng.uniform(-self.height_shift_range,
+                                             self.height_shift_range) * h
 
-            translation_matrix = np.array([[1, 0, tx],
-                                           [0, 1, ty],
+            translation_matrix = np.array([[1, 0, shift_rows],
+                                           [0, 1, shift_cols],
                                            [0, 0, 1]])
             transform_matrix = np.dot(transform_matrix, translation_matrix)
 
@@ -992,7 +1061,8 @@ class ImageDataGenerator:
             transform_matrix = np.dot(transform_matrix, zoom_matrix)
 
         if not np.array_equal(transform_matrix, np.eye(3)):
-            h, w = x.shape[img_row_axis], x.shape[img_col_axis]
+            # rotations and zooms are applied around the center of the image, not around its top-left corner
+            transform_matrix = self._offset_to_center(transform_matrix, h, w)
             transforms = []
             for i in range(x.shape[img_channel_axis]):
                 transforms.append(self._affine_transform(
@@ -1016,7 +1086,11 @@ class ImageDataGenerator:
             x = self._channel_shift(x, self.channel_shift_range, rng)
 
         if self.rescale is not None:
-            x *= self.rescale
+            # not in place: integer images (e.g. uint8) cannot hold the rescaled values
+            x = x * self.rescale
+
+        if input_was_2d:
+            x = x[..., 0]
 
         return x
 
@@ -1031,10 +1105,11 @@ class ImageDataGenerator:
         index_array = np.arange(n)
 
         while True:
-            if shuffle:
-                rng.shuffle(index_array)
-
             current_index = (batch_index * batch_size) % n
+
+            # the samples are shuffled once per epoch, so that every sample is seen once per epoch
+            if shuffle and current_index == 0:
+                rng.shuffle(index_array)
 
             if n > current_index + batch_size:
                 current_batch_size = batch_size
@@ -1045,12 +1120,9 @@ class ImageDataGenerator:
             batch_indices = index_array[current_index:
                                         current_index + current_batch_size]
 
-            batch_x = np.zeros((current_batch_size,) + x.shape[1:],
-                               dtype=x.dtype)
-
-            for i, j in enumerate(batch_indices):
-                x_aug = self.random_transform(x[j])
-                batch_x[i] = x_aug
+            # the dtype of the augmented samples is kept (e.g. uint8 images become floats once rescaled)
+            batch_x = np.stack([self.random_transform(x[j], seed=rng.integers(0, 2**32) if seed is not None else None)
+                                for j in batch_indices])
 
             if y is None:
                 yield batch_x
@@ -1065,7 +1137,16 @@ class ImageDataGenerator:
                         [s, c, 0],
                         [0, 0, 1]])
 
+    @staticmethod
+    def _offset_to_center(matrix, h, w):
+        o_row = h / 2 - 0.5
+        o_col = w / 2 - 0.5
+        offset_matrix = np.array([[1, 0, o_row], [0, 1, o_col], [0, 0, 1]])
+        reset_matrix = np.array([[1, 0, -o_row], [0, 1, -o_col], [0, 0, 1]])
+        return np.dot(np.dot(offset_matrix, matrix), reset_matrix)
+
     def _affine_transform(self, x, matrix, fill_mode='nearest', cval=0.0):
+        """Applies the affine transformation to a 2D (single channel) image."""
         h, w = x.shape[:2]
 
         y_coords, x_coords = np.meshgrid(
@@ -1085,24 +1166,15 @@ class ImageDataGenerator:
             return x[y_coords, x_coords]
 
         elif fill_mode == 'constant':
-            y_floor = np.floor(y_coords).astype(np.int32)
-            y_ceil = y_floor + 1
-            x_floor = np.floor(x_coords).astype(np.int32)
-            x_ceil = x_floor + 1
+            valid_coords = (y_coords >= 0) & (y_coords <= h - 1) & (x_coords >= 0) & (x_coords <= w - 1)
 
-            valid_coords = (y_floor >= 0) & (
-                y_ceil < h) & (x_floor >= 0) & (x_ceil < w)
+            y_floor = np.clip(np.floor(y_coords), 0, h - 1).astype(np.int32)
+            x_floor = np.clip(np.floor(x_coords), 0, w - 1).astype(np.int32)
+            y_ceil = np.clip(y_floor + 1, 0, h - 1)
+            x_ceil = np.clip(x_floor + 1, 0, w - 1)
 
-            y_floor = np.clip(y_floor, 0, h-1)
-            y_ceil = np.clip(y_ceil, 0, h-1)
-            x_floor = np.clip(x_floor, 0, w-1)
-            x_ceil = np.clip(x_ceil, 0, w-1)
-
-            dy = y_coords - y_floor
-            dx = x_coords - x_floor
-
-            dy = dy[..., np.newaxis]
-            dx = dx[..., np.newaxis]
+            dy = np.clip(y_coords - y_floor, 0, 1)
+            dx = np.clip(x_coords - x_floor, 0, 1)
 
             values = (
                 x[y_floor, x_floor] * (1 - dy) * (1 - dx) +
@@ -1111,35 +1183,37 @@ class ImageDataGenerator:
                 x[y_ceil, x_ceil] * dy * dx
             )
 
-            return np.where(valid_coords[..., np.newaxis], values, cval)
+            return np.where(valid_coords, values, cval)
 
         elif fill_mode == 'reflect':
-            y_coords = np.clip(y_coords, -h, 2*h-1)
-            x_coords = np.clip(x_coords, -w, 2*w-1)
+            y_coords = np.clip(np.round(y_coords), -h, 2*h-1)
+            x_coords = np.clip(np.round(x_coords), -w, 2*w-1)
             y_coords = np.where(y_coords < 0, -y_coords, y_coords)
             x_coords = np.where(x_coords < 0, -x_coords, x_coords)
             y_coords = np.where(y_coords >= h, 2*h - y_coords - 2, y_coords)
             x_coords = np.where(x_coords >= w, 2*w - x_coords - 2, x_coords)
-            y_coords = y_coords.astype(np.int32)
-            x_coords = x_coords.astype(np.int32)
+            y_coords = np.clip(y_coords, 0, h - 1).astype(np.int32)
+            x_coords = np.clip(x_coords, 0, w - 1).astype(np.int32)
             return x[y_coords, x_coords]
 
         elif fill_mode == 'wrap':
-            y_coords = np.remainder(y_coords, h).astype(np.int32)
-            x_coords = np.remainder(x_coords, w).astype(np.int32)
+            y_coords = np.remainder(np.round(y_coords), h).astype(np.int32)
+            x_coords = np.remainder(np.round(x_coords), w).astype(np.int32)
             return x[y_coords, x_coords]
 
         return x
 
     def _channel_shift(self, x, intensity, rng):
-        x = np.array(x, copy=True)
+        x = np.array(x, dtype=np.float64, copy=True)
+        # values are kept in the original range of the image (which is not necessarily [0, 1])
+        min_x, max_x = np.min(x), np.max(x)
         channels = x.shape[-1] if x.ndim > 2 else 1
         for i in range(channels):
             shift = rng.uniform(-intensity, intensity)
             if x.ndim > 2:
-                x[..., i] = np.clip(x[..., i] + shift, 0, 1)
+                x[..., i] = np.clip(x[..., i] + shift, min_x, max_x)
             else:
-                x = np.clip(x + shift, 0, 1)
+                x = np.clip(x + shift, min_x, max_x)
         return x
 
 
@@ -1229,9 +1303,6 @@ class Imputer:
         self.indicators_: dict[int, np.ndarray] = {}
         self.is_1d_: bool = False
 
-        if strategy == Strategy.RANDOM and random_state is not None:
-            np.random.seed(random_state)
-
     def _compute_mode(self, column: np.ndarray) -> float:
         unique_vals, counts = np.unique(
             column[~np.isnan(column)], return_counts=True)
@@ -1291,11 +1362,11 @@ class Imputer:
                 X_imputed[mask, i] = self.statistics_[i]
 
         elif self.strategy == Strategy.RANDOM:
+            rng = np.random.default_rng(self.random_state)
             for i in range(X.shape[1]):
                 mask = np.isnan(X[:, i])
                 n_missing = np.sum(mask)
                 if n_missing > 0:
-                    rng = np.random.default_rng(self.random_state)
                     random_values = rng.choice(
                         self.random_params_[i],
                         size=n_missing,
@@ -1304,8 +1375,8 @@ class Imputer:
                     X_imputed[mask, i] = random_values
 
         if self.add_indicator:
-            indicators = np.array([self.indicators_[i]
-                                  for i in range(X.shape[1])]).T
+            # the indicators describe the missing values of the data being transformed, not of the fitted data
+            indicators = np.isnan(X.astype(float))
             X_imputed = np.hstack([X_imputed, indicators.astype(int)])
 
         if is_1d and not self.add_indicator:

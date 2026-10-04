@@ -20,6 +20,8 @@ class Optimizer:
 
         for optimizer_class in Optimizer.__subclasses__():
             if optimizer_class.__name__ == optimizer_name:
+                if 'from_config' in optimizer_class.__dict__:
+                    return optimizer_class.from_config(config)
                 constructor_params = {k: v for k,
                                       v in config.items() if k != 'name'}
                 return optimizer_class(**constructor_params)
@@ -37,15 +39,35 @@ class Optimizer:
         raise ValueError(f"No optimizer found for the name: {name}")
 
 
+def _match_shape(param: np.ndarray, grad: np.ndarray) -> np.ndarray:
+    """Gradients must have the exact shape of their parameter, since the parameters are updated in place."""
+    if param is None or grad is None:
+        return grad
+    grad = np.asarray(grad)
+    if grad.shape != param.shape and grad.size == param.size:
+        grad = grad.reshape(param.shape)
+    return grad
+
+
+def _restore_steps(config: dict, state_keys) -> dict:
+    """Per-parameter step counters. Older configs only stored a global counter `t`."""
+    if config.get('steps') is not None:
+        return dict_with_list_to_dict_with_ndarray(config['steps'])
+    return {k: config.get('t', 0) for k in state_keys}
+
+
 class SGD(Optimizer):
     def __init__(self, learning_rate: float = 0.01, **kwargs):
         super().__init__(learning_rate)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None):
-        weights -= self.learning_rate * weights_grad
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
+        if weights_grad is not None:
+            weights -= self.learning_rate * weights_grad
         if bias is not None and bias_grad is not None:
             bias -= self.learning_rate * bias_grad
 
@@ -71,17 +93,20 @@ class Momentum(Optimizer):
             setattr(self, key, value)
 
     def update(self, layer_index, weights, weights_grad, bias=None, bias_grad=None):
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
         if layer_index not in self.velocity_w:
             self.velocity_w[layer_index] = np.zeros_like(weights)
         if bias is not None and layer_index not in self.velocity_b:
             self.velocity_b[layer_index] = np.zeros_like(bias)
 
-        self.velocity_w[layer_index] = (
-            self.momentum * self.velocity_w[layer_index] - self.learning_rate * weights_grad
-        )
-        weights += self.velocity_w[layer_index]
+        if weights_grad is not None:
+            self.velocity_w[layer_index] = (
+                self.momentum * self.velocity_w[layer_index] - self.learning_rate * weights_grad
+            )
+            weights += self.velocity_w[layer_index]
 
-        if bias is not None:
+        if bias is not None and bias_grad is not None:
             self.velocity_b[layer_index] = (
                 self.momentum * self.velocity_b[layer_index] - self.learning_rate * bias_grad
             )
@@ -101,7 +126,7 @@ class Momentum(Optimizer):
         optimizer = Momentum(config['learning_rate'], config['momentum'])
         if config.get('velocity_w'):
             optimizer.velocity_w = dict_with_list_to_dict_with_ndarray(config['velocity_w'])
-            optimizer.velocity_b = dict_with_list_to_dict_with_ndarray(config['velocity_b'])
+            optimizer.velocity_b = dict_with_list_to_dict_with_ndarray(config.get('velocity_b') or {})
         return optimizer
 
     def __str__(self):
@@ -115,25 +140,28 @@ class RMSprop(Optimizer):
         self.epsilon = epsilon
         self.sq_grads_w = {}
         self.sq_grads_b = {}
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
     def update(self, layer_index, weights, weights_grad, bias=None, bias_grad=None):
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
         if layer_index not in self.sq_grads_w:
             self.sq_grads_w[layer_index] = np.zeros_like(weights)
         if bias is not None and layer_index not in self.sq_grads_b:
             self.sq_grads_b[layer_index] = np.zeros_like(bias)
 
-        self.sq_grads_w[layer_index] = (
-            self.rho * self.sq_grads_w[layer_index] + (1 - self.rho) * np.square(weights_grad)
-        )
-        weights -= (
-            self.learning_rate * weights_grad
-            / (np.sqrt(self.sq_grads_w[layer_index]) + self.epsilon)
-        )
+        if weights_grad is not None:
+            self.sq_grads_w[layer_index] = (
+                self.rho * self.sq_grads_w[layer_index] + (1 - self.rho) * np.square(weights_grad)
+            )
+            weights -= (
+                self.learning_rate * weights_grad
+                / (np.sqrt(self.sq_grads_w[layer_index]) + self.epsilon)
+            )
 
-        if bias is not None:
+        if bias is not None and bias_grad is not None:
             self.sq_grads_b[layer_index] = (
                 self.rho * self.sq_grads_b[layer_index] + (1 - self.rho) * np.square(bias_grad)
             )
@@ -157,7 +185,7 @@ class RMSprop(Optimizer):
         optimizer = RMSprop(config['learning_rate'], config['rho'], config['epsilon'])
         if config.get('sq_grads_w'):
             optimizer.sq_grads_w = dict_with_list_to_dict_with_ndarray(config['sq_grads_w'])
-            optimizer.sq_grads_b = dict_with_list_to_dict_with_ndarray(config['sq_grads_b'])
+            optimizer.sq_grads_b = dict_with_list_to_dict_with_ndarray(config.get('sq_grads_b') or {})
         return optimizer
 
     def __str__(self):
@@ -174,7 +202,8 @@ class Adam(Optimizer):
         self.epsilon = epsilon
         self.clip_norm = clip_norm
         self.clip_value = clip_value
-        self.t = 0
+        self.t = 0  # total number of updates (informative only)
+        self.steps = {}  # number of updates per parameter, used for the bias correction
 
         self.m_w, self.v_w = {}, {}
         self.m_b, self.v_b = {}, {}
@@ -183,7 +212,7 @@ class Adam(Optimizer):
 
         # Maximum exponent value for float64 = 709
         self._max_exp = np.log(np.finfo(np.float64).max)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -201,17 +230,14 @@ class Adam(Optimizer):
 
         return grad
 
-    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, v: np.ndarray) -> tuple:
-        if param is None or grad is None:
-            return None, None, None
-
+    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, v: np.ndarray, t: int) -> tuple:
         grad = self._clip_gradients(grad)
 
         m = self.beta_1 * m + (1 - self.beta_1) * grad
         v = self.beta_2 * v + (1 - self.beta_2) * np.square(grad)
 
-        beta1_t = self.beta_1 ** self.t
-        beta2_t = self.beta_2 ** self.t
+        beta1_t = self.beta_1 ** t
+        beta2_t = self.beta_2 ** t
 
         m_hat = m / (1 - beta1_t)
         v_hat = v / (1 - beta2_t)
@@ -224,24 +250,29 @@ class Adam(Optimizer):
 
         return param, m, v
 
-    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, 
+    def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray,
               bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.v_w[layer_index] = np.zeros_like(weights)
-            if bias is not None:
-                self.m_b[layer_index] = np.zeros_like(bias)
-                self.v_b[layer_index] = np.zeros_like(bias)
+        if bias is not None and layer_index not in self.m_b:
+            self.m_b[layer_index] = np.zeros_like(bias)
+            self.v_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
+        self.steps[layer_index] = self.steps.get(layer_index, 0) + 1
+        t = self.steps[layer_index]
 
-        weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
-            weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
-        )
+        if weights_grad is not None:
+            weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
+                weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index], t
+            )
 
         if bias is not None and bias_grad is not None:
             bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
-                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
+                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index], t
             )
 
     def get_config(self) -> dict:
@@ -254,6 +285,7 @@ class Adam(Optimizer):
             "clip_norm": self.clip_norm,
             "clip_value": self.clip_value,
             "t": self.t,
+            "steps": dict(self.steps),
             "m_w": dict_with_ndarray_to_dict_with_list(self.m_w),
             "v_w": dict_with_ndarray_to_dict_with_list(self.v_w),
             "m_b": dict_with_ndarray_to_dict_with_list(self.m_b),
@@ -270,11 +302,12 @@ class Adam(Optimizer):
             clip_norm=config.get('clip_norm'),
             clip_value=config.get('clip_value')
         )
-        adam.t = config['t']
-        adam.m_w = dict_with_list_to_dict_with_ndarray(config['m_w'])
-        adam.v_w = dict_with_list_to_dict_with_ndarray(config['v_w'])
-        adam.m_b = dict_with_list_to_dict_with_ndarray(config['m_b'])
-        adam.v_b = dict_with_list_to_dict_with_ndarray(config['v_b'])
+        adam.t = config.get('t', 0)
+        adam.m_w = dict_with_list_to_dict_with_ndarray(config.get('m_w') or {})
+        adam.v_w = dict_with_list_to_dict_with_ndarray(config.get('v_w') or {})
+        adam.m_b = dict_with_list_to_dict_with_ndarray(config.get('m_b') or {})
+        adam.v_b = dict_with_list_to_dict_with_ndarray(config.get('v_b') or {})
+        adam.steps = _restore_steps(config, adam.m_w.keys())
         return adam
 
     def __str__(self):
@@ -292,14 +325,15 @@ class AdaBelief(Optimizer):
         self.epsilon = epsilon
         self.clip_norm = clip_norm
         self.clip_value = clip_value
-        self.t = 0
+        self.t = 0  # total number of updates (informative only)
+        self.steps = {}  # number of updates per parameter, used for the bias correction
 
         self.m_w, self.s_w = {}, {}
         self.m_b, self.s_b = {}, {}
 
         self._min_denom = 1e-16
         self._max_exp = np.log(np.finfo(np.float64).max)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -317,7 +351,7 @@ class AdaBelief(Optimizer):
 
         return grad
 
-    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, s: np.ndarray) -> tuple:
+    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, s: np.ndarray, t: int) -> tuple:
         grad = self._clip_gradients(grad)
 
         m = self.beta_1 * m + (1 - self.beta_1) * grad
@@ -326,8 +360,8 @@ class AdaBelief(Optimizer):
 
         s = self.beta_2 * s + (1 - self.beta_2) * np.square(grad_residual)
 
-        beta1_t = self.beta_1 ** self.t
-        beta2_t = self.beta_2 ** self.t
+        beta1_t = self.beta_1 ** t
+        beta2_t = self.beta_2 ** t
 
         m_hat = m / (1 - beta1_t)
         s_hat = s / (1 - beta2_t)
@@ -342,22 +376,27 @@ class AdaBelief(Optimizer):
         return param, m, s
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.s_w[layer_index] = np.zeros_like(weights)
-            if bias is not None:
-                self.m_b[layer_index] = np.zeros_like(bias)
-                self.s_b[layer_index] = np.zeros_like(bias)
+        if bias is not None and layer_index not in self.m_b:
+            self.m_b[layer_index] = np.zeros_like(bias)
+            self.s_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
+        self.steps[layer_index] = self.steps.get(layer_index, 0) + 1
+        t = self.steps[layer_index]
 
-        weights, self.m_w[layer_index], self.s_w[layer_index] = self._compute_moments(
-            weights, weights_grad, self.m_w[layer_index], self.s_w[layer_index]
-        )
+        if weights_grad is not None:
+            weights, self.m_w[layer_index], self.s_w[layer_index] = self._compute_moments(
+                weights, weights_grad, self.m_w[layer_index], self.s_w[layer_index], t
+            )
 
         if bias is not None and bias_grad is not None:
             bias, self.m_b[layer_index], self.s_b[layer_index] = self._compute_moments(
-                bias, bias_grad, self.m_b[layer_index], self.s_b[layer_index]
+                bias, bias_grad, self.m_b[layer_index], self.s_b[layer_index], t
             )
 
     def get_config(self) -> dict:
@@ -370,6 +409,7 @@ class AdaBelief(Optimizer):
             "clip_norm": self.clip_norm,
             "clip_value": self.clip_value,
             "t": self.t,
+            "steps": dict(self.steps),
             "m_w": dict_with_ndarray_to_dict_with_list(self.m_w),
             "s_w": dict_with_ndarray_to_dict_with_list(self.s_w),
             "m_b": dict_with_ndarray_to_dict_with_list(self.m_b),
@@ -386,15 +426,15 @@ class AdaBelief(Optimizer):
             clip_norm=config.get('clip_norm'),
             clip_value=config.get('clip_value')
         )
-        adabelief.t = config['t']
-        adabelief.m_w = dict_with_list_to_dict_with_ndarray(config['m_w'])
-        adabelief.s_w = dict_with_list_to_dict_with_ndarray(config['s_w'])
-        adabelief.m_b = dict_with_list_to_dict_with_ndarray(config['m_b'])
-        adabelief.s_b = dict_with_list_to_dict_with_ndarray(config['s_b'])
+        adabelief.t = config.get('t', 0)
+        adabelief.m_w = dict_with_list_to_dict_with_ndarray(config.get('m_w') or {})
+        adabelief.s_w = dict_with_list_to_dict_with_ndarray(config.get('s_w') or {})
+        adabelief.m_b = dict_with_list_to_dict_with_ndarray(config.get('m_b') or {})
+        adabelief.s_b = dict_with_list_to_dict_with_ndarray(config.get('s_b') or {})
+        adabelief.steps = _restore_steps(config, adabelief.m_w.keys())
         return adabelief
 
     def __str__(self):
-        """Retourne une représentation string de l'optimiseur."""
         return (f"{self.__class__.__name__}(learning_rate={self.learning_rate}, "
                 f"beta_1={self.beta_1}, beta_2={self.beta_2}, epsilon={self.epsilon}, "
                 f"clip_norm={self.clip_norm}, clip_value={self.clip_value})")
@@ -409,7 +449,8 @@ class RAdam(Optimizer):
         self.epsilon = epsilon
         self.clip_norm = clip_norm
         self.clip_value = clip_value
-        self.t = 0
+        self.t = 0  # total number of updates (informative only)
+        self.steps = {}  # number of updates per parameter, used for the bias correction
 
         self.m_w, self.v_w = {}, {}
         self.m_b, self.v_b = {}, {}
@@ -418,7 +459,7 @@ class RAdam(Optimizer):
         self._max_exp = np.log(np.finfo(np.float64).max)
 
         self.rho_inf = 2/(1-beta_2) - 1
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -436,18 +477,18 @@ class RAdam(Optimizer):
 
         return grad
 
-    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, v: np.ndarray) -> tuple:
+    def _compute_moments(self, param: np.ndarray, grad: np.ndarray, m: np.ndarray, v: np.ndarray, t: int) -> tuple:
         grad = self._clip_gradients(grad)
 
         m = self.beta_1 * m + (1 - self.beta_1) * grad
         v = self.beta_2 * v + (1 - self.beta_2) * np.square(grad)
 
-        beta1_t = self.beta_1 ** self.t
-        beta2_t = self.beta_2 ** self.t
+        beta1_t = self.beta_1 ** t
+        beta2_t = self.beta_2 ** t
 
         m_hat = m / (1 - beta1_t)
 
-        rho_t = self.rho_inf - 2 * self.t * beta2_t / (1 - beta2_t)
+        rho_t = self.rho_inf - 2 * t * beta2_t / (1 - beta2_t)
 
         if rho_t > 4:
             v_hat = np.sqrt(v / (1 - beta2_t))
@@ -466,22 +507,27 @@ class RAdam(Optimizer):
         return param, m, v
 
     def update(self, layer_index: int, weights: np.ndarray, weights_grad: np.ndarray, bias: np.ndarray = None, bias_grad: np.ndarray = None) -> None:
+        weights_grad = _match_shape(weights, weights_grad)
+        bias_grad = _match_shape(bias, bias_grad)
         if layer_index not in self.m_w:
             self.m_w[layer_index] = np.zeros_like(weights)
             self.v_w[layer_index] = np.zeros_like(weights)
-            if bias is not None:
-                self.m_b[layer_index] = np.zeros_like(bias)
-                self.v_b[layer_index] = np.zeros_like(bias)
+        if bias is not None and layer_index not in self.m_b:
+            self.m_b[layer_index] = np.zeros_like(bias)
+            self.v_b[layer_index] = np.zeros_like(bias)
 
         self.t += 1
+        self.steps[layer_index] = self.steps.get(layer_index, 0) + 1
+        t = self.steps[layer_index]
 
-        weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
-            weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index]
-        )
+        if weights_grad is not None:
+            weights, self.m_w[layer_index], self.v_w[layer_index] = self._compute_moments(
+                weights, weights_grad, self.m_w[layer_index], self.v_w[layer_index], t
+            )
 
         if bias is not None and bias_grad is not None:
             bias, self.m_b[layer_index], self.v_b[layer_index] = self._compute_moments(
-                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index]
+                bias, bias_grad, self.m_b[layer_index], self.v_b[layer_index], t
             )
 
     def get_config(self) -> dict:
@@ -494,6 +540,7 @@ class RAdam(Optimizer):
             "clip_norm": self.clip_norm,
             "clip_value": self.clip_value,
             "t": self.t,
+            "steps": dict(self.steps),
             "m_w": dict_with_ndarray_to_dict_with_list(self.m_w),
             "v_w": dict_with_ndarray_to_dict_with_list(self.v_w),
             "m_b": dict_with_ndarray_to_dict_with_list(self.m_b),
@@ -510,11 +557,12 @@ class RAdam(Optimizer):
             clip_norm=config.get('clip_norm'),
             clip_value=config.get('clip_value')
         )
-        radam.t = config['t']
-        radam.m_w = dict_with_list_to_dict_with_ndarray(config['m_w'])
-        radam.v_w = dict_with_list_to_dict_with_ndarray(config['v_w'])
-        radam.m_b = dict_with_list_to_dict_with_ndarray(config['m_b'])
-        radam.v_b = dict_with_list_to_dict_with_ndarray(config['v_b'])
+        radam.t = config.get('t', 0)
+        radam.m_w = dict_with_list_to_dict_with_ndarray(config.get('m_w') or {})
+        radam.v_w = dict_with_list_to_dict_with_ndarray(config.get('v_w') or {})
+        radam.m_b = dict_with_list_to_dict_with_ndarray(config.get('m_b') or {})
+        radam.v_b = dict_with_list_to_dict_with_ndarray(config.get('v_b') or {})
+        radam.steps = _restore_steps(config, radam.m_w.keys())
         return radam
 
     def __str__(self):

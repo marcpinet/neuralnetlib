@@ -71,8 +71,8 @@ from neuralnetlib.metrics import accuracy_score
 # Create a model
 model = Sequential()
 model.add(Input(10))  # 10 features
-model.add(Dense(8), activation='relu')
-model.add(Dense(1), activation='sigmoid')
+model.add(Dense(8, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))
 
 # Compile the model
 model.compile(loss_function='bce', optimizer='sgd')
@@ -93,14 +93,13 @@ from neuralnetlib.metrics import accuracy_score
 
 # Create and compile a model
 model = Sequential()
-model.add(Input(28, 28, 1)) # For example, MNIST images
-model.add(Conv2D(32, kernel_size=3, padding='same'), activation='relu')  # activation supports both str...
+model.add(Input((28, 28, 1))) # For example, MNIST images
+model.add(Conv2D(32, kernel_size=3, padding='same', activation='relu'))  # activation supports both str...
 model.add(BatchNormalization())
 model.add(MaxPooling2D(pool_size=2))
+model.add(Flatten())
 model.add(Dense(64, activation='relu'))
 model.add(Dense(10, activation=Softmax()))  # ... and ActivationFunction objects
-model.compile(loss_function='categorical_crossentropy', optimizer=Adam())
-
 
 model.compile(loss_function='categorical_crossentropy', optimizer=Adam())  # same for loss_function and optimizer
 
@@ -120,12 +119,12 @@ from neuralnetlib.metrics import accuracy_score
 model = Sequential()
 model.add(Input(13))
 model.add(Dense(64, activation='leakyrelu'))
-model.add(Dense(1), activation="linear")
+model.add(Dense(1, activation="linear"))
 
 model.compile(loss_function="mse", optimizer='adam')  # you can either put acronyms or full name
 
 # Train the model
-model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=['accuracy'])
+model.fit(X_train, y_train, epochs=100, batch_size=128, metrics=['mae'])
 ```
 
 ### Image Compression
@@ -184,13 +183,13 @@ y = one_hot_encode(y, n_classes)
 noise_dim = 32
 
 generator = Sequential()
-generator.add(Input(noise_dim))
-generator.add(Dense(128, input_dim=noise_dim + n_classes, activation='leakyrelu'))
+generator.add(Input(noise_dim + n_classes))  # the labels are concatenated to the noise
+generator.add(Dense(128, activation='leakyrelu'))
 generator.add(Dense(784, activation='sigmoid'))
 
 discriminator = Sequential()
 discriminator.add(Input(784 + n_classes))
-discriminator.add(Dense(128, input_dim=784 + n_classes, activation='leakyrelu'))
+discriminator.add(Dense(128, activation='leakyrelu'))
 discriminator.add(Dense(1, activation='sigmoid'))
 
 gan = GAN(latent_dim=noise_dim, n_classes=n_classes)
@@ -247,7 +246,7 @@ history = model.fit(x_train, y_train, epochs=50, batch_size=32, verbose=True, ca
 model.save('my_model.json')
 
 # Load a model
-model = Model.load('my_model.json')
+model = Sequential.load('my_model.json')  # or Autoencoder.load, Transformer.load, GAN.load
 ```
 
 ## 📜 Some outputs and easy usages

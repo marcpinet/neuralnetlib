@@ -5,132 +5,46 @@ from neuralnetlib.layers import Layer
 
 
 class ModelWeightManager:
-    @staticmethod
-    def get_model_weights(model) -> list[tuple[np.ndarray, np.ndarray | None]]:
-        """Extract weights and biases from any model type."""
-        params = []
-
-        def get_params_from_layer(layer):
-            if hasattr(layer, 'weights'):
-                weights = layer.weights.copy()
-                bias = layer.bias.copy() if hasattr(layer, 'bias') else None
-                return (weights, bias)
-            return None
-
-        def get_params_from_dense_layers(layers):
-            layer_params = []
-            for layer in layers:
-                p = get_params_from_layer(layer)
-                if p:
-                    layer_params.append(p)
-            return layer_params
-
-        if hasattr(model, 'layers'):  # Sequential model
-            for layer in model.layers:
-                p = get_params_from_layer(layer)
-                if p:
-                    params.append(p)
-
-        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
-            for layer in model.encoder_layers:
-                p = get_params_from_layer(layer)
-                if p:
-                    params.append(p)
-            for layer in model.decoder_layers:
-                p = get_params_from_layer(layer)
-                if p:
-                    params.append(p)
-
-        elif hasattr(model, 'src_embedding'):  # Transformer
-            params.append(get_params_from_layer(model.src_embedding))
-            params.append(get_params_from_layer(model.tgt_embedding))
-
-            for encoder_layer in model.encoder_layers:
-                params.extend(get_params_from_dense_layers([
-                    encoder_layer.attention.query_dense,
-                    encoder_layer.attention.key_dense,
-                    encoder_layer.attention.value_dense,
-                    encoder_layer.attention.output_dense,
-                    encoder_layer.ffn.dense1,
-                    encoder_layer.ffn.dense2
-                ]))
-
-            for decoder_layer in model.decoder_layers:
-                params.extend(get_params_from_dense_layers([
-                    decoder_layer.self_attention.query_dense,
-                    decoder_layer.self_attention.key_dense,
-                    decoder_layer.self_attention.value_dense,
-                    decoder_layer.self_attention.output_dense,
-                    decoder_layer.cross_attention.query_dense,
-                    decoder_layer.cross_attention.key_dense,
-                    decoder_layer.cross_attention.value_dense,
-                    decoder_layer.cross_attention.output_dense,
-                    decoder_layer.ffn.dense1,
-                    decoder_layer.ffn.dense2
-                ]))
-
-            params.append(get_params_from_layer(model.output_layer))
-
-        return [p for p in params if p is not None]
+    # non trainable state that must be restored along with the parameters
+    STATE_ATTRIBUTES = ('running_mean', 'running_var')
 
     @staticmethod
-    def set_model_weights(model, params: list[tuple[np.ndarray, np.ndarray | None]]) -> None:
-        """Restore weights and biases to any model type."""
-        param_idx = 0
-
-        def set_params_for_layer(layer):
-            nonlocal param_idx
-            if hasattr(layer, 'weights'):
-                if param_idx < len(params):
-                    weights, bias = params[param_idx]
-                    layer.weights = weights.copy()
-                    if hasattr(layer, 'bias') and bias is not None:
-                        layer.bias = bias.copy()
-                    param_idx += 1
-        
-        def set_params_for_dense_layers(layers):
-            for layer in layers:
-                set_params_for_layer(layer)
-
+    def _get_layers(model) -> list:
+        if hasattr(model, '_all_layers'):
+            return model._all_layers()
         if hasattr(model, 'layers'):  # Sequential model
-            for layer in model.layers:
-                set_params_for_layer(layer)
+            return list(model.layers)
+        if hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
+            return list(model.encoder_layers) + list(model.decoder_layers)
+        return []
 
-        elif hasattr(model, 'encoder_layers') and hasattr(model, 'decoder_layers'):  # Autoencoder
-            for layer in model.encoder_layers:
-                set_params_for_layer(layer)
-            for layer in model.decoder_layers:
-                set_params_for_layer(layer)
+    @staticmethod
+    def _get_arrays(model) -> list[np.ndarray]:
+        """All the arrays defining the state of the model, in a deterministic order."""
+        arrays = []
+        for layer in ModelWeightManager._get_layers(model):
+            if hasattr(layer, 'get_trainable_parameters'):
+                arrays.extend(param for _, param, _ in layer.get_trainable_parameters())
+            for attribute in ModelWeightManager.STATE_ATTRIBUTES:
+                value = getattr(layer, attribute, None)
+                if isinstance(value, np.ndarray):
+                    arrays.append(value)
+        return arrays
 
-        elif hasattr(model, 'src_embedding'): # Transformer
-            set_params_for_layer(model.src_embedding)
-            set_params_for_layer(model.tgt_embedding)
+    @staticmethod
+    def get_model_weights(model) -> list[np.ndarray]:
+        """Copy of all the parameters (and normalization statistics) of any model type."""
+        return [array.copy() for array in ModelWeightManager._get_arrays(model)]
 
-            for encoder_layer in model.encoder_layers:
-                set_params_for_dense_layers([
-                    encoder_layer.attention.query_dense,
-                    encoder_layer.attention.key_dense,
-                    encoder_layer.attention.value_dense,
-                    encoder_layer.attention.output_dense,
-                    encoder_layer.ffn.dense1,
-                    encoder_layer.ffn.dense2
-                ])
-
-            for decoder_layer in model.decoder_layers:
-                set_params_for_dense_layers([
-                    decoder_layer.self_attention.query_dense,
-                    decoder_layer.self_attention.key_dense,
-                    decoder_layer.self_attention.value_dense,
-                    decoder_layer.self_attention.output_dense,
-                    decoder_layer.cross_attention.query_dense,
-                    decoder_layer.cross_attention.key_dense,
-                    decoder_layer.cross_attention.value_dense,
-                    decoder_layer.cross_attention.output_dense,
-                    decoder_layer.ffn.dense1,
-                    decoder_layer.ffn.dense2
-                ])
-            
-            set_params_for_layer(model.output_layer)
+    @staticmethod
+    def set_model_weights(model, params: list[np.ndarray]) -> None:
+        """Restores, in place, the parameters saved by get_model_weights."""
+        arrays = ModelWeightManager._get_arrays(model)
+        if len(arrays) != len(params):
+            raise ValueError("The saved weights do not match the architecture of the model.")
+        for array, saved in zip(arrays, params):
+            # in place: the optimizers and the layers keep referencing the same arrays
+            array[...] = np.reshape(saved, array.shape)
 
 
 class Callback:
@@ -193,6 +107,7 @@ class EarlyStopping(Callback):
     def on_train_begin(self, logs: dict | None = None) -> None:
         self.patience_counter = 0
         self.best_metric = None
+        self.best_weights = None
         self.stop_training = False
 
     def on_epoch_end(self, epoch: int, logs: dict | None = None) -> bool:
@@ -202,7 +117,14 @@ class EarlyStopping(Callback):
             return False
 
         current_metric = self._get_monitor_value(logs)
-        
+
+        # the mode must be known before comparing with the baseline
+        if self.mode == 'auto':
+            if isinstance(self.monitor, str):
+                self.mode = 'min' if 'loss' in self.monitor.lower() else 'max'
+            else:
+                self.mode = 'min' if 'loss' in self.monitor.name.lower() else 'max'
+
         if self.baseline is not None and self.best_metric is None:
             if self.mode == 'min' and current_metric > self.baseline:
                 print(f"\nEarly stopping: baseline {self.baseline} was not met.")
@@ -212,14 +134,9 @@ class EarlyStopping(Callback):
                 return True
 
         if self.best_metric is None:
-            self.best_metric = current_metric
-            if self.mode == 'auto':
-                if isinstance(self.monitor, str):
-                    self.mode = 'min' if 'loss' in self.monitor.lower() else 'max'
-                else:
-                    self.mode = 'min' if 'loss' in self.monitor.name.lower() else 'max'
-
-        if self.mode == 'min':
+            # the first monitored epoch is the best one so far (its weights must be saved too)
+            improved = True
+        elif self.mode == 'min':
             improved = current_metric < self.best_metric - self.min_delta
         else:
             improved = current_metric > self.best_metric + self.min_delta

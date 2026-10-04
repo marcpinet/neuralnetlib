@@ -1,8 +1,9 @@
+import json
 import unittest
 
 import numpy as np
 
-from neuralnetlib.optimizers import SGD, Momentum, RMSprop, Adam
+from neuralnetlib.optimizers import Optimizer, SGD, Momentum, RMSprop, Adam, AdaBelief, RAdam
 
 
 class TestOptimizers(unittest.TestCase):
@@ -66,6 +67,34 @@ class TestOptimizers(unittest.TestCase):
 
         np.testing.assert_array_almost_equal(self.weights, expected_weights)
         np.testing.assert_array_almost_equal(self.bias, expected_bias)
+
+    def test_adam_bias_correction_per_parameter(self):
+        # the first update of every parameter must be bias corrected with t=1, even after other parameters were updated
+        adam = Adam(learning_rate=0.01)
+        for layer_index in range(3):
+            weights = np.zeros(2)
+            adam.update(layer_index, weights, np.array([0.5, -0.5]))
+            np.testing.assert_allclose(weights, [-0.01, 0.01], rtol=1e-6)
+
+    def test_state_survives_get_config(self):
+        for optimizer in [Momentum(), RMSprop(), Adam(), AdaBelief(), RAdam()]:
+            weights = self.weights.copy()
+            optimizer.update(0, weights, self.weights_grad, self.bias.copy(), self.bias_grad)
+            optimizer.get_config()
+            optimizer.update(0, weights, self.weights_grad, self.bias.copy(), self.bias_grad)
+
+    def test_config_round_trip(self):
+        for optimizer in [SGD(0.1), Momentum(), RMSprop(), Adam(), AdaBelief(), RAdam()]:
+            weights_a, weights_b = self.weights.copy(), self.weights.copy()
+            optimizer.update(0, weights_a, self.weights_grad)
+            config = json.loads(json.dumps(optimizer.get_config()))
+            loaded = Optimizer.from_config(config)
+            self.assertIsInstance(loaded, type(optimizer))
+            # weights_b is behind by one step: apply it with the same state before comparing the next steps
+            weights_b[...] = weights_a
+            optimizer.update(0, weights_a, self.weights_grad)
+            loaded.update(0, weights_b, self.weights_grad)
+            np.testing.assert_allclose(weights_a, weights_b)
 
 
 if __name__ == '__main__':

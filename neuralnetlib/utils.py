@@ -16,19 +16,33 @@ class History(dict):
 
 
 def dict_with_ndarray_to_dict_with_list(d: dict) -> dict:
-    """Converts all numpy arrays in a dictionary to lists. This is useful for serializing the dictionary to JSON."""
-    for k, v in d.items():
-        if isinstance(v, np.ndarray):
-            d[k] = v.tolist()
-    return d
+    """Returns a copy of the dictionary where all numpy arrays are converted to lists. This is useful for serializing
+    the dictionary to JSON. The input dictionary is left untouched (it may be the live state of an optimizer)."""
+    return {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in d.items()}
 
 
 def dict_with_list_to_dict_with_ndarray(d: dict) -> dict:
-    """Converts all lists in a dictionary to numpy arrays. This is useful for deserializing the dictionary from JSON."""
-    for k, v in d.items():
-        if isinstance(v, list):
-            d[k] = np.array(v)
-    return d
+    """Returns a copy of the dictionary where all lists are converted to numpy arrays. This is useful for deserializing
+    the dictionary from JSON. Keys that were integers before the JSON round trip are converted back to integers."""
+    def restore_key(k):
+        if isinstance(k, str) and k.lstrip('-').isdigit():
+            return int(k)
+        return k
+
+    return {restore_key(k): np.array(v) if isinstance(v, list) else v for k, v in d.items()}
+
+
+def to_json_serializable(obj):
+    """`default` hook for json.dump converting numpy scalars and arrays to native Python types."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def shuffle(x: np.ndarray, y: np.ndarray = None, random_state: int = None) -> tuple:
@@ -312,10 +326,10 @@ def make_classification(n_samples=100,
         X = np.hstack([X, X_noise])
     
     if shift > 0:
-        X += rng.uniform(-shift, shift, size=X.shape)
-    
+        X += rng.uniform(-shift, shift, size=X.shape[1])
+
     if scale > 1:
-        X *= rng.uniform(1 - scale, 1 + scale, size=X.shape)
+        X *= rng.uniform(1 - scale, 1 + scale, size=X.shape[1])
     
     if flip_y > 0:
         n_to_flip = int(n_samples * flip_y)
@@ -371,9 +385,8 @@ def is_display_available():
         return is_display_available_linux()
     elif system == "Windows":
         return is_display_available_windows()
-    else:
-        raise NotImplementedError(
-            f"Display check not implemented for {system}")
+    # macOS (and other desktop systems) always have a display server available
+    return True
 
 
 def is_display_available_linux():

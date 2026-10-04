@@ -1,8 +1,17 @@
 import numpy as np
 
 
+def _average_path_length(n: int) -> float:
+    """Average path length of an unsuccessful search in a binary search tree of n samples, c(n)."""
+    if n <= 1:
+        return 0.0
+    if n == 2:
+        return 1.0
+    return 2 * (np.log(n - 1) + np.euler_gamma) - 2 * (n - 1) / n
+
+
 class IsolationTree:
-    def __init__(self, height_limit: int, random_state: int = None):
+    def __init__(self, height_limit: int, random_state: int = None, rng: np.random.Generator = None):
         self.height_limit = height_limit
         self.size = 0
         self.split_feature = None
@@ -10,7 +19,8 @@ class IsolationTree:
         self.left = None
         self.right = None
         self.random_state = random_state
-        self.rng = np.random.default_rng(random_state)
+        # the children share the generator of the root, so that the whole tree is reproducible
+        self.rng = rng if rng is not None else np.random.default_rng(random_state)
 
     def fit(self, X: np.ndarray, current_height: int = 0):
         self.size = X.shape[0]
@@ -38,16 +48,17 @@ class IsolationTree:
         X_right = X[~left_indices]
 
         if X_left.shape[0] > 0:
-            self.left = IsolationTree(self.height_limit)
+            self.left = IsolationTree(self.height_limit, rng=self.rng)
             self.left.fit(X_left, current_height + 1)
 
         if X_right.shape[0] > 0:
-            self.right = IsolationTree(self.height_limit)
+            self.right = IsolationTree(self.height_limit, rng=self.rng)
             self.right.fit(X_right, current_height + 1)
 
     def path_length(self, x: np.ndarray, current_height: int = 0) -> float:
         if self.left is None and self.right is None:
-            return current_height
+            # external node: the samples that were not isolated add the average path length of their subtree
+            return current_height + _average_path_length(self.size)
 
         x = np.atleast_1d(x)
         if x[self.split_feature] < self.split_value:
@@ -76,29 +87,27 @@ class IsolationForest:
             X = X.reshape(-1, 1)
 
         n_samples = X.shape[0]
+        sample_size = min(self.max_samples, n_samples)
+        self.height_limit = int(np.ceil(np.log2(max(sample_size, 2))))
 
         self.trees = []
         for _ in range(self.n_estimators):
-            indices = self.rng.integers(
-                0, n_samples, min(self.max_samples, n_samples))
+            # sub-sampling without replacement (as in the original algorithm)
+            indices = self.rng.choice(n_samples, sample_size, replace=False)
             X_sample = X[indices]
-            tree = IsolationTree(self.height_limit)
+            tree = IsolationTree(self.height_limit, rng=self.rng)
             tree.fit(X_sample)
             self.trees.append(tree)
 
-        self.c = self._average_path_length(self.max_samples)
+        # the normalization uses the size of the samples the trees were built on
+        self.c = self._average_path_length(sample_size)
         scores = self.score_samples(X)
         self.threshold = np.percentile(scores, 100 * self.contamination)
 
         return self
 
     def _average_path_length(self, n: int) -> float:
-        if n <= 1:
-            return 1
-        precision = 1000
-        terms = np.arange(1, precision + 1)
-        euler_mascheroni = np.sum(1 / terms) - np.log(precision)
-        return 2 * (np.log(n - 1) + euler_mascheroni) - 2 * (n - 1) / n
+        return max(_average_path_length(n), 1e-12)
 
     def path_length(self, x: np.ndarray) -> float:
         return np.mean([tree.path_length(x) for tree in self.trees])
@@ -196,7 +205,8 @@ class DecisionTree:
 
         if (self.max_depth is not None and depth >= self.max_depth) or \
            n_samples < self.min_samples_split or \
-           n_samples < 2 * self.min_samples_leaf:
+           n_samples < 2 * self.min_samples_leaf or \
+           len(np.unique(y)) == 1:  # pure node: there is nothing left to split
             if self.tree_type == "classifier":
                 unique, counts = np.unique(y, return_counts=True)
                 node.prediction = unique[np.argmax(counts)]
@@ -204,7 +214,7 @@ class DecisionTree:
                 node.prediction = np.mean(y)
             return node
 
-        n_features_to_consider = self.max_features or X.shape[1]
+        n_features_to_consider = min(max(1, self.max_features or X.shape[1]), X.shape[1])
         features = self.rng.choice(
             X.shape[1], size=n_features_to_consider, replace=False)
 
@@ -268,16 +278,18 @@ class RandomForest:
 
     def _get_max_features(self, n_features):
         if isinstance(self.max_features, int):
-            return min(self.max_features, n_features)
+            return max(1, min(self.max_features, n_features))
         elif self.max_features == "sqrt":
-            return int(np.sqrt(n_features))
+            return max(1, int(np.sqrt(n_features)))
         elif self.max_features == "log2":
-            return int(np.log2(n_features))
+            return max(1, int(np.log2(n_features)))
         return n_features
 
     def fit(self, X, y):
         n_samples, n_features = X.shape
         max_features = self._get_max_features(n_features)
+        # a new fit replaces the previous trees
+        self.trees = []
 
         if self.tree_type == "classifier":
             y = y.astype(int)
@@ -385,7 +397,11 @@ class AdaBoost:
     def fit(self, X, y):
         n_samples = X.shape[0]
 
-        y = np.where(y <= 0, -1, 1)
+        # the two classes (whatever their values) are mapped to -1 and 1
+        self.classes_ = np.unique(y)
+        if len(self.classes_) > 2:
+            raise ValueError("AdaBoost only supports binary classification")
+        y = np.where(y == self.classes_[-1], 1, -1)
         weights = np.ones(n_samples) / n_samples
 
         self.stumps = []
@@ -408,7 +424,11 @@ class AdaBoost:
         return self
 
     def predict(self, X):
-        return np.sign(self.score_samples(X))
+        positive = self.score_samples(X) >= 0
+        # the predictions use the labels of the training data
+        if len(self.classes_) == 1:
+            return np.full(X.shape[0], self.classes_[0])
+        return np.where(positive, self.classes_[1], self.classes_[0])
 
     def predict_proba(self, X):
         scores = self.score_samples(X)
@@ -416,6 +436,8 @@ class AdaBoost:
         return np.vstack([1 - proba, proba]).T
 
     def score_samples(self, X):
+        if not self.stumps:
+            return np.zeros(X.shape[0])
         return np.sum([stump.alpha * stump.predict(X) for stump in self.stumps], axis=0)
 
 
@@ -541,12 +563,15 @@ class GradientBoostingMachine:
 
     def fit(self, X, y):
         n_samples = X.shape[0]
+        # a new fit replaces the previous trees
+        self.trees = []
 
         if self.task == "regression":
             self.initial_prediction = np.mean(y)
         else:
             y = np.where(y <= 0, 0, 1)
-            self.initial_prediction = np.log(np.mean(y) / (1 - np.mean(y)))
+            positive_rate = np.clip(np.mean(y), 1e-6, 1 - 1e-6)
+            self.initial_prediction = np.log(positive_rate / (1 - positive_rate))
 
         F = np.full(n_samples, self.initial_prediction)
 
@@ -603,11 +628,12 @@ class XGBoostNode:
 
 class XGBoostTree:
     def __init__(self, max_depth: int = 6, min_child_weight: float = 1.0,
-                 lambda_: float = 1.0, gamma: float = 0.0):
+                 lambda_: float = 1.0, gamma: float = 0.0, feature_indices: np.ndarray = None):
         self.max_depth = max_depth
         self.min_child_weight = min_child_weight
         self.lambda_ = lambda_
         self.gamma = gamma
+        self.feature_indices = feature_indices
         self.root = None
 
     def _calc_leaf_value(self, grad: np.ndarray, hess: np.ndarray) -> float:
@@ -622,9 +648,10 @@ class XGBoostTree:
         best_feature_idx = None
         best_threshold = None
         total_gain = self._calc_gain(grad, hess)
-        n_features = X.shape[1]
+        # columns sampled for this tree (colsample_bytree), all of them by default
+        feature_indices = self.feature_indices if self.feature_indices is not None else range(X.shape[1])
 
-        for feature_idx in range(n_features):
+        for feature_idx in feature_indices:
             feature_values = X[:, feature_idx]
             unique_values = np.unique(feature_values)
 
@@ -644,7 +671,7 @@ class XGBoostTree:
                 left_gain = self._calc_gain(grad[left_mask], hess[left_mask])
                 right_gain = self._calc_gain(
                     grad[right_mask], hess[right_mask])
-                gain = left_gain + right_gain - total_gain - self.gamma
+                gain = 0.5 * (left_gain + right_gain - total_gain) - self.gamma
 
                 if gain > best_gain:
                     best_gain = gain
@@ -735,7 +762,7 @@ class XGBoost:
                         grad: np.ndarray, hess: np.ndarray) -> tuple:
         # Row subsampling
         if self.subsample < 1.0:
-            n_samples = int(X.shape[0] * self.subsample)
+            n_samples = max(1, int(X.shape[0] * self.subsample))
             indices = self.rng.choice(
                 X.shape[0], size=n_samples, replace=False)
             X = X[indices]
@@ -743,18 +770,21 @@ class XGBoost:
             grad = grad[indices]
             hess = hess[indices]
 
-        if self.colsample_bytree < 1.0:
-            n_features = int(X.shape[1] * self.colsample_bytree)
-            feature_indices = self.rng.choice(
-                X.shape[1], size=n_features, replace=False)
-            X = X[:, feature_indices]
-
         return X, y, grad, hess
+
+    def _sample_features(self, n_features: int) -> np.ndarray | None:
+        """Column subsampling: the tree only considers these features, but keeps the indices of the full data (they
+        are used again for the predictions)."""
+        if self.colsample_bytree >= 1.0:
+            return None
+        n_sampled = max(1, int(n_features * self.colsample_bytree))
+        return np.sort(self.rng.choice(n_features, size=n_sampled, replace=False))
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> 'XGBoost':
         if self.objective == "binary:logistic":
             y = (y > 0).astype(np.float64)
-            self.base_score = np.log(np.mean(y) / (1 - np.mean(y) + 1e-6))
+            positive_rate = np.clip(np.mean(y), 1e-6, 1 - 1e-6)
+            self.base_score = np.log(positive_rate / (1 - positive_rate))
         else:
             self.base_score = np.mean(y)
 
@@ -771,7 +801,8 @@ class XGBoost:
                 max_depth=self.max_depth,
                 min_child_weight=self.min_child_weight,
                 lambda_=self.lambda_,
-                gamma=self.gamma
+                gamma=self.gamma,
+                feature_indices=self._sample_features(X.shape[1])
             )
             tree.fit(X_tree, grad_tree, hess_tree)
             self.trees.append(tree)
@@ -832,7 +863,14 @@ class SVM:
         return cost + l2_reg
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> 'SVM':
-        y = np.where(y <= 0, -1, 1)
+        # the two classes (whatever their values) are mapped to -1 and 1
+        self.classes_ = np.unique(y)
+        if len(self.classes_) > 2:
+            raise ValueError("SVM only supports binary classification")
+        if len(self.classes_) == 2:
+            y = np.where(y == self.classes_[1], 1, -1)
+        else:
+            y = np.where(y <= 0, -1, 1)
 
         self._initialize_weights(X)
         n_samples = X.shape[0]
@@ -842,8 +880,8 @@ class SVM:
 
             condition = y * linear_output < 1
 
-            dw = (self.lambda_param * 2 * self.w -
-                  np.dot(X[condition].T, y[condition])) / n_samples
+            # gradient of the cost: lambda * ||w||^2 + mean(hinge loss)
+            dw = self.lambda_param * 2 * self.w - np.dot(X[condition].T, y[condition]) / n_samples
             db = -np.sum(y[condition]) / n_samples
 
             self.w -= self.lr * dw
@@ -853,8 +891,11 @@ class SVM:
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         linear_output = np.dot(X, self.w) + self.b
-        y_pred = np.sign(linear_output)
-        return np.where(y_pred <= 0, 0, 1)
+        positive = linear_output > 0
+        classes = getattr(self, 'classes_', np.array([0, 1]))
+        if len(classes) == 2:
+            return np.where(positive, classes[1], classes[0])
+        return np.where(positive, 1, 0)
 
     def score_samples(self, X: np.ndarray) -> np.ndarray:
         return np.dot(X, self.w) + self.b
@@ -890,10 +931,15 @@ class KMeans:
             for _ in range(1, self.n_clusters):
                 distances = np.min([np.sum((X - c) ** 2, axis=1)
                                    for c in centroids], axis=0)
-                probs = distances / distances.sum()
-                cumprobs = np.cumsum(probs)
+                total = distances.sum()
+                if total <= 0:
+                    # all the points are already centroids (duplicated data)
+                    centroids.append(X[self.rng.integers(n_samples)])
+                    continue
+                cumprobs = np.cumsum(distances / total)
                 r = self.rng.random()
-                ind = np.searchsorted(cumprobs, r)
+                # rounding errors may leave the last cumulative probability slightly below r
+                ind = min(np.searchsorted(cumprobs, r), n_samples - 1)
                 centroids.append(X[ind])
 
             return np.array(centroids)

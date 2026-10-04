@@ -23,6 +23,8 @@ class LossFunction:
                                       v in config.items() if k != 'name'}
                 return loss_class(**constructor_params)
 
+        raise ValueError(f"No loss function found for the name: {loss_name}")
+
     @staticmethod
     def from_name(name: str) -> "LossFunction":
         aliases = {
@@ -109,24 +111,33 @@ class CategoricalCrossentropy(LossFunction):
         return -np.sum(y_true * np.log(y_pred)) / y_true.shape[0]
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        try:
-            y_pred = np.clip(y_pred, LossFunction.EPSILON,
-                             1 - LossFunction.EPSILON)
-            return -y_true / y_pred
-        except Exception as e:
-            print(e, "Make sure to one-hot encode your labels.", sep="\n")
+        if np.shape(y_true) != np.shape(y_pred):
+            raise ValueError(f"Shape mismatch: y_true {np.shape(y_true)}, y_pred {np.shape(y_pred)}. "
+                             "Make sure to one-hot encode your labels.")
+        y_pred = np.clip(y_pred, LossFunction.EPSILON,
+                         1 - LossFunction.EPSILON)
+        return -y_true / y_pred
 
     def __str__(self):
         return "CategoricalCrossentropy"
 
 
 class SparseCategoricalCrossentropy(LossFunction):
+    @staticmethod
+    def to_class_indices(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        """Returns the integer labels with the shape of y_pred without its last (class) axis.
+        Labels of shape (batch_size, 1) are accepted as well as (batch_size,)."""
+        labels = np.asarray(y_true)
+        if labels.ndim == np.ndim(y_pred) and labels.shape[-1] == 1:
+            labels = labels[..., 0]
+        return labels.astype(int).reshape(np.shape(y_pred)[:-1])
+
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_pred = np.clip(y_pred, LossFunction.EPSILON,
                          1 - LossFunction.EPSILON)
 
-        batch_size = y_true.shape[0]
-        y_pred_selected = y_pred[np.arange(batch_size), y_true]
+        labels = self.to_class_indices(y_true, y_pred)
+        y_pred_selected = np.take_along_axis(y_pred, labels[..., np.newaxis], axis=-1)
 
         return -np.mean(np.log(y_pred_selected))
 
@@ -134,9 +145,9 @@ class SparseCategoricalCrossentropy(LossFunction):
         y_pred = np.clip(y_pred, LossFunction.EPSILON,
                          1 - LossFunction.EPSILON)
 
-        batch_size = y_true.shape[0]
+        labels = self.to_class_indices(y_true, y_pred)
         y_true_one_hot = np.zeros_like(y_pred)
-        y_true_one_hot[np.arange(batch_size), y_true] = 1
+        np.put_along_axis(y_true_one_hot, labels[..., np.newaxis], 1, axis=-1)
 
         return -y_true_one_hot / y_pred
 
@@ -149,7 +160,7 @@ class MeanAbsoluteError(LossFunction):
         return np.mean(np.abs(y_true - y_pred))
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        return np.where(y_pred > y_true, 1, -1)
+        return np.sign(y_pred - y_true) / np.size(y_pred - y_true)
 
     def __str__(self):
         return "MeanAbsoluteError"
@@ -168,8 +179,9 @@ class Huber(LossFunction):
         return np.mean(np.where(is_small_error, squared_loss, linear_loss))
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        error = y_true - y_pred
-        return np.where(np.abs(error) <= self.delta, error, self.delta * np.sign(error))
+        error = y_pred - y_true
+        grad = np.where(np.abs(error) <= self.delta, error, self.delta * np.sign(error))
+        return grad / grad.size
 
     def __str__(self):
         return f"HuberLoss(delta={self.delta})"
@@ -183,8 +195,9 @@ class KullbackLeiblerDivergence(LossFunction):
         return -0.5 * np.mean(1 + log_var - np.square(mu) - np.exp(log_var))
 
     def derivative(self, mu: np.ndarray, log_var: np.ndarray) -> tuple:
-        d_mu = mu
-        d_log_var = 0.5 * (np.exp(log_var) - 1)
+        n = np.size(mu)
+        d_mu = mu / n
+        d_log_var = 0.5 * (np.exp(log_var) - 1) / n
         return d_mu, d_log_var
 
     def __str__(self):
@@ -199,7 +212,7 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
     
     def __call__(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         y_true = np.asarray(y_true, dtype=np.int32)
-        y_pred = np.clip(np.asarray(y_pred, dtype=np.float32),
+        y_pred = np.clip(np.asarray(y_pred, dtype=np.float64),
                          self.epsilon, 1 - self.epsilon)
         
         if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
@@ -208,7 +221,7 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
         batch_size, seq_length = y_true.shape
         n_classes = y_pred.shape[-1]
         
-        mask = (y_true != self.ignore_index).astype(np.float32)
+        mask = (y_true != self.ignore_index).astype(np.float64)
         valid_tokens = np.sum(mask)
         
         if valid_tokens == 0:
@@ -228,7 +241,7 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
     
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_true = np.asarray(y_true, dtype=np.int32)
-        y_pred = np.clip(np.asarray(y_pred, dtype=np.float32),
+        y_pred = np.clip(np.asarray(y_pred, dtype=np.float64),
                          self.epsilon, 1 - self.epsilon)
         
         if y_pred.ndim != 3 or y_true.ndim != 2 or y_true.shape != y_pred.shape[:2]:
@@ -237,7 +250,7 @@ class CrossEntropyWithLabelSmoothing(LossFunction):
         batch_size, seq_length = y_true.shape
         n_classes = y_pred.shape[-1]
         
-        mask = (y_true != self.ignore_index).astype(np.float32)
+        mask = (y_true != self.ignore_index).astype(np.float64)
         valid_tokens = np.sum(mask)
         
         if valid_tokens == 0:
@@ -269,10 +282,26 @@ class Wasserstein(LossFunction):
         return np.mean(y_true * y_pred)
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
-        return y_true
+        grad = y_true * np.ones_like(y_pred)
+        return grad / grad.size
 
     def __str__(self):
         return "Wasserstein"
+
+
+def _focal_loss_derivative(y_true: np.ndarray, y_pred: np.ndarray, gamma: float, alpha: float) -> np.ndarray:
+    """Derivative w.r.t. y_pred of alpha_t * (1 - p_t)^gamma * BCE(y_true, y_pred) (element-wise, not averaged)."""
+    p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+    alpha_factor = y_true * alpha + (1 - y_true) * (1 - alpha)
+
+    ce = -y_true * np.log(y_pred) - (1 - y_true) * np.log(1 - y_pred)
+    d_ce = -y_true / y_pred + (1 - y_true) / (1 - y_pred)
+
+    modulating_factor = np.power(1 - p_t, gamma)
+    # d(1 - p_t)^gamma / dy_pred, with dp_t / dy_pred = 2 * y_true - 1
+    d_modulating_factor = -gamma * np.power(1 - p_t, gamma - 1) * (2 * y_true - 1)
+
+    return alpha_factor * (modulating_factor * d_ce + d_modulating_factor * ce)
 
 
 class FocalLoss(LossFunction):
@@ -298,22 +327,9 @@ class FocalLoss(LossFunction):
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
 
-        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        derivative = _focal_loss_derivative(y_true, y_pred, self.gamma, self.alpha)
 
-        alpha_factor = y_true * self.alpha + (1 - y_true) * (1 - self.alpha)
-
-        modulating_factor = np.power(1 - p_t, self.gamma)
-        d_modulating_factor = -self.gamma * np.power(1 - p_t, self.gamma - 1)
-
-        d_ce = y_true / y_pred - (1 - y_true) / (1 - y_pred)
-
-        derivative = alpha_factor * (
-            modulating_factor * d_ce +
-            d_modulating_factor *
-            (-y_true * np.log(y_pred) - (1 - y_true) * np.log(1 - y_pred))
-        )
-
-        return derivative / y_true.shape[0]
+        return derivative / derivative.size
 
     def __str__(self):
         return f"FocalLoss(gamma={self.gamma}, alpha={self.alpha})"
@@ -352,25 +368,12 @@ class BinaryFocalLossPerLabel(LossFunction):
 
     def derivative(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
-        
-        p_t = np.where(y_true == 1, y_pred, 1 - y_pred)
-        p_t = np.clip(p_t, self.EPSILON, 1 - self.EPSILON)
-        
-        alpha_factor = np.where(y_true == 1, self.alpha, 1 - self.alpha)
-        
-        focusing_factor = np.power(1 - p_t, self.gamma - 1)
-        focusing_factor = np.clip(focusing_factor, 0, 100)
-        
-        sign = np.where(y_true == 1, -1.0, 1.0)
-        
-        modulating = (self.gamma * p_t * np.log(p_t + self.EPSILON) + 1)
-        modulating = np.clip(modulating, -100, 100)
-        
-        grad = (sign * alpha_factor * focusing_factor * modulating) * self.scale
-        
-        grad = grad / (y_true.shape[0] * y_true.shape[1])
+
+        grad = _focal_loss_derivative(y_true, y_pred, self.gamma, self.alpha) * self.scale
+
+        grad = grad / grad.size
         grad = np.clip(grad, -10, 10)
-        
+
         return grad
 
     def get_config(self) -> dict:
@@ -455,8 +458,8 @@ class AsymmetricLoss(LossFunction):
                     np.power(y_pred, self.gamma_neg) / (1 - y_pred + self.EPSILON))
         
         gradient = np.where(pos_mask, grad_pos, grad_neg)
-        
-        return gradient / y_true.shape[0]
+
+        return gradient / gradient.size
 
     def get_config(self) -> dict:
         return {

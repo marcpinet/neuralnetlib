@@ -11,6 +11,29 @@ from neuralnetlib.regularizers import AdaptiveDropout
 EPSILON_SIGMOID = 1e-12
 
 
+def _new_rng(random_state: int | None) -> np.random.Generator:
+    return np.random.default_rng(random_state if random_state is not None else int(time.time_ns()))
+
+
+def _offset_seed(random_state: int | None, offset: int) -> int | None:
+    """Seed of a sub-layer: sub-layers sharing the same seed would get identical weights (or dropout masks)."""
+    return random_state + offset if random_state is not None else None
+
+
+def _prefixed_parameters(prefix: str, layer) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    if layer is None:
+        return []
+    return [(f"{prefix}.{name}", param, grad) for name, param, grad in layer.get_trainable_parameters()]
+
+
+def _same_padding(in_size: int, kernel_size: int, stride: int) -> tuple[int, int, int]:
+    """Output size and (before, after) paddings of a 'same' convolution/pooling (output size = ceil(in / stride))."""
+    out_size = int(np.ceil(in_size / stride))
+    pad_total = max((out_size - 1) * stride + kernel_size - in_size, 0)
+    pad_before = pad_total // 2
+    return out_size, pad_before, pad_total - pad_before
+
+
 class Layer:
     def __init__(self):
         self.input = None
@@ -22,6 +45,11 @@ class Layer:
     def backward_pass(self, output_error: np.ndarray):
         raise NotImplementedError
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        """Returns the (name, parameter, gradient) triplets of the layer.
+        The parameters are numpy arrays that the optimizers update in place."""
+        return []
+
     def get_config(self) -> dict:
         raise NotImplementedError
 
@@ -30,18 +58,18 @@ class Layer:
         layer_name = config['name']
         try:
             layer_class = globals()[layer_name]
-            return layer_class.from_config(config)
         except KeyError:
             raise ValueError(
                 f'Invalid layer name: {layer_name}. Make sure the class {layer_name} is defined.')
+        return layer_class.from_config(config)
 
 
 class Input(Layer):
     def __init__(self, input_shape: tuple | int):
-        if isinstance(input_shape, int):
-            input_shape = (input_shape,)
-        self.input_shape = input_shape
-        self.input_dim = np.prod(input_shape)
+        if isinstance(input_shape, (int, np.integer)):
+            input_shape = (int(input_shape),)
+        self.input_shape = tuple(int(dim) for dim in input_shape)
+        self.input_dim = int(np.prod(self.input_shape))
 
     def __str__(self) -> str:
         return f'Input(input_shape={self.input_shape})'
@@ -67,7 +95,7 @@ class Input(Layer):
 class Dense(Layer):
     def __init__(self, units: int, weights_init: str = "glorot_uniform", bias_init: str = "zeros",
                  random_state: int = None, init_scale: float = 1.0, input_dim: int = None,
-                 **kwargs):
+                 use_bias: bool = True, **kwargs):
         super().__init__()
         self.units = units
         self.weights = None
@@ -79,6 +107,7 @@ class Dense(Layer):
         self.random_state = random_state
         self.init_scale = init_scale
         self.input_dim = input_dim
+        self.use_bias = use_bias
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -86,9 +115,16 @@ class Dense(Layer):
     def __str__(self) -> str:
         return f'Dense(units={self.units})'
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.weights is None:
+            return []
+        params = [('weights', self.weights, self.d_weights)]
+        if self.use_bias and self.bias is not None:
+            params.append(('bias', self.bias, self.d_bias))
+        return params
+
     def initialize_weights(self, input_size: int):
-        self.rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
+        self.rng = _new_rng(self.random_state)
 
         fan_in = input_size
         fan_out = self.units
@@ -134,7 +170,7 @@ class Dense(Layer):
                 "Invalid weights_init value. Possible values are 'scaled_normal', 'glorot_uniform', 'glorot_normal', "
                 "'he_uniform', 'he_normal', 'lecun_uniform', 'lecun_normal', 'orthogonal'")
 
-        if self.bias_init == "zeros":
+        if self.bias_init == "zeros" or not self.use_bias:
             self.bias = np.zeros((1, self.units))
         elif self.bias_init == "ones":
             self.bias = np.ones((1, self.units))
@@ -150,52 +186,31 @@ class Dense(Layer):
         self.d_bias = np.zeros_like(self.bias)
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+        input_data = np.asarray(input_data)
         self.input_shape = input_data.shape
-        self.input = input_data
 
         if input_data.ndim == 1:
             input_data = input_data.reshape(1, -1)
-            self.input = input_data
-
-        if len(input_data.shape) == 3:
-            batch_size, timesteps, features = input_data.shape
-            input_reshaped = input_data.reshape(-1, features)
-
-            if self.weights is None:
-                self.initialize_weights(features)
-
-            output = np.dot(input_reshaped, self.weights) + self.bias
-            return output.reshape(batch_size, timesteps, self.units)
 
         if self.weights is None:
-            self.initialize_weights(input_data.shape[1])
+            self.initialize_weights(input_data.shape[-1])
 
-        output = np.dot(input_data, self.weights) + self.bias
-        return output
+        # inputs with more than 2 dimensions (e.g. sequences) are projected on their last axis
+        self.input = input_data.reshape(-1, input_data.shape[-1])
+        output = np.dot(self.input, self.weights) + self.bias
+        return output.reshape(input_data.shape[:-1] + (self.units,))
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        if len(output_error.shape) == 3:
-            batch_size, timesteps, _ = output_error.shape
-            output_error_reshaped = output_error.reshape(
-                -1, output_error.shape[-1])
-            input_reshaped = self.input.reshape(-1, self.input.shape[-1])
+        output_error_reshaped = output_error.reshape(-1, self.units)
 
-            input_error = np.dot(output_error_reshaped, self.weights.T)
-            self.d_weights = np.dot(input_reshaped.T, output_error_reshaped)
+        input_error = np.dot(output_error_reshaped, self.weights.T)
+        self.d_weights = np.dot(self.input.T, output_error_reshaped)
+        if self.use_bias:
             self.d_bias = np.sum(output_error_reshaped, axis=0, keepdims=True)
+        else:
+            self.d_bias = np.zeros_like(self.bias)
 
-            return input_error.reshape(batch_size, timesteps, -1)
-
-        input_error = np.dot(output_error, self.weights.T)
-
-        if len(self.input.shape) == 1:
-            self.input = self.input.reshape(-1, 1)
-        if len(output_error.shape) == 1:
-            output_error = output_error.reshape(-1, 1)
-
-        self.d_weights = np.dot(self.input.T, output_error)
-        self.d_bias = np.sum(output_error, axis=0, keepdims=True)
-        return input_error
+        return input_error.reshape(self.input_shape)
 
     def get_config(self) -> dict:
         return {
@@ -205,16 +220,20 @@ class Dense(Layer):
             'units': self.units,
             'weights_init': self.weights_init,
             'bias_init': self.bias_init,
-            'random_state': self.random_state
+            'random_state': self.random_state,
+            'use_bias': self.use_bias
         }
 
     @staticmethod
     def from_config(config: dict):
         layer = Dense(config['units'], config['weights_init'],
-                      config['bias_init'], config['random_state'])
+                      config['bias_init'], config['random_state'],
+                      use_bias=config.get('use_bias', True))
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
             layer.bias = np.array(config['bias'])
+            layer.d_weights = np.zeros_like(layer.weights)
+            layer.d_bias = np.zeros_like(layer.bias)
         return layer
 
 
@@ -234,6 +253,9 @@ class Activation(Layer):
         return self.output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if hasattr(self.activation_function, 'backward'):
+            # activations whose derivative is a Jacobian (e.g. Softmax) compute the vector-Jacobian product
+            return self.activation_function.backward(self.output, output_error)
         return output_error * self.activation_function.derivative(self.input)
 
     def get_config(self) -> dict:
@@ -254,11 +276,7 @@ class Activation(Layer):
 
     @staticmethod
     def from_name(name: str) -> "Activation":
-        name = name.lower().replace("_", "")
-        for subclass in ActivationFunction.__subclasses__():
-            if subclass.__name__.lower() == name:
-                return Activation(subclass())
-        raise ValueError(f"No activation function found for the name: {name}")
+        return Activation(ActivationFunction.from_name(name))
 
 
 class Dropout(Layer):
@@ -297,25 +315,41 @@ class Dropout(Layer):
             return f'Dropout(adaptive=True, initial_rate={self.rate})'
         return f'Dropout(rate={self.rate})'
 
+    def _get_rng(self) -> np.random.Generator:
+        # a single generator is used so that every call draws a new mask (even when random_state is fixed)
+        if getattr(self, '_rng', None) is None or getattr(self, '_rng_seed', None) != self.random_state:
+            self._rng = _new_rng(self.random_state)
+            self._rng_seed = self.random_state
+        return self._rng
+
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         self.input = input_data
-        
+        self._training = training
+
         if not training:
+            self.mask = None
             return input_data
 
         if self.adaptive:
             return self.dropout_impl(input_data, training)
 
-        rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
-        self.mask = rng.binomial(1, 1 - self.rate,
-                                 size=input_data.shape) / (1 - self.rate)
+        if self.rate <= 0:
+            self.mask = np.ones_like(input_data, dtype=np.float64)
+        elif self.rate >= 1:
+            self.mask = np.zeros_like(input_data, dtype=np.float64)
+        else:
+            self.mask = self._get_rng().binomial(1, 1 - self.rate,
+                                                 size=input_data.shape) / (1 - self.rate)
         return input_data * self.mask
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
+        if not getattr(self, '_training', True):
+            # the last forward pass was in inference mode: dropout was the identity
+            return output_error
+
         if self.adaptive:
             return self.dropout_impl.gradient(output_error)
-        
+
         return output_error * self.mask
 
     def get_config(self) -> dict:
@@ -347,9 +381,9 @@ class Conv2D(Layer):
                  weights_init: str = "default", bias_init: str = "default", random_state: int = None, **kwargs):
         self.filters = filters
         self.kernel_size = (kernel_size, kernel_size) if isinstance(
-            kernel_size, int) else kernel_size
+            kernel_size, int) else tuple(kernel_size)
         self.strides = (strides, strides) if isinstance(
-            strides, int) else strides
+            strides, int) else tuple(strides)
         self.padding = padding
 
         self.weights = None
@@ -369,8 +403,7 @@ class Conv2D(Layer):
         fan_in = np.prod(self.kernel_size) * in_channels
         fan_out = np.prod(self.kernel_size) * self.filters
 
-        self.rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
+        self.rng = _new_rng(self.random_state)
 
         if self.weights_init == "glorot_uniform" or self.weights_init == "xavier":
             limit = np.sqrt(6 / (fan_in + fan_out))
@@ -400,6 +433,11 @@ class Conv2D(Layer):
     def __str__(self) -> str:
         return f'Conv2D(num_filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.weights is None:
+            return []
+        return [('weights', self.weights, self.d_weights), ('bias', self.bias, self.d_bias)]
+
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
             assert len(
@@ -414,6 +452,7 @@ class Conv2D(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
                                                                            self.strides, self.padding)
+        self.d_bias = self.d_bias.reshape(self.bias.shape)
         return input_error
 
     def get_config(self) -> dict:
@@ -437,7 +476,30 @@ class Conv2D(Layer):
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
             layer.bias = np.array(config['bias'])
+            layer.d_weights = np.zeros_like(layer.weights)
+            layer.d_bias = np.zeros_like(layer.bias)
         return layer
+
+    @staticmethod
+    def _geometry(input_shape: tuple, kernel_size: tuple, strides: tuple, padding: str) -> tuple:
+        """Returns the output size and the (top, bottom, left, right) paddings."""
+        _, in_height, in_width, _ = input_shape
+        kernel_height, kernel_width = kernel_size
+
+        if padding == 'same':
+            out_height, pad_top, pad_bottom = _same_padding(in_height, kernel_height, strides[0])
+            out_width, pad_left, pad_right = _same_padding(in_width, kernel_width, strides[1])
+        else:
+            pad_top = pad_bottom = pad_left = pad_right = 0
+            out_height = (in_height - kernel_height) // strides[0] + 1
+            out_width = (in_width - kernel_width) // strides[1] + 1
+
+        return (out_height, out_width), (pad_top, pad_bottom, pad_left, pad_right)
+
+    @staticmethod
+    def _flatten_weights(weights: np.ndarray) -> np.ndarray:
+        # im2col_2d orders the columns as (channels, kernel_height, kernel_width)
+        return weights.transpose(2, 0, 1, 3).reshape(-1, weights.shape[3])
 
     @staticmethod
     def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: tuple,
@@ -447,42 +509,17 @@ class Conv2D(Layer):
 
         assert in_channels == weights.shape[2], "Number of input channels must match"
 
-        if padding == 'same':
-            out_height = int(np.ceil(float(in_height) / float(strides[0])))
-            out_width = int(np.ceil(float(in_width) / float(strides[1])))
+        (out_height, out_width), (pad_top, pad_bottom, pad_left, pad_right) = Conv2D._geometry(
+            input_data.shape, (kernel_height, kernel_width), strides, padding)
 
-            pad_height_total = int(
-                max(0, (out_height - 1) * strides[0] + kernel_height - in_height))
-            pad_width_total = int(
-                max(0, (out_width - 1) * strides[1] + kernel_width - in_width))
+        padded_input = np.pad(input_data, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                              mode='constant')
 
-            pad_height = pad_height_total // 2
-            pad_width = pad_width_total // 2
+        col = im2col_2d(padded_input, kernel_height, kernel_width, strides, 0)
 
-            out_height = (in_height + 2 * pad_height -
-                          kernel_height) // strides[0] + 1
-            out_width = (in_width + 2 * pad_width -
-                         kernel_width) // strides[1] + 1
-        else:
-            pad_height, pad_width = 0, 0
-            out_height = (in_height - kernel_height) // strides[0] + 1
-            out_width = (in_width - kernel_width) // strides[1] + 1
+        col_W = Conv2D._flatten_weights(weights)
 
-        col = im2col_2d(input_data, kernel_height, kernel_width,
-                        strides, (pad_height, pad_width))
-
-        col_W = weights.reshape(-1, out_channels)
-
-        output = np.dot(col, col_W)
-        output = output + bias
-
-        expected_elements = batch_size * out_height * out_width * out_channels
-        actual_elements = output.size
-
-        if expected_elements != actual_elements:
-            raise ValueError(f"Size mismatch: Expected {expected_elements} elements "
-                             f"({batch_size}×{out_height}×{out_width}×{out_channels}), "
-                             f"but got {actual_elements} elements.")
+        output = np.dot(col, col_W) + np.reshape(bias, (1, -1))
 
         output = output.reshape(batch_size, out_height,
                                 out_width, out_channels)
@@ -492,42 +529,74 @@ class Conv2D(Layer):
     def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: tuple,
                            padding: str) -> tuple:
         batch_size, in_height, in_width, in_channels = input_data.shape
-        batch_size, out_height, out_width, out_channels = output_error.shape
-        kernel_height, kernel_width, _, _ = weights.shape
+        kernel_height, kernel_width, _, out_channels = weights.shape
 
-        if padding == 'same':
-            out_height_temp = int(
-                np.ceil(float(in_height) / float(strides[0])))
-            out_width_temp = int(np.ceil(float(in_width) / float(strides[1])))
+        _, (pad_top, pad_bottom, pad_left, pad_right) = Conv2D._geometry(
+            input_data.shape, (kernel_height, kernel_width), strides, padding)
 
-            pad_height_total = int(
-                max(0, (out_height_temp - 1) * strides[0] + kernel_height - in_height))
-            pad_width_total = int(
-                max(0, (out_width_temp - 1) * strides[1] + kernel_width - in_width))
+        padded_input = np.pad(input_data, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                              mode='constant')
 
-            pad_height = pad_height_total // 2
-            pad_width = pad_width_total // 2
-        else:
-            pad_height, pad_width = 0, 0
+        col = im2col_2d(padded_input, kernel_height, kernel_width, strides, 0)
 
-        col = im2col_2d(input_data, kernel_height, kernel_width,
-                        strides, (pad_height, pad_width))
+        col_W = Conv2D._flatten_weights(weights)
 
-        col_W = weights.reshape(-1, out_channels)
-
-        d_output = output_error.reshape(
-            batch_size * out_height * out_width, -1)
+        d_output = output_error.reshape(-1, out_channels)
 
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
         d_weights = d_weights.reshape(
-            kernel_height, kernel_width, in_channels, out_channels)
+            in_channels, kernel_height, kernel_width, out_channels).transpose(1, 2, 0, 3)
         d_col = np.dot(d_output, col_W.T)
 
-        d_input = col2im_2d(d_col, input_data.shape, kernel_height,
-                            kernel_width, strides, (pad_height, pad_width))
+        d_padded_input = col2im_2d(d_col, padded_input.shape, kernel_height,
+                                   kernel_width, strides, 0)
+        d_input = d_padded_input[:, pad_top:pad_top + in_height, pad_left:pad_left + in_width, :]
 
         return d_input, d_weights, d_bias
+
+
+def _pooling_geometry_2d(input_shape: tuple, pool_size: tuple, strides: tuple, padding: str) -> tuple:
+    """Returns the output size and the (top, bottom, left, right) paddings of a 2D pooling."""
+    _, in_height, in_width, _ = input_shape
+    if padding == 'same':
+        out_height, pad_top, pad_bottom = _same_padding(in_height, pool_size[0], strides[0])
+        out_width, pad_left, pad_right = _same_padding(in_width, pool_size[1], strides[1])
+    else:
+        pad_top = pad_bottom = pad_left = pad_right = 0
+        out_height = (in_height - pool_size[0]) // strides[0] + 1
+        out_width = (in_width - pool_size[1]) // strides[1] + 1
+    return (out_height, out_width), (pad_top, pad_bottom, pad_left, pad_right)
+
+
+def _pooling_windows_2d(padded_input: np.ndarray, pool_size: tuple, strides: tuple, out_size: tuple):
+    """Yields, for every position (i, j) inside the pooling window, the slices selecting this position in all the
+    windows at once, and the corresponding (batch_size, out_height, out_width, channels) view."""
+    out_height, out_width = out_size
+    for i in range(pool_size[0]):
+        for j in range(pool_size[1]):
+            index = (slice(None),
+                     slice(i, i + strides[0] * (out_height - 1) + 1, strides[0]),
+                     slice(j, j + strides[1] * (out_width - 1) + 1, strides[1]),
+                     slice(None))
+            yield index, padded_input[index]
+
+
+def _pooling_geometry_1d(input_shape: tuple, pool_size: int, strides: int, padding: str) -> tuple:
+    """Returns the output length and the (left, right) paddings of a 1D pooling."""
+    _, in_length, _ = input_shape
+    if padding == 'same':
+        out_length, pad_left, pad_right = _same_padding(in_length, pool_size, strides)
+    else:
+        pad_left = pad_right = 0
+        out_length = (in_length - pool_size) // strides + 1
+    return out_length, (pad_left, pad_right)
+
+
+def _pooling_windows_1d(padded_input: np.ndarray, pool_size: int, strides: int, out_length: int):
+    for i in range(pool_size):
+        index = (slice(None), slice(i, i + strides * (out_length - 1) + 1, strides), slice(None))
+        yield index, padded_input[index]
 
 
 class MaxPooling2D(Layer):
@@ -535,8 +604,10 @@ class MaxPooling2D(Layer):
         if isinstance(pool_size, int):
             self.pool_size = (pool_size, pool_size)
         else:
-            self.pool_size = pool_size
-        self.strides = strides if strides is not None else self.pool_size
+            self.pool_size = tuple(pool_size)
+        if strides is None:
+            strides = self.pool_size
+        self.strides = (strides, strides) if isinstance(strides, int) else tuple(strides)
         self.padding = padding
 
     def __str__(self) -> str:
@@ -544,7 +615,7 @@ class MaxPooling2D(Layer):
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         assert len(
-            input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, channels, height, width), got {input_data.shape}"
+            input_data.shape) == 4, f"MaxPooling2D input must be 4D (batch_size, height, width, channels), got {input_data.shape}"
         self.input = input_data
         output = self._pool(self.input, self.pool_size,
                             self.strides, self.padding)
@@ -568,79 +639,46 @@ class MaxPooling2D(Layer):
         return MaxPooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
+    def _pad(input_data: np.ndarray, paddings: tuple) -> np.ndarray:
+        pad_top, pad_bottom, pad_left, pad_right = paddings
+        # padded values must never be selected as maximum
+        return np.pad(input_data.astype(np.float64, copy=False),
+                      ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                      mode='constant', constant_values=-np.inf)
+
+    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
+        out_size, paddings = _pooling_geometry_2d(input_data.shape, pool_size, strides, padding)
+        padded_input = MaxPooling2D._pad(input_data, paddings)
 
-        if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
-
-        padded_input = np.pad(input_data,
-                              ((0, 0), (pad_height, pad_height),
-                               (pad_width, pad_width), (0, 0)),
-                              mode='constant')
-
-        out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // strides[0] + 1
-        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
-
-        output = np.zeros((batch_size, out_height, out_width, channels))
-
-        for i in range(out_height):
-            for j in range(out_width):
-                input_slice = padded_input[:,
-                                           i * strides[0]:i * strides[0] + pool_size[0],
-                                           j * strides[1]:j * strides[1] + pool_size[1],
-                                           :]
-                output[:, i, j, :] = np.max(
-                    np.max(input_slice, axis=1), axis=1)
+        output = None
+        for _, window in _pooling_windows_2d(padded_input, pool_size, strides, out_size):
+            output = window.copy() if output is None else np.maximum(output, window)
 
         return output
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
-        _, out_height, out_width, _ = output_error.shape
+        _, in_height, in_width, _ = input_data.shape
+        out_size, paddings = _pooling_geometry_2d(input_data.shape, pool_size, strides, padding)
+        pad_top, _, pad_left, _ = paddings
+        padded_input = MaxPooling2D._pad(input_data, paddings)
 
-        if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
+        # the gradient only flows to the (first) maximum of each window
+        windows = list(_pooling_windows_2d(padded_input, pool_size, strides, out_size))
+        best = np.full(windows[0][1].shape, -np.inf)
+        argmax = np.zeros(windows[0][1].shape, dtype=int)
+        for k, (_, window) in enumerate(windows):
+            better = window > best
+            best = np.where(better, window, best)
+            argmax = np.where(better, k, argmax)
 
-        padded_input = np.pad(input_data,
-                              ((0, 0), (pad_height, pad_height),
-                               (pad_width, pad_width), (0, 0)),
-                              mode='constant')
+        d_padded_input = np.zeros_like(padded_input)
+        for k, (index, _) in enumerate(windows):
+            d_padded_input[index] += output_error * (argmax == k)
 
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_height):
-            for j in range(out_width):
-                input_slice = padded_input[:,
-                                           i * strides[0]:i * strides[0] + pool_size[0],
-                                           j * strides[1]:j * strides[1] + pool_size[1],
-                                           :]
-                mask = (input_slice == np.max(np.max(input_slice, axis=1, keepdims=True),
-                                              axis=2, keepdims=True))
-
-                d_input[:,
-                        i * strides[0]:i * strides[0] + pool_size[0],
-                        j * strides[1]:j * strides[1] + pool_size[1],
-                        :] += output_error[:, i:i+1, j:j+1, :] * mask
-
-        if padding == 'same':
-            d_input = d_input[:, pad_height:-
-                              pad_height, pad_width:-pad_width, :]
-
-        return d_input
+        return d_padded_input[:, pad_top:pad_top + in_height, pad_left:pad_left + in_width, :]
 
 
 class Flatten(Layer):
@@ -687,11 +725,10 @@ class Conv1D(Layer):
     def initialize_weights(self, input_shape: tuple):
         _, _, in_channels = input_shape
 
-        self.rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
+        self.rng = _new_rng(self.random_state)
 
         if self.weights_init == "xavier":
-            self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * in_channels)),
+            self.weights = self.rng.normal(0, np.sqrt(2 / (self.kernel_size * (in_channels + self.filters))),
                                            (self.kernel_size, in_channels, self.filters))
         elif self.weights_init == "he":
             self.weights = self.rng.normal(0, np.sqrt(2 / (in_channels * self.kernel_size)),
@@ -718,6 +755,14 @@ class Conv1D(Layer):
         self.d_weights = np.zeros_like(self.weights)
         self.d_bias = np.zeros_like(self.bias)
 
+    def __str__(self) -> str:
+        return f'Conv1D(num_filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.weights is None:
+            return []
+        return [('weights', self.weights, self.d_weights), ('bias', self.bias, self.d_bias)]
+
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.weights is None:
             assert len(
@@ -732,7 +777,17 @@ class Conv1D(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error, self.d_weights, self.d_bias = self._convolve_backward(output_error, self.input, self.weights,
                                                                            self.strides, self.padding)
+        self.d_bias = self.d_bias.reshape(self.bias.shape)
         return input_error
+
+    @staticmethod
+    def _geometry(in_length: int, kernel_length: int, strides: int, padding: str) -> tuple:
+        if padding == 'same':
+            out_length, pad_left, pad_right = _same_padding(in_length, kernel_length, strides)
+        else:
+            pad_left = pad_right = 0
+            out_length = (in_length - kernel_length) // strides + 1
+        return out_length, (pad_left, pad_right)
 
     @staticmethod
     def _convolve(input_data: np.ndarray, weights: np.ndarray, bias: np.ndarray, strides: int,
@@ -742,20 +797,14 @@ class Conv1D(Layer):
 
         assert in_channels == weights.shape[1], "Number of input channels must match"
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          kernel_length - in_length) // 2
-        else:
-            pad_length = 0
+        out_length, (pad_left, pad_right) = Conv1D._geometry(in_length, kernel_length, strides, padding)
+        padded_input = np.pad(input_data, ((0, 0), (pad_left, pad_right), (0, 0)), mode='constant')
 
-        out_length = (in_length + 2 * pad_length -
-                      kernel_length) // strides + 1
-
-        col = im2col_1d(input_data, kernel_length, strides, pad_length)
+        col = im2col_1d(padded_input, kernel_length, strides, 0)
 
         col_W = weights.reshape(-1, out_channels)
 
-        output = np.dot(col, col_W) + bias
+        output = np.dot(col, col_W) + np.reshape(bias, (1, -1))
 
         output = output.reshape(batch_size, out_length, out_channels)
 
@@ -765,20 +814,16 @@ class Conv1D(Layer):
     def _convolve_backward(output_error: np.ndarray, input_data: np.ndarray, weights: np.ndarray, strides: int,
                            padding: str) -> tuple:
         batch_size, in_length, in_channels = input_data.shape
-        batch_size, out_length, out_channels = output_error.shape
-        kernel_length, _, _ = weights.shape
+        kernel_length, _, out_channels = weights.shape
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          kernel_length - in_length) // 2
-        else:
-            pad_length = 0
+        _, (pad_left, pad_right) = Conv1D._geometry(in_length, kernel_length, strides, padding)
+        padded_input = np.pad(input_data, ((0, 0), (pad_left, pad_right), (0, 0)), mode='constant')
 
-        col = im2col_1d(input_data, kernel_length, strides, pad_length)
+        col = im2col_1d(padded_input, kernel_length, strides, 0)
 
         col_W = weights.reshape(-1, out_channels)
 
-        d_output = output_error.reshape(batch_size * out_length, -1)
+        d_output = output_error.reshape(-1, out_channels)
 
         d_bias = np.sum(d_output, axis=0)
         d_weights = np.dot(col.T, d_output)
@@ -787,10 +832,10 @@ class Conv1D(Layer):
 
         d_col = np.dot(d_output, col_W.T)
 
-        d_input = col2im_1d(d_col, input_data.shape,
-                            kernel_length, strides, pad_length)
+        d_padded_input = col2im_1d(d_col, padded_input.shape,
+                                   kernel_length, strides, 0)
 
-        return d_input, d_weights, d_bias
+        return d_padded_input[:, pad_left:pad_left + in_length, :], d_weights, d_bias
 
     def get_config(self) -> dict:
         return {
@@ -813,6 +858,8 @@ class Conv1D(Layer):
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
             layer.bias = np.array(config['bias'])
+            layer.d_weights = np.zeros_like(layer.weights)
+            layer.d_bias = np.zeros_like(layer.bias)
         return layer
 
 
@@ -851,58 +898,43 @@ class MaxPooling1D(Layer):
         return MaxPooling1D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
+    def _pad(input_data: np.ndarray, paddings: tuple) -> np.ndarray:
+        # padded values must never be selected as maximum
+        return np.pad(input_data.astype(np.float64, copy=False), ((0, 0), paddings, (0, 0)),
+                      mode='constant', constant_values=-np.inf)
+
+    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
-        batch_size, in_length, channels = input_data.shape
+        out_length, paddings = _pooling_geometry_1d(input_data.shape, pool_size, strides, padding)
+        padded_input = MaxPooling1D._pad(input_data, paddings)
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
-        else:
-            pad_length = 0
-
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
-
-        out_length = (in_length + 2 * pad_length - pool_size) // strides + 1
-
-        output = np.zeros((batch_size, out_length, channels))
-
-        for i in range(out_length):
-            input_slice = padded_input[:, i *
-                                       strides:i * strides + pool_size, :]
-            output[:, i, :] = np.max(input_slice, axis=1)
+        output = None
+        for _, window in _pooling_windows_1d(padded_input, pool_size, strides, out_length):
+            output = window.copy() if output is None else np.maximum(output, window)
 
         return output
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
                        padding: str) -> np.ndarray:
-        batch_size, in_length, channels = input_data.shape
-        _, out_length, _ = output_error.shape
+        _, in_length, _ = input_data.shape
+        out_length, paddings = _pooling_geometry_1d(input_data.shape, pool_size, strides, padding)
+        padded_input = MaxPooling1D._pad(input_data, paddings)
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
-        else:
-            pad_length = 0
+        # the gradient only flows to the (first) maximum of each window
+        windows = list(_pooling_windows_1d(padded_input, pool_size, strides, out_length))
+        best = np.full(windows[0][1].shape, -np.inf)
+        argmax = np.zeros(windows[0][1].shape, dtype=int)
+        for k, (_, window) in enumerate(windows):
+            better = window > best
+            best = np.where(better, window, best)
+            argmax = np.where(better, k, argmax)
 
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
+        d_padded_input = np.zeros_like(padded_input)
+        for k, (index, _) in enumerate(windows):
+            d_padded_input[index] += output_error * (argmax == k)
 
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_length):
-            input_slice = padded_input[:, i *
-                                       strides:i * strides + pool_size, :]
-            mask = (input_slice == np.max(input_slice, axis=1, keepdims=True))
-            d_input[:, i * strides:i * strides + pool_size, :] += (
-                output_error[:, i, :][:, np.newaxis, :] * mask
-            )
-
-        if padding == 'same':
-            d_input = d_input[:, pad_length:-pad_length, :]
-
-        return d_input
+        return d_padded_input[:, paddings[0]:paddings[0] + in_length, :]
 
 
 class AveragePooling2D(Layer):
@@ -910,8 +942,10 @@ class AveragePooling2D(Layer):
         if isinstance(pool_size, int):
             self.pool_size = (pool_size, pool_size)
         else:
-            self.pool_size = pool_size
-        self.strides = strides if strides is not None else self.pool_size
+            self.pool_size = tuple(pool_size)
+        if strides is None:
+            strides = self.pool_size
+        self.strides = (strides, strides) if isinstance(strides, int) else tuple(strides)
         self.padding = padding
 
     def __str__(self) -> str:
@@ -943,72 +977,39 @@ class AveragePooling2D(Layer):
         return AveragePooling2D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
+    def _window_counts(input_shape: tuple, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
+        """Number of real (non padded) values in each window: padded values are excluded from the average."""
+        out_size, (pad_top, pad_bottom, pad_left, pad_right) = _pooling_geometry_2d(
+            input_shape, pool_size, strides, padding)
+        ones = np.pad(np.ones((1, input_shape[1], input_shape[2], 1)),
+                      ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant')
+        return sum(window for _, window in _pooling_windows_2d(ones, pool_size, strides, out_size))
+
+    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: tuple, strides: tuple, padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
-
-        if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
-
-        padded_input = np.pad(input_data,
-                              ((0, 0), (pad_height, pad_height),
-                               (pad_width, pad_width), (0, 0)),
+        out_size, (pad_top, pad_bottom, pad_left, pad_right) = _pooling_geometry_2d(
+            input_data.shape, pool_size, strides, padding)
+        padded_input = np.pad(input_data, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
                               mode='constant')
 
-        out_height = (in_height + 2 * pad_height -
-                      pool_size[0]) // strides[0] + 1
-        out_width = (in_width + 2 * pad_width - pool_size[1]) // strides[1] + 1
-
-        output = np.zeros((batch_size, out_height, out_width, channels))
-
-        for i in range(out_height):
-            for j in range(out_width):
-                input_slice = padded_input[:,
-                                           i * strides[0]:i * strides[0] + pool_size[0],
-                                           j * strides[1]:j * strides[1] + pool_size[1],
-                                           :]
-                output[:, i, j, :] = np.mean(
-                    np.mean(input_slice, axis=1), axis=1)
-
-        return output
+        total = sum(window for _, window in _pooling_windows_2d(padded_input, pool_size, strides, out_size))
+        return total / AveragePooling2D._window_counts(input_data.shape, pool_size, strides, padding)
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: tuple, strides: tuple,
                        padding: str) -> np.ndarray:
-        batch_size, in_height, in_width, channels = input_data.shape
-        _, out_height, out_width, _ = output_error.shape
+        _, in_height, in_width, _ = input_data.shape
+        out_size, (pad_top, pad_bottom, pad_left, pad_right) = _pooling_geometry_2d(
+            input_data.shape, pool_size, strides, padding)
 
-        if padding == 'same':
-            pad_height = ((in_height - 1) *
-                          strides[0] + pool_size[0] - in_height) // 2
-            pad_width = ((in_width - 1) *
-                         strides[1] + pool_size[1] - in_width) // 2
-        else:
-            pad_height, pad_width = 0, 0
+        d_padded_input = np.zeros((input_data.shape[0], in_height + pad_top + pad_bottom,
+                                   in_width + pad_left + pad_right, input_data.shape[3]))
+        scaled_error = output_error / AveragePooling2D._window_counts(input_data.shape, pool_size, strides, padding)
 
-        padded_input = np.pad(input_data,
-                              ((0, 0), (pad_height, pad_height),
-                               (pad_width, pad_width), (0, 0)),
-                              mode='constant')
+        for index, _ in _pooling_windows_2d(d_padded_input, pool_size, strides, out_size):
+            d_padded_input[index] += scaled_error
 
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_height):
-            for j in range(out_width):
-                d_input[:,
-                        i * strides[0]:i * strides[0] + pool_size[0],
-                        j * strides[1]:j * strides[1] + pool_size[1],
-                        :] += output_error[:, i:i+1, j:j+1, :] / np.prod(pool_size)
-
-        if padding == 'same':
-            d_input = d_input[:, pad_height:-
-                              pad_height, pad_width:-pad_width, :]
-
-        return d_input
+        return d_padded_input[:, pad_top:pad_top + in_height, pad_left:pad_left + in_width, :]
 
 
 class AveragePooling1D(Layer):
@@ -1046,55 +1047,33 @@ class AveragePooling1D(Layer):
         return AveragePooling1D(config['pool_size'], config['strides'], config['padding'])
 
     @staticmethod
+    def _window_counts(input_shape: tuple, pool_size: int, strides: int, padding: str) -> np.ndarray:
+        """Number of real (non padded) values in each window: padded values are excluded from the average."""
+        out_length, paddings = _pooling_geometry_1d(input_shape, pool_size, strides, padding)
+        ones = np.pad(np.ones((1, input_shape[1], 1)), ((0, 0), paddings, (0, 0)), mode='constant')
+        return sum(window for _, window in _pooling_windows_1d(ones, pool_size, strides, out_length))
+
+    @staticmethod
     def _pool(input_data: np.ndarray, pool_size: int, strides: int, padding: str) -> np.ndarray:
-        batch_size, in_length, channels = input_data.shape
+        out_length, paddings = _pooling_geometry_1d(input_data.shape, pool_size, strides, padding)
+        padded_input = np.pad(input_data, ((0, 0), paddings, (0, 0)), mode='constant')
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
-        else:
-            pad_length = 0
-
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
-
-        out_length = (in_length + 2 * pad_length - pool_size) // strides + 1
-
-        output = np.zeros((batch_size, out_length, channels))
-
-        for i in range(out_length):
-            input_slice = padded_input[:, i *
-                                       strides:i * strides + pool_size, :]
-            output[:, i, :] = np.mean(input_slice, axis=1)
-
-        return output
+        total = sum(window for _, window in _pooling_windows_1d(padded_input, pool_size, strides, out_length))
+        return total / AveragePooling1D._window_counts(input_data.shape, pool_size, strides, padding)
 
     @staticmethod
     def _pool_backward(output_error: np.ndarray, input_data: np.ndarray, pool_size: int, strides: int,
                        padding: str) -> np.ndarray:
         batch_size, in_length, channels = input_data.shape
-        _, out_length, _ = output_error.shape
+        out_length, paddings = _pooling_geometry_1d(input_data.shape, pool_size, strides, padding)
 
-        if padding == 'same':
-            pad_length = ((in_length - 1) * strides +
-                          pool_size - in_length) // 2
-        else:
-            pad_length = 0
+        d_padded_input = np.zeros((batch_size, in_length + paddings[0] + paddings[1], channels))
+        scaled_error = output_error / AveragePooling1D._window_counts(input_data.shape, pool_size, strides, padding)
 
-        padded_input = np.pad(
-            input_data, ((0, 0), (pad_length, pad_length), (0, 0)), mode='constant')
+        for index, _ in _pooling_windows_1d(d_padded_input, pool_size, strides, out_length):
+            d_padded_input[index] += scaled_error
 
-        d_input = np.zeros_like(padded_input)
-
-        for i in range(out_length):
-            d_input[:, i * strides:i * strides + pool_size, :] += (
-                output_error[:, i, :][:, np.newaxis, :] / pool_size
-            )
-
-        if padding == 'same':
-            d_input = d_input[:, pad_length:-pad_length, :]
-
-        return d_input
+        return d_padded_input[:, paddings[0]:paddings[0] + in_length, :]
 
 
 class Embedding(Layer):
@@ -1111,8 +1090,21 @@ class Embedding(Layer):
     def __str__(self) -> str:
         return f'Embedding(input_dim={self.input_dim}, output_dim={self.output_dim})'
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.weights is None:
+            return []
+        return [('weights', self.weights, self.d_weights)]
+
     def initialize_weights(self):
         self.rng = np.random.default_rng(self.random_state)
+
+        if self.weights_init == "normal":
+            # N(0, 1/output_dim): the usual initialization of the embeddings of a Transformer, which are then
+            # multiplied by sqrt(output_dim) (see PositionalEncoding) to get unit variance values
+            self.weights = self.rng.normal(0, 1 / np.sqrt(self.output_dim), (self.input_dim, self.output_dim))
+            self.weights[0] = np.zeros(self.output_dim)
+            self.d_weights = np.zeros_like(self.weights)
+            return
 
         scale = np.sqrt(2.0 / (self.input_dim + self.output_dim))
         self.weights = self.rng.normal(
@@ -1121,8 +1113,9 @@ class Embedding(Layer):
         self.weights[0] = np.zeros(self.output_dim)
 
         for idx in [1, 2, 3]:  # UNK, SOS, EOS
-            special_vector = self.rng.normal(0, scale / 2, self.output_dim)
-            self.weights[idx] = special_vector
+            if idx < self.input_dim:
+                special_vector = self.rng.normal(0, scale / 2, self.output_dim)
+                self.weights[idx] = special_vector
 
         epsilon = 1e-8
         norms = np.linalg.norm(self.weights[4:], axis=1, keepdims=True)
@@ -1135,47 +1128,28 @@ class Embedding(Layer):
         if self.weights is None:
             self.initialize_weights()
 
-        input_data = np.clip(input_data, 0, self.input_dim - 1)
-        self.clipped_input = input_data.copy()
+        # indices may be given as floats (e.g. after padding or one of the preprocessing functions)
+        input_data = np.clip(np.asarray(input_data).astype(int), 0, self.input_dim - 1)
+        self.clipped_input = input_data
 
         output = self.weights[input_data]
 
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        batch_size, seq_length, _ = output_error.shape
+        indices = self.clipped_input.reshape(-1)
+        errors = output_error.reshape(-1, self.output_dim)
+
+        # the index 0 is reserved for padding: its embedding stays a zero vector
+        valid = indices != 0
+
         grad_weights = np.zeros_like(self.weights)
-
-        seq_length = min(seq_length, self.clipped_input.shape[1])
-        input_indices = self.clipped_input[:batch_size, :seq_length]
-        flattened_output = output_error[:batch_size, :seq_length]
-
-        mask = (input_indices != 0)
-
-        token_counts = np.bincount(
-            input_indices[mask].flatten(),
-            minlength=self.input_dim
-        )
-        token_counts = np.maximum(token_counts, 1)
-
-        for b in range(batch_size):
-            grad_batch = flattened_output[b]
-            indices_batch = input_indices[b]
-
-            valid_indices = indices_batch != 0
-            grad_batch = grad_batch[valid_indices]
-            indices_batch = indices_batch[valid_indices]
-
-            grad_batch = grad_batch / token_counts[indices_batch, np.newaxis]
-            np.add.at(grad_weights, indices_batch, grad_batch)
-
-        grad_norm = np.linalg.norm(grad_weights[1:])
-        if grad_norm > 1.0:
-            grad_weights[1:] = grad_weights[1:] / grad_norm
+        np.add.at(grad_weights, indices[valid], errors[valid])
 
         self.d_weights = grad_weights
 
-        return np.zeros((batch_size, seq_length))
+        # the indices are not differentiable
+        return np.zeros(self.clipped_input.shape)
 
     def get_config(self) -> dict:
         return {
@@ -1199,6 +1173,7 @@ class Embedding(Layer):
         )
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
+            layer.d_weights = np.zeros_like(layer.weights)
         return layer
 
 
@@ -1227,15 +1202,27 @@ class BatchNormalization(Layer):
     def __str__(self) -> str:
         return f'BatchNormalization(momentum={self.momentum}, epsilon={self.epsilon})'
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.gamma is None:
+            return []
+        return [('gamma', self.gamma, self.d_gamma), ('beta', self.beta, self.d_beta)]
+
+    def _reduction_axes(self, ndim: int) -> tuple:
+        # the statistics are computed per feature (last axis), over the batch and the spatial/temporal axes
+        if self.gamma is not None and self.gamma.ndim > 1:
+            # models saved with older versions have one parameter per position
+            return (0,)
+        return tuple(range(ndim - 1))
+
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         if self.gamma is None or self.running_mean is None or self.running_var is None:
-            self.initialize_weights(input_data.shape[1:])
+            self.initialize_weights(input_data.shape[-1:])
 
-        input_data = np.clip(input_data, -10, 10)
+        axes = self._reduction_axes(input_data.ndim)
 
         if training:
-            self.batch_mean = np.mean(input_data, axis=0)
-            self.batch_var = np.var(input_data, axis=0) + self.epsilon
+            self.batch_mean = np.mean(input_data, axis=axes)
+            self.batch_var = np.var(input_data, axis=axes)
 
             self.running_mean = self.momentum * self.running_mean + \
                 (1 - self.momentum) * self.batch_mean
@@ -1248,6 +1235,7 @@ class BatchNormalization(Layer):
             mean = self.running_mean
             var = self.running_var
 
+        self._training = training
         self.input = input_data
         self.std = np.sqrt(var + self.epsilon)
         self.input_centered = input_data - mean
@@ -1256,22 +1244,20 @@ class BatchNormalization(Layer):
         return self.gamma * self.input_normalized + self.beta
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        N = output_error.shape[0]
+        axes = self._reduction_axes(output_error.ndim)
 
-        self.d_gamma = np.sum(output_error * self.input_normalized, axis=0)
-        self.d_beta = np.sum(output_error, axis=0)
+        self.d_gamma = np.sum(output_error * self.input_normalized, axis=axes)
+        self.d_beta = np.sum(output_error, axis=axes)
 
         d_normalized = output_error * self.gamma
 
-        d_var = np.sum(d_normalized * self.input_centered * -0.5 *
-                       (self.batch_var + self.epsilon) ** (-1.5), axis=0)
+        if not getattr(self, '_training', True):
+            # with the running statistics, the normalization is a simple affine function of the input
+            return d_normalized / self.std
 
-        d_mean = np.sum(d_normalized * -1/self.std, axis=0) + \
-            d_var * np.mean(-2 * self.input_centered, axis=0)
-
-        d_input = d_normalized / self.std + \
-            d_var * 2 * self.input_centered / N + \
-            d_mean / N
+        d_input = (d_normalized -
+                   np.mean(d_normalized, axis=axes) -
+                   self.input_normalized * np.mean(d_normalized * self.input_normalized, axis=axes)) / self.std
 
         return d_input
 
@@ -1290,17 +1276,17 @@ class BatchNormalization(Layer):
     @staticmethod
     def from_config(config: dict):
         layer = BatchNormalization(config['momentum'], config['epsilon'])
-        
+
         if config['gamma'] is not None:
             layer.gamma = np.array(config['gamma'])
             layer.beta = np.array(config['beta'])
-            
+
             layer.running_mean = np.array(config['running_mean'])
             layer.running_var = np.array(config['running_var'])
-            
+
             layer.d_gamma = np.zeros_like(layer.gamma)
             layer.d_beta = np.zeros_like(layer.beta)
-        
+
         return layer
 
 
@@ -1320,6 +1306,11 @@ class LayerNormalization(Layer):
         self.d_gamma = np.zeros_like(self.gamma)
         self.d_beta = np.zeros_like(self.beta)
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.gamma is None:
+            return []
+        return [('gamma', self.gamma, self.d_gamma), ('beta', self.beta, self.d_beta)]
+
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         if self.gamma is None:
             self.initialize_weights(input_data.shape)
@@ -1327,8 +1318,8 @@ class LayerNormalization(Layer):
         self.input_shape = input_shape = input_data.shape
         self.input = input_data
 
-        if len(input_shape) == 3:
-            input_data = input_data.reshape(-1, input_shape[-1])
+        # the normalization is done over the last axis, whatever the number of dimensions
+        input_data = input_data.reshape(-1, input_shape[-1])
 
         self.mean = np.mean(input_data, axis=-1, keepdims=True)
         self.var = np.var(input_data, axis=-1, keepdims=True) + self.epsilon
@@ -1337,32 +1328,17 @@ class LayerNormalization(Layer):
         self.x_centered = input_data - self.mean
         self.x_norm = self.x_centered / self.std
 
-        if len(input_shape) == 3:
-            self.x_norm = self.x_norm.reshape(input_shape)
-            self.mean = self.mean.reshape(input_shape[:-1] + (1,))
-            self.var = self.var.reshape(input_shape[:-1] + (1,))
-            self.std = self.std.reshape(input_shape[:-1] + (1,))
-            self.x_centered = self.x_centered.reshape(input_shape)
-
-        return self.gamma * self.x_norm + self.beta
+        return (self.gamma * self.x_norm + self.beta).reshape(input_shape)
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        input_shape = self.input_shape
+        output_error = output_error.reshape(-1, self.input_shape[-1])
+        x_norm = self.x_norm
+        std = self.std
 
-        if len(input_shape) == 3:
-            output_error = output_error.reshape(-1, input_shape[-1])
-            x_norm = self.x_norm.reshape(-1, input_shape[-1])
-            std = self.std.reshape(-1, 1)
-        else:
-            x_norm = self.x_norm
-            std = self.std
+        self.d_gamma = np.sum(output_error * x_norm, axis=0).reshape(self.gamma.shape)
+        self.d_beta = np.sum(output_error, axis=0).reshape(self.beta.shape)
 
-        N = output_error.shape[-1]
-
-        self.d_gamma = np.sum(output_error * x_norm, axis=0, keepdims=True)
-        self.d_beta = np.sum(output_error, axis=0, keepdims=True)
-
-        dx_norm = output_error * self.gamma
+        dx_norm = output_error * self.gamma.reshape(-1)
 
         dx = (1.0 / std) * (
             dx_norm -
@@ -1370,10 +1346,7 @@ class LayerNormalization(Layer):
             x_norm * np.mean(dx_norm * x_norm, axis=-1, keepdims=True)
         )
 
-        if len(input_shape) == 3:
-            dx = dx.reshape(input_shape)
-
-        return dx
+        return dx.reshape(self.input_shape)
 
     def get_config(self) -> dict:
         return {
@@ -1389,6 +1362,8 @@ class LayerNormalization(Layer):
         if config.get('gamma') is not None:
             layer.gamma = np.array(config['gamma'])
             layer.beta = np.array(config['beta'])
+            layer.d_gamma = np.zeros_like(layer.gamma)
+            layer.d_beta = np.zeros_like(layer.beta)
         return layer
 
 
@@ -1444,32 +1419,29 @@ class GlobalAveragePooling2D(Layer):
 
 class Permute(Layer):
     def __init__(self, dims: tuple):
-        self.dims = dims
+        # dims are 1-indexed (the batch axis 0 is never permuted), like in Keras
+        self.dims = tuple(dims)
 
     def __str__(self) -> str:
         return f'Permute(dims={self.dims})'
 
     def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
         self.input = input_data
-        permutation = [0] + [dim - 1 for dim in self.dims]
+        permutation = [0] + list(self.dims)
         self.output = np.transpose(self.input, permutation)
         return self.output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         input_error = np.transpose(output_error, np.argsort(
-            [0] + [dim - 1 for dim in self.dims]))
+            [0] + list(self.dims)))
         return input_error
 
     def get_config(self) -> dict:
-        config = {'name': self.__class__.__name__, 'dims': self.dims}
-        config.update({key: getattr(self, key)
-                       for key in self.__dict__ if key not in ['dims']})
-        return config
+        return {'name': self.__class__.__name__, 'dims': self.dims}
 
     @staticmethod
     def from_config(config: dict):
-        return Permute(config['dims'],
-                       **{key: value for key, value in config.items() if key != 'name' and key != 'dims'})
+        return Permute(config['dims'])
 
 
 class TextVectorization(Layer):
@@ -1486,6 +1458,7 @@ class TextVectorization(Layer):
         return f'TextVectorization(max_tokens={self.max_tokens}, output_mode={self.output_mode}, output_sequence_length={self.output_sequence_length})'
 
     def adapt(self, data: np.ndarray):
+        data = np.asarray(data)
         if len(data.shape) == 2:
             data = data.flatten()
 
@@ -1563,7 +1536,8 @@ class TextVectorization(Layer):
 class Reshape(Layer):
     def __init__(self, target_shape: tuple, input_shape: tuple | None = None):
         super().__init__()
-        self.target_shape = target_shape
+        # lists are converted (e.g. when the model is loaded from a JSON file)
+        self.target_shape = tuple(target_shape)
         self.input_shape = None
 
     def __str__(self) -> str:
@@ -1837,6 +1811,7 @@ class LSTMCell(Layer):
                 cell.Wo = np.array(w['Wo'])
                 cell.Uo = np.array(w['Uo'])
                 cell.bo = np.array(w['bo'])
+                cell._init_gradients()
         return cell
 
 
@@ -1860,6 +1835,14 @@ class LSTM(Layer):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    PARAMETER_NAMES = ['Wf', 'Uf', 'bf', 'Wi', 'Ui', 'bi', 'Wc', 'Uc', 'bc', 'Wo', 'Uo', 'bo']
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.cell is None or self.cell.Wf is None:
+            return []
+        return [(name, getattr(self.cell, name), getattr(self.cell, 'd' + name, None))
+                for name in self.PARAMETER_NAMES]
 
     def check_numerical_stability(self, x: np.ndarray, name: str = "") -> np.ndarray:
         if np.any(np.isnan(x)):
@@ -1910,8 +1893,8 @@ class LSTM(Layer):
             if self.return_sequences:
                 all_h.append(h)
             all_c.append(c)
-            if training:
-                self.cache.append(self.cell.cache)
+            # kept in inference mode too, so that gradients can be computed w.r.t. the inputs (e.g. in GANs)
+            self.cache.append(self.cell.cache)
 
         self.last_h = h
         self.last_c = c
@@ -2007,11 +1990,27 @@ class Bidirectional(Layer):
             layer.units,
             layer.return_sequences,
             layer.return_state,
-            layer.random_state
+            # a different seed, otherwise both directions would start with the same weights
+            _offset_seed(layer.random_state, 1),
+            layer.clip_value
         )
 
     def __str__(self) -> str:
         return f'Bidirectional(layer={str(self.forward_layer)})'
+
+    @property
+    def random_state(self) -> int | None:
+        return self.forward_layer.random_state
+
+    @random_state.setter
+    def random_state(self, value: int | None) -> None:
+        # a seed given by the model reaches the wrapped layers (before their weights are initialized)
+        self.forward_layer.random_state = value
+        self.backward_layer.random_state = _offset_seed(value, 1)
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return (_prefixed_parameters('forward', self.forward_layer) +
+                _prefixed_parameters('backward', self.backward_layer))
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         self.forward_output = self.forward_layer.forward_pass(
@@ -2062,21 +2061,24 @@ class Bidirectional(Layer):
         forward_dx = self.forward_layer.backward_pass(forward_error)
         backward_dx = self.backward_layer.backward_pass(backward_error)
 
-        if len(output_error.shape) == 3:
-            backward_dx = backward_dx[:, ::-1, :]
+        # the backward layer processed the reversed sequence, so its input gradient is always reversed in time
+        backward_dx = backward_dx[:, ::-1, :]
 
         return forward_dx + backward_dx
 
     def get_config(self) -> dict:
         return {
             'name': self.__class__.__name__,
-            'layer': self.forward_layer.get_config()
+            'layer': self.forward_layer.get_config(),
+            'backward_layer': self.backward_layer.get_config()
         }
 
     @staticmethod
     def from_config(config: dict) -> 'Bidirectional':
         forward_layer = LSTM.from_config(config['layer'])
         layer = Bidirectional(forward_layer)
+        if config.get('backward_layer'):
+            layer.backward_layer = LSTM.from_config(config['backward_layer'])
         return layer
 
 
@@ -2091,6 +2093,21 @@ class Unidirectional(Layer):
 
     def __str__(self) -> str:
         return f'Unidirectional(layer={str(self.layer)})'
+
+    @property
+    def return_sequences(self) -> bool:
+        return self.layer.return_sequences
+
+    @property
+    def random_state(self) -> int | None:
+        return self.layer.random_state
+
+    @random_state.setter
+    def random_state(self, value: int | None) -> None:
+        self.layer.random_state = value
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return _prefixed_parameters('layer', self.layer)
 
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         return self.layer.forward_pass(input_data, training)
@@ -2316,6 +2333,7 @@ class GRUCell:
                 cell.Wh = np.array(w['Wh'])
                 cell.Uh = np.array(w['Uh'])
                 cell.bh = np.array(w['bh'])
+                cell._init_gradients()
         return cell
 
 
@@ -2338,6 +2356,14 @@ class GRU(Layer):
 
     def __str__(self) -> str:
         return f'GRU(units={self.units}, return_sequences={self.return_sequences}, random_state={self.random_state}, clip_value={self.clip_value})'
+
+    PARAMETER_NAMES = ['Wr', 'Ur', 'br', 'Wz', 'Uz', 'bz', 'Wh', 'Uh', 'bh']
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.cell is None or self.cell.Wr is None:
+            return []
+        return [(name, getattr(self.cell, name), getattr(self.cell, 'd' + name, None))
+                for name in self.PARAMETER_NAMES]
 
     def forward_pass(self, x: np.ndarray, training: bool = True) -> np.ndarray:
         if x.ndim != 3:
@@ -2364,8 +2390,8 @@ class GRU(Layer):
             h = self.cell.forward(x_t, h)
             if self.return_sequences:
                 all_h.append(h)
-            if training:
-                self.cache.append(self.cell.cache)
+            # kept in inference mode too, so that gradients can be computed w.r.t. the inputs (e.g. in GANs)
+            self.cache.append(self.cell.cache)
 
         self.last_h = h
 
@@ -2386,8 +2412,6 @@ class GRU(Layer):
 
         self.cell._init_gradients()
 
-        squared_norm_sum = 0.0
-
         for t in reversed(range(timesteps)):
             dh = output_error[:, t, :] + dh_next
 
@@ -2395,19 +2419,17 @@ class GRU(Layer):
             dx_t, dh_next = self.cell.backward(dh)
             dx[:, t, :] = dx_t
 
-            squared_norm_sum += (np.sum(dx_t ** 2) +
-                                 np.sum(self.cell.dWr ** 2) + np.sum(self.cell.dUr ** 2) + np.sum(self.cell.dbr ** 2) +
-                                 np.sum(self.cell.dWz ** 2) + np.sum(self.cell.dUz ** 2) + np.sum(self.cell.dbz ** 2) +
-                                 np.sum(self.cell.dWh ** 2) + np.sum(self.cell.dUh ** 2) + np.sum(self.cell.dbh ** 2))
+        # clipping by the global norm of the final gradients (the weight gradients are accumulated over time,
+        # they must only be counted once)
+        gradient_names = ['d' + name for name in self.PARAMETER_NAMES]
+        squared_norm_sum = np.sum(dx ** 2) + sum(np.sum(getattr(self.cell, name) ** 2) for name in gradient_names)
 
         global_norm = np.sqrt(squared_norm_sum)
         scaling_factor = min(1.0, self.clip_value / (global_norm + 1e-8))
         if scaling_factor < 1.0:
             dx *= scaling_factor
-            for grad in self.cell.__dict__:
-                if grad.startswith('d'):
-                    setattr(self.cell, grad, getattr(
-                        self.cell, grad) * scaling_factor)
+            for name in gradient_names:
+                setattr(self.cell, name, getattr(self.cell, name) * scaling_factor)
 
         return dx
 
@@ -2456,23 +2478,16 @@ class Attention(Layer):
 
         self.cache['input_shape'] = input_data.shape
         self.cache['input'] = input_data
-        scores = np.zeros((batch_size, seq_length, seq_length))
 
-        for i in range(batch_size):
-            if self.score_mode == "dot":
-                scores[i] = np.dot(input_data[i], input_data[i].T)
-                if self.use_scale:
-                    scores[i] *= 1.0 / np.sqrt(features)
+        # self-attention: queries, keys and values are the inputs
+        scores = np.matmul(input_data, np.transpose(input_data, (0, 2, 1)))
+        if self.use_scale:
+            scores = scores / np.sqrt(features)
 
-        attention_weights = np.zeros_like(scores)
-        for i in range(batch_size):
-            attention_weights[i] = self._softmax(scores[i])
-
+        attention_weights = self._softmax(scores)
         self.cache['attention_weights'] = attention_weights
 
-        context = np.zeros_like(input_data)
-        for i in range(batch_size):
-            context[i] = np.dot(attention_weights[i], input_data[i])
+        context = np.matmul(attention_weights, input_data)
 
         if not self.return_sequences:
             context = np.mean(context, axis=1)
@@ -2484,30 +2499,22 @@ class Attention(Layer):
         input_data = self.cache['input']
 
         if not self.return_sequences:
-            output_error = np.expand_dims(output_error, 1)
-            output_error = np.repeat(output_error, seq_length, axis=1)
+            # the context was averaged over the sequence
+            output_error = np.repeat(np.expand_dims(output_error, 1), seq_length, axis=1) / seq_length
 
-        d_input = np.zeros((batch_size, seq_length, features))
+        # context = A @ X
+        d_weights = np.matmul(output_error, np.transpose(input_data, (0, 2, 1)))
+        d_input = np.matmul(np.transpose(attention_weights, (0, 2, 1)), output_error)
 
-        for i in range(batch_size):
-            d_context = output_error[i]
+        # softmax
+        d_scores = attention_weights * (d_weights - np.sum(d_weights * attention_weights, axis=-1, keepdims=True))
 
-            d_weights = np.dot(d_context, input_data[i].T)
+        if self.use_scale:
+            d_scores = d_scores / np.sqrt(features)
 
-            d_scores = d_weights * attention_weights[i]
-            d_scores -= attention_weights[i] * np.sum(
-                d_weights * attention_weights[i], axis=-1, keepdims=True)
+        # scores = X @ X^T, X being used on both sides
+        d_input += np.matmul(d_scores + np.transpose(d_scores, (0, 2, 1)), input_data)
 
-            if self.use_scale:
-                d_scores *= 1.0 / np.sqrt(features)
-
-            d_input[i] = np.dot(attention_weights[i].T, d_context)
-
-            if self.score_mode == "dot":
-                d_scores_sym = (d_scores + d_scores.T) / 2
-                d_input[i] += np.dot(d_scores_sym, input_data[i])
-
-        self.cache.clear()
         return d_input
 
     @staticmethod
@@ -2538,27 +2545,31 @@ class Conv2DTranspose(Layer):
                  padding: str = 'valid', weights_init: str = "default", bias_init: str = "default",
                  random_state: int = None, **kwargs):
         self.filters = filters
-        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
-        self.strides = (strides, strides) if isinstance(strides, int) else strides
+        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else tuple(kernel_size)
+        self.strides = (strides, strides) if isinstance(strides, int) else tuple(strides)
         self.padding = padding
-        
+
         self.weights = None
         self.bias = None
         self.d_weights = None
         self.d_bias = None
-        
+
         self.weights_init = weights_init
         self.bias_init = bias_init
         self.random_state = random_state
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
-    
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.weights is None:
+            return []
+        return [('weights', self.weights, self.d_weights), ('bias', self.bias, self.d_bias)]
+
     def initialize_weights(self, input_shape: tuple):
         _, _, _, in_channels = input_shape
-        
-        self.rng = np.random.default_rng(
-            self.random_state if self.random_state is not None else int(time.time_ns()))
+
+        self.rng = _new_rng(self.random_state)
         
         if self.weights_init == "xavier":
             self.weights = self.rng.normal(0, np.sqrt(2 / (np.prod(self.kernel_size) * self.filters)),
@@ -2593,70 +2604,73 @@ class Conv2DTranspose(Layer):
         self.input = input_data
         batch_size, in_height, in_width, in_channels = input_data.shape
         kernel_height, kernel_width, out_channels, _ = self.weights.shape
-        
+
+        geometry = self._geometry(input_data.shape)
+        full_height, full_width, pad_top, pad_left, out_height, out_width, kept_height, kept_width = geometry
+
+        # each input pixel scatters (input value * kernel) on the output: this is the col2im operation
+        cols = np.dot(input_data.reshape(-1, in_channels), self._flatten_weights(self.weights))
+        full_output = col2im_2d(cols, (batch_size, full_height, full_width, out_channels),
+                                kernel_height, kernel_width, self.strides, 0)
+
         if self.padding == 'same':
-            out_height = in_height * self.strides[0]
-            out_width = in_width * self.strides[1]
-            pad_height = max((in_height - 1) * self.strides[0] + kernel_height - out_height, 0)
-            pad_width = max((in_width - 1) * self.strides[1] + kernel_width - out_width, 0)
-            pad_top = pad_height // 2
-            pad_bottom = pad_height - pad_top
-            pad_left = pad_width // 2
-            pad_right = pad_width - pad_left
+            output = np.zeros((batch_size, out_height, out_width, out_channels))
+            output[:, :kept_height, :kept_width, :] = full_output[:, pad_top:pad_top + kept_height,
+                                                                  pad_left:pad_left + kept_width, :]
         else:
-            out_height = (in_height - 1) * self.strides[0] + kernel_height
-            out_width = (in_width - 1) * self.strides[1] + kernel_width
-            pad_top = pad_bottom = pad_left = pad_right = 0
-
-        padded_output = np.zeros((batch_size, out_height + pad_top + pad_bottom,
-                                out_width + pad_left + pad_right, out_channels))
-
-        for h in range(in_height):
-            for w in range(in_width):
-                h_start = h * self.strides[0]
-                w_start = w * self.strides[1]
-                
-                out_slice = padded_output[:, h_start:h_start + kernel_height,
-                                        w_start:w_start + kernel_width, :]
-                
-                for c in range(in_channels):
-                    weight_slice = self.weights[:, :, :, c]
-                    input_val = input_data[:, h, w, c:c+1]
-                    out_slice += np.expand_dims(weight_slice, 0) * np.expand_dims(input_val, (1, 2))
-
-        if self.padding == 'valid':
-            output = padded_output
-        else:
-            output = padded_output[:, pad_top:pad_top + out_height,
-                                 pad_left:pad_left + out_width, :]
+            output = full_output
 
         return output + self.bias
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
-        batch_size = output_error.shape[0]
-        kernel_height, kernel_width, out_channels, in_channels = self.weights.shape
+        batch_size, in_height, in_width, in_channels = self.input.shape
+        kernel_height, kernel_width, out_channels, _ = self.weights.shape
 
-        d_input = np.zeros_like(self.input)
-        self.d_weights = np.zeros_like(self.weights)
-        self.d_bias = np.sum(output_error, axis=(0, 1, 2), keepdims=True)
+        geometry = self._geometry(self.input.shape)
+        full_height, full_width, pad_top, pad_left, _, _, kept_height, kept_width = geometry
 
-        for h in range(d_input.shape[1]):
-            for w in range(d_input.shape[2]):
-                h_start = h * self.strides[0]
-                w_start = w * self.strides[1]
-                
-                error_field = output_error[:, h_start:h_start + kernel_height,
-                                        w_start:w_start + kernel_width, :]
-                
-                if error_field.shape[1:3] == (kernel_height, kernel_width):
-                    for c in range(in_channels):
-                        weight_slice = self.weights[:, :, :, c]
-                        d_input[:, h, w, c] = np.sum(error_field * weight_slice, axis=(1, 2, 3))
-                        
-                        for b in range(batch_size):
-                            self.d_weights[:, :, :, c] += error_field[b] * self.input[b, h, w, c]
+        # gradient w.r.t. the output before cropping (the cropped values do not contribute to the loss)
+        full_error = np.zeros((batch_size, full_height, full_width, out_channels))
+        full_error[:, pad_top:pad_top + kept_height, pad_left:pad_left + kept_width, :] = \
+            output_error[:, :kept_height, :kept_width, :]
+
+        cols = im2col_2d(full_error, kernel_height, kernel_width, self.strides, 0)
+        flat_weights = self._flatten_weights(self.weights)
+
+        d_input = np.dot(cols, flat_weights.T).reshape(self.input.shape)
+        d_flat_weights = np.dot(self.input.reshape(-1, in_channels).T, cols)
+        self.d_weights = d_flat_weights.reshape(
+            in_channels, out_channels, kernel_height, kernel_width).transpose(2, 3, 1, 0)
+        self.d_bias = np.sum(output_error, axis=(0, 1, 2), keepdims=True).reshape(self.bias.shape)
 
         return d_input
+
+    @staticmethod
+    def _flatten_weights(weights: np.ndarray) -> np.ndarray:
+        # (kernel_height, kernel_width, filters, in_channels) -> (in_channels, filters * kernel_height * kernel_width),
+        # the columns being ordered like the ones of im2col_2d/col2im_2d
+        return weights.transpose(3, 2, 0, 1).reshape(weights.shape[3], -1)
+
+    def _geometry(self, input_shape: tuple) -> tuple:
+        _, in_height, in_width, _ = input_shape
+        kernel_height, kernel_width = self.weights.shape[:2]
+
+        full_height = (in_height - 1) * self.strides[0] + kernel_height
+        full_width = (in_width - 1) * self.strides[1] + kernel_width
+
+        if self.padding == 'same':
+            out_height = in_height * self.strides[0]
+            out_width = in_width * self.strides[1]
+            pad_top = max(full_height - out_height, 0) // 2
+            pad_left = max(full_width - out_width, 0) // 2
+        else:
+            out_height, out_width = full_height, full_width
+            pad_top = pad_left = 0
+
+        kept_height = min(out_height, full_height - pad_top)
+        kept_width = min(out_width, full_width - pad_left)
+
+        return full_height, full_width, pad_top, pad_left, out_height, out_width, kept_height, kept_width
 
     def __str__(self) -> str:
         return f'Conv2DTranspose(filters={self.filters}, kernel_size={self.kernel_size}, strides={self.strides}, padding={self.padding})'
@@ -2689,6 +2703,8 @@ class Conv2DTranspose(Layer):
         if config['weights'] is not None:
             layer.weights = np.array(config['weights'])
             layer.bias = np.array(config['bias'])
+            layer.d_weights = np.zeros_like(layer.weights)
+            layer.d_bias = np.zeros_like(layer.bias)
         return layer
 
 
@@ -2726,36 +2742,34 @@ class UpSampling2D(Layer):
             output = np.repeat(
                 np.repeat(input_data, height_factor, axis=1), width_factor, axis=2)
 
-        elif self.interpolation in ['bilinear', 'bicubic']:
-            output_height = height * height_factor
-            output_width = width * width_factor
-
-            y = np.linspace(0, height - 1, output_height)
-            x = np.linspace(0, width - 1, output_width)
-            x_grid, y_grid = np.meshgrid(x, y)
-
-            y0 = np.floor(y_grid).astype(int)
-            x0 = np.floor(x_grid).astype(int)
-            y1 = np.minimum(y0 + 1, height - 1)
-            x1 = np.minimum(x0 + 1, width - 1)
-
-            wy = y_grid - y0
-            wx = x_grid - x0
-
-            wy = wy[:, :, np.newaxis]
-            wx = wx[:, :, np.newaxis]
-
-            output = np.zeros((batch_size, output_height,
-                              output_width, channels), dtype=input_data.dtype)
-
-            for b in range(batch_size):
-                top = (1 - wx) * input_data[b, y0,
-                                            x0] + wx * input_data[b, y0, x1]
-                bottom = (1 - wx) * \
-                    input_data[b, y1, x0] + wx * input_data[b, y1, x1]
-                output[b] = (1 - wy) * top + wy * bottom
+        elif self.interpolation in ['bilinear', 'bicubic']:  # bicubic is approximated by a bilinear interpolation
+            output = sum(weight * input_data[:, rows, cols]
+                         for rows, cols, weight in self._bilinear_neighbours(height, width))
 
         return output
+
+    def _bilinear_neighbours(self, height: int, width: int) -> list:
+        """The 4 neighbours (rows, cols, weight) used to interpolate each output pixel."""
+        height_factor, width_factor = self.size
+        output_height = height * height_factor
+        output_width = width * width_factor
+
+        y = np.linspace(0, height - 1, output_height)
+        x = np.linspace(0, width - 1, output_width)
+        x_grid, y_grid = np.meshgrid(x, y)
+
+        y0 = np.floor(y_grid).astype(int)
+        x0 = np.floor(x_grid).astype(int)
+        y1 = np.minimum(y0 + 1, height - 1)
+        x1 = np.minimum(x0 + 1, width - 1)
+
+        wy = (y_grid - y0)[:, :, np.newaxis]
+        wx = (x_grid - x0)[:, :, np.newaxis]
+
+        return [(y0, x0, (1 - wy) * (1 - wx)),
+                (y0, x1, (1 - wy) * wx),
+                (y1, x0, wy * (1 - wx)),
+                (y1, x1, wy * wx)]
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         batch_size, height, width, channels = self.input.shape
@@ -2771,32 +2785,11 @@ class UpSampling2D(Layer):
             input_error = output_error_reshaped.sum(axis=(2, 4))
 
         else:  # bilinear
-            output_height = height * height_factor
-            output_width = width * width_factor
+            input_error = np.zeros(self.input.shape)
 
-            y = np.linspace(0, height - 1, output_height)
-            x = np.linspace(0, width - 1, output_width)
-            x_grid, y_grid = np.meshgrid(x, y)
-
-            y0 = np.floor(y_grid).astype(int)
-            x0 = np.floor(x_grid).astype(int)
-            y1 = np.minimum(y0 + 1, height - 1)
-            x1 = np.minimum(x0 + 1, width - 1)
-
-            wy = (y_grid - y0)[:, :, np.newaxis]
-            wx = (x_grid - x0)[:, :, np.newaxis]
-
-            input_error = np.zeros_like(self.input)
-
-            for b in range(batch_size):
-                input_error[b, y0, x0] += ((1 - wy) * (1 - wx)
-                                           * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y0, x1] += ((1 - wy) *
-                                           wx * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y1, x0] += (wy * (1 - wx)
-                                           * output_error[b]).sum(axis=(0, 1))
-                input_error[b, y1, x1] += (wy * wx *
-                                           output_error[b]).sum(axis=(0, 1))
+            # several output pixels share the same neighbours: the contributions must be accumulated
+            for rows, cols, weight in self._bilinear_neighbours(height, width):
+                np.add.at(input_error, (slice(None), rows, cols), weight * output_error)
 
         return input_error
 
@@ -2848,8 +2841,9 @@ class MultiHeadAttention(Layer):
         self.key_dense: Dense = None
         self.value_dense: Dense = None
         self.output_dense: Dense = None
+        # dropout applied on the attention weights during training
         self.dropout: Dropout = Dropout(
-            dropout_rate, random_state=random_state) if dropout_rate > 0 else None
+            dropout_rate, random_state=_offset_seed(random_state, 4)) if dropout_rate > 0 else None
 
         self.scale = 1.0 / np.sqrt(self.key_dim)
 
@@ -2861,12 +2855,20 @@ class MultiHeadAttention(Layer):
     def __str__(self) -> str:
         return f'MultiHeadAttention(num_heads={self.num_heads}, key_dim={self.key_dim})'
 
-    def build_dense_layer(self, units: int, input_shape: tuple[int, ...]) -> Dense:
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return (_prefixed_parameters('query_dense', self.query_dense) +
+                _prefixed_parameters('key_dense', self.key_dense) +
+                _prefixed_parameters('value_dense', self.value_dense) +
+                _prefixed_parameters('output_dense', self.output_dense))
+
+    def build_dense_layer(self, units: int, input_shape: tuple[int, ...], seed_offset: int = 0) -> Dense:
         return Dense(
             units=units,
             weights_init=self.kernel_initializer,
-            bias_init=self.bias_initializer if self.use_bias else None,
-            random_state=self.random_state
+            bias_init=self.bias_initializer if self.use_bias else "zeros",
+            # different seeds, otherwise the query, key and value projections would be initialized identically
+            random_state=_offset_seed(self.random_state, seed_offset),
+            use_bias=self.use_bias
         )
 
     def initialize_weights(self, input_shape: tuple[int, ...]) -> None:
@@ -2874,49 +2876,53 @@ class MultiHeadAttention(Layer):
 
         if self.query_dense is None:
             self.query_dense = self.build_dense_layer(
-                self.num_heads * self.key_dim, input_shape)
+                self.num_heads * self.key_dim, input_shape, 0)
             self.key_dense = self.build_dense_layer(
-                self.num_heads * self.key_dim, input_shape)
+                self.num_heads * self.key_dim, input_shape, 1)
             self.value_dense = self.build_dense_layer(
-                self.num_heads * self.value_dim, input_shape)
+                self.num_heads * self.value_dim, input_shape, 2)
 
         output_dim: int = self.output_shape if self.output_shape else embedding_dim
         if self.output_dense is None:
-            self.output_dense = self.build_dense_layer(output_dim, input_shape)
+            self.output_dense = self.build_dense_layer(output_dim, input_shape, 3)
 
     def _reshape_for_attention(self, x: np.ndarray, batch_size: int, seq_length: int) -> np.ndarray:
         x = np.reshape(x, (batch_size, seq_length, self.num_heads, -1))
         return np.transpose(x, (0, 2, 1, 3))
+
+    def _merge_heads(self, x: np.ndarray) -> np.ndarray:
+        batch_size, _, seq_length, _ = x.shape
+        return np.reshape(np.transpose(x, (0, 2, 1, 3)), (batch_size, seq_length, -1))
 
     def _scaled_dot_product_attention(self, query: np.ndarray, key: np.ndarray,
                                       value: np.ndarray, mask: np.ndarray = None,
                                       training: bool = True) -> np.ndarray:
 
         if self.normalize_attention:
-            query_norm = np.sqrt(
+            self.query_norm = np.sqrt(
                 np.sum(query * query, axis=-1, keepdims=True) + 1e-6)
-            key_norm = np.sqrt(
+            self.key_norm = np.sqrt(
                 np.sum(key * key, axis=-1, keepdims=True) + 1e-6)
 
-            query_normalized = query / query_norm
-            key_normalized = key / key_norm
+            self.query_normalized = query / self.query_norm
+            self.key_normalized = key / self.key_norm
 
-            scaled_attention_logits = np.matmul(query_normalized, np.transpose(
-                key_normalized, (0, 1, 3, 2)))
+            scaled_attention_logits = np.matmul(self.query_normalized, np.transpose(
+                self.key_normalized, (0, 1, 3, 2)))
         else:
             matmul_qk = np.matmul(query, np.transpose(key, (0, 1, 3, 2)))
-            
+
             d_k = key.shape[-1]
             scaling_factor = np.sqrt(d_k)
             scaled_attention_logits = matmul_qk / scaling_factor
 
-        MASKING_VALUE = -1e9
-        if mask is not None:
-            scaled_attention_logits += (mask * MASKING_VALUE)
-
         attention_weights = self._softmax_with_mask(
             scaled_attention_logits, mask)
         self.attention_weights = attention_weights
+
+        if self.dropout is not None:
+            attention_weights = self.dropout.forward_pass(attention_weights, training=training)
+        self.dropped_attention_weights = attention_weights
 
         output = np.matmul(attention_weights, value)
 
@@ -2924,6 +2930,8 @@ class MultiHeadAttention(Layer):
 
     def _softmax_with_mask(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
         if mask is not None:
+            # masked positions (mask == 1) get a zero probability
+            mask = np.asarray(mask).astype(bool)
             x_masked = np.where(mask, -1e9, x)
             max_x = np.max(x_masked, axis=-1, keepdims=True)
             exp_x = np.exp(x_masked - max_x)
@@ -2974,9 +2982,7 @@ class MultiHeadAttention(Layer):
             training
         )
 
-        scaled_attention = np.transpose(scaled_attention, (0, 2, 1, 3))
-        concat_attention = np.reshape(scaled_attention,
-                                      (batch_size, -1, self.num_heads * self.value_dim))
+        concat_attention = self._merge_heads(scaled_attention)
 
         output = self.output_dense.forward_pass(concat_attention)
         return output
@@ -2984,49 +2990,47 @@ class MultiHeadAttention(Layer):
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         batch_size = output_error.shape[0]
         query_seq_length = output_error.shape[1]
-        key_value_seq_length = self.reshaped_value.shape[2]
 
-        d_attention_output = np.reshape(output_error,
-                                        (batch_size, query_seq_length, self.num_heads, -1))
-        d_attention_output = normalize_gradient(d_attention_output)
-        d_attention_output = np.transpose(d_attention_output, (0, 2, 1, 3))
+        d_concat_attention = self.output_dense.backward_pass(output_error)
 
+        d_attention_output = self._reshape_for_attention(
+            d_concat_attention, batch_size, query_seq_length)
+
+        # output = A @ V (A possibly modified by the dropout)
+        d_values = np.matmul(np.transpose(self.dropped_attention_weights, (0, 1, 3, 2)), d_attention_output)
         d_attention = np.matmul(d_attention_output, np.transpose(
             self.reshaped_value, (0, 1, 3, 2)))
+        if self.dropout is not None:
+            d_attention = self.dropout.backward_pass(d_attention)
+
+        # softmax (masked positions have a zero probability, hence a zero gradient)
         attention_probs = self.attention_weights
         dot = np.sum(d_attention * attention_probs, axis=-1, keepdims=True)
-        d_attention_probs = d_attention - dot
-        d_attention_probs = d_attention_probs * attention_probs
+        d_logits = attention_probs * (d_attention - dot)
 
-        d_values = np.matmul(attention_probs.transpose(
-            0, 1, 3, 2), d_attention_output)
-        d_query = np.matmul(d_attention_probs, self.reshaped_key)
-        d_key = np.matmul(d_attention_probs.transpose(
-            0, 1, 3, 2), self.reshaped_query)
+        if self.normalize_attention:
+            # logits = normalized(Q) @ normalized(K)^T
+            d_query_normalized = np.matmul(d_logits, self.key_normalized)
+            d_key_normalized = np.matmul(np.transpose(d_logits, (0, 1, 3, 2)), self.query_normalized)
 
-        d_values = normalize_gradient(d_values)
-        d_query = normalize_gradient(d_query)
-        d_key = normalize_gradient(d_key)
+            d_query = (d_query_normalized - self.query_normalized * np.sum(
+                d_query_normalized * self.query_normalized, axis=-1, keepdims=True)) / self.query_norm
+            d_key = (d_key_normalized - self.key_normalized * np.sum(
+                d_key_normalized * self.key_normalized, axis=-1, keepdims=True)) / self.key_norm
+        else:
+            # logits = Q @ K^T / sqrt(d_k)
+            scaling_factor = np.sqrt(self.reshaped_key.shape[-1])
+            d_query = np.matmul(d_logits, self.reshaped_key) / scaling_factor
+            d_key = np.matmul(np.transpose(d_logits, (0, 1, 3, 2)), self.reshaped_query) / scaling_factor
 
-        d_query = np.transpose(d_query, (0, 2, 1, 3))
-        d_key = np.transpose(d_key, (0, 2, 1, 3))
-        d_values = np.transpose(d_values, (0, 2, 1, 3))
-
-        final_dim = self.num_heads * self.key_dim
-        d_query = np.reshape(
-            d_query, (batch_size, query_seq_length, final_dim))
-        d_key = np.reshape(
-            d_key, (batch_size, key_value_seq_length, final_dim))
-        d_values = np.reshape(
-            d_values, (batch_size, key_value_seq_length, final_dim))
-
-        d_query = self.query_dense.backward_pass(d_query)
-        d_key = self.key_dense.backward_pass(d_key)
-        d_value = self.value_dense.backward_pass(d_values)
+        d_query = self.query_dense.backward_pass(self._merge_heads(d_query))
+        d_key = self.key_dense.backward_pass(self._merge_heads(d_key))
+        d_value = self.value_dense.backward_pass(self._merge_heads(d_values))
 
         if self.is_cross_attention:
             return d_query, d_key, d_value
-        return d_query
+        # in self-attention, the same input is used for the queries, the keys and the values
+        return d_query + d_key + d_value
 
     def _softmax(self, x: np.ndarray) -> np.ndarray:
         exp_x: np.ndarray = np.exp(x - np.max(x, axis=-1, keepdims=True))
@@ -3047,7 +3051,7 @@ class MultiHeadAttention(Layer):
             'normalize_attention': self.normalize_attention,
             'random_state': self.random_state
         }
-        
+
         if self.query_dense is not None:
             config.update({
                 'query_dense': self.query_dense.get_config(),
@@ -3055,10 +3059,10 @@ class MultiHeadAttention(Layer):
                 'value_dense': self.value_dense.get_config(),
                 'output_dense': self.output_dense.get_config()
             })
-        
+
         if self.dropout is not None:
             config['dropout'] = self.dropout.get_config()
-        
+
         return config
 
     @staticmethod
@@ -3076,16 +3080,16 @@ class MultiHeadAttention(Layer):
             normalize_attention=config.get('normalize_attention', False),
             random_state=config['random_state']
         )
-        
+
         if 'query_dense' in config:
             layer.query_dense = Dense.from_config(config['query_dense'])
             layer.key_dense = Dense.from_config(config['key_dense'])
             layer.value_dense = Dense.from_config(config['value_dense'])
             layer.output_dense = Dense.from_config(config['output_dense'])
-        
+
         if 'dropout' in config:
             layer.dropout = Dropout.from_config(config['dropout'])
-        
+
         return layer
 
 
@@ -3131,18 +3135,24 @@ class PositionalEncoding(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if not self.trainable or self.weights is None:
+            return []
+        return [('weights', self.weights, self.d_weights)]
+
     def _build_positional_encoding(self) -> None:
-        """Construit l'encodage positionnel sinusoïdal standard"""
+        """Builds the standard sinusoidal positional encoding"""
         position = np.arange(self.max_sequence_length, dtype=np.float32)[:, np.newaxis]
-        
+
         div_term = np.power(
             10000.0,
             np.arange(0, self.embedding_dim, 2, dtype=np.float32) / self.embedding_dim
         )
-        
+
         pe = np.zeros((self.max_sequence_length, self.embedding_dim), dtype=np.float32)
         pe[:, 0::2] = np.sin(position / div_term)
-        pe[:, 1::2] = np.cos(position / div_term)
+        # with an odd embedding dimension, there is one cosine column less than sine columns
+        pe[:, 1::2] = np.cos(position / div_term[:self.embedding_dim // 2])
         
         self.weights = pe[np.newaxis, :, :]
         
@@ -3163,9 +3173,9 @@ class PositionalEncoding(Layer):
         progress = self.current_step / self.warmup_steps
         return self.initial_scale + (self.final_scale - self.initial_scale) * progress
 
-    def forward_pass(self, input_data: np.ndarray) -> np.ndarray:
+    def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         batch_size, seq_len, embedding_dim = input_data.shape
-        
+
         if seq_len > self.max_sequence_length:
             raise ValueError(
                 f"Sequence length {seq_len} exceeds maximum {self.max_sequence_length}"
@@ -3187,25 +3197,27 @@ class PositionalEncoding(Layer):
         scaled_pos_encoding = pos_encoding * self.current_scale
         
         output = scaled_embeddings + scaled_pos_encoding
-        
+
         if self.dropout is not None:
-            output = self.dropout.forward_pass(output, training=True)
-        
+            output = self.dropout.forward_pass(output, training=training)
+
         self._update_metadata(input_data, scaled_pos_encoding)
-        
+
         return output
 
     def backward_pass(self, output_error: np.ndarray) -> np.ndarray:
         if self.dropout is not None:
             output_error = self.dropout.backward_pass(output_error)
-        
+
         if self.trainable:
             batch_size, seq_len, _ = output_error.shape
-            
+
             pos_gradient = output_error * self.current_scale
-            
-            self.d_weights[:, :seq_len, :] += np.sum(pos_gradient, axis=0, keepdims=True)
-            
+
+            # the gradient of this step only (it must not be accumulated over the training steps)
+            self.d_weights = np.zeros_like(self.weights)
+            self.d_weights[:, :seq_len, :] = np.sum(pos_gradient, axis=0, keepdims=True)
+
             self.current_step += 1
         
         dx = output_error * self.embedding_scale
@@ -3327,11 +3339,11 @@ class FeedForward(Layer):
             units=d_model,
             weights_init=output_initializer,
             bias_init=bias_initializer,
-            random_state=random_state
+            random_state=_offset_seed(random_state, 1)
         )
 
         self.activation = Activation.from_name(activation)
-        self.dropout = Dropout(dropout_rate, random_state=random_state)
+        self.dropout = Dropout(dropout_rate, random_state=_offset_seed(random_state, 2))
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -3339,13 +3351,13 @@ class FeedForward(Layer):
     def __str__(self) -> str:
         return f'FeedForward(d_ff={self.d_ff}, d_model={self.d_model})'
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return _prefixed_parameters('dense1', self.dense1) + _prefixed_parameters('dense2', self.dense2)
+
     def forward_pass(self, input_data: np.ndarray, training: bool = True) -> np.ndarray:
         x = self.dense1.forward_pass(input_data)
         x = self.activation.forward_pass(x)
-
-        if training:
-            x = self.dropout.forward_pass(x, training=True)
-
+        x = self.dropout.forward_pass(x, training=training)
         x = self.dense2.forward_pass(x)
         return x
 
@@ -3372,31 +3384,38 @@ class FeedForward(Layer):
         config.update({
             'dense1': self.dense1.get_config(),
             'dense2': self.dense2.get_config(),
-            'activation': self.activation.get_config(),
+            'activation_layer': self.activation.get_config(),
             'dropout': self.dropout.get_config() if self.dropout is not None else None
         })
-        
+
         return config
 
     @staticmethod
     def from_config(config: dict) -> "FeedForward":
+        activation = config['activation']
+        # older versions saved the configuration of the activation layer under the 'activation' key
+        activation_layer_config = config.get('activation_layer') or (activation if isinstance(activation, dict) else None)
+        if isinstance(activation, dict):
+            activation = activation['activation_function']['name']
+
         layer = FeedForward(
             d_ff=config['d_ff'],
             d_model=config['d_model'],
             dropout_rate=config['dropout_rate'],
-            activation=config['activation'],
+            activation=activation,
             kernel_initializer=config['kernel_initializer'],
             output_initializer=config['output_initializer'],
             bias_initializer=config['bias_initializer'],
             random_state=config['random_state']
         )
-        
+
         layer.dense1 = Dense.from_config(config['dense1'])
         layer.dense2 = Dense.from_config(config['dense2'])
-        layer.activation = Activation.from_config(config['activation'])
+        if activation_layer_config is not None:
+            layer.activation = Activation.from_config(activation_layer_config)
         if config['dropout'] is not None:
             layer.dropout = Dropout.from_config(config['dropout'])
-        
+
         return layer
 
 
@@ -3473,6 +3492,11 @@ class AddNorm(Layer):
         normalized = grad / scale * warmup
         return np.clip(normalized, -self.grad_clip, self.grad_clip)
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        if self.gamma is None:
+            return []
+        return [('gamma', self.gamma, self.d_gamma), ('beta', self.beta, self.d_beta)]
+
     def forward_pass(self, inputs: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
         x, residual = inputs
         self.residual = residual
@@ -3482,9 +3506,9 @@ class AddNorm(Layer):
         if self.gamma is None:
             self.initialize_weights(combined.shape)
 
+        # layer normalization over the last axis (biased variance, consistently with the backward pass)
         self.mean = np.mean(combined, axis=-1, keepdims=True)
-        self.var = np.var(combined, axis=-1, keepdims=True,
-                          ddof=1) + self.epsilon
+        self.var = np.var(combined, axis=-1, keepdims=True) + self.epsilon
 
         std = np.sqrt(self.var)
         self.normalized = (combined - self.mean) / std
@@ -3492,32 +3516,22 @@ class AddNorm(Layer):
         self.std = std
         self.output_before_gamma = self.normalized
 
-        return self.gamma * self.normalized + self.beta
+        return self.gamma.reshape(-1) * self.normalized + self.beta.reshape(-1)
 
     def backward_pass(self, output_error: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         dY = output_error
-        B, T, F = dY.shape
-        N = F
+        axes = tuple(range(dY.ndim - 1))
 
-        x_minus_mean = self.normalized * self.std
+        self.d_gamma = np.sum(dY * self.normalized, axis=axes).reshape(self.gamma.shape)
+        self.d_beta = np.sum(dY, axis=axes).reshape(self.beta.shape)
 
-        d_gamma = np.sum(dY * self.normalized, axis=(0, 1), keepdims=True)
-        d_beta = np.sum(dY, axis=(0, 1), keepdims=True)
+        d_normalized = dY * self.gamma.reshape(-1)
 
-        d_normalized = dY * self.gamma
+        dx = (d_normalized -
+              np.mean(d_normalized, axis=-1, keepdims=True) -
+              self.normalized * np.mean(d_normalized * self.normalized, axis=-1, keepdims=True)) / self.std
 
-        d_var = np.sum(d_normalized * x_minus_mean * (-0.5) /
-                       (self.std**3), axis=-1, keepdims=True)
-
-        d_mean = np.sum(d_normalized * (-1.0 / self.std), axis=-1, keepdims=True) \
-            + d_var * np.mean(-2.0 * x_minus_mean, axis=-1, keepdims=True)
-
-        dx = (d_normalized / self.std) + \
-            (d_var * 2.0 * x_minus_mean / N) + (d_mean / N)
-
-        self.d_gamma = d_gamma
-        self.d_beta = d_beta
-
+        # the output depends on x + residual: both get the same gradient
         return dx, dx
 
     def __str__(self) -> str:
@@ -3593,6 +3607,7 @@ class TransformerEncoderLayer(Layer):
         self.d_ff = d_ff
         self.activation = activation
         self.dropout_rate = dropout_rate
+        self.attention_dropout_rate = attention_dropout
         self.random_state = random_state
         self.kernel_initializer = kernel_initializer
         self.bias_initializer = bias_initializer
@@ -3617,12 +3632,13 @@ class TransformerEncoderLayer(Layer):
             activation=activation,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state
+            random_state=_offset_seed(random_state, 10)
         )
 
+        # residual dropouts with their own seeds (the same seed would give the same masks)
         self.attention_dropout = Dropout(
-            dropout_rate, random_state=random_state)
-        self.ffn_dropout = Dropout(dropout_rate, random_state=random_state)
+            dropout_rate, random_state=_offset_seed(random_state, 20))
+        self.ffn_dropout = Dropout(dropout_rate, random_state=_offset_seed(random_state, 21))
 
         norm_config = {
             'epsilon': 1e-6,
@@ -3638,22 +3654,26 @@ class TransformerEncoderLayer(Layer):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return (_prefixed_parameters('attention', self.attention) +
+                _prefixed_parameters('ffn', self.ffn) +
+                _prefixed_parameters('attention_norm', self.attention_norm) +
+                _prefixed_parameters('ffn_norm', self.ffn_norm))
+
     def forward_pass(self, inputs: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         self.x = inputs
         attn_output = self.attention.forward_pass(
             self.x, mask=mask, training=training)
 
-        if training:
-            attn_output = self.attention_dropout.forward_pass(
-                attn_output, training=True)
+        attn_output = self.attention_dropout.forward_pass(
+            attn_output, training=training)
 
         attn_output = self.attention_norm.forward_pass((attn_output, self.x))
 
         ffn_output = self.ffn.forward_pass(attn_output, training=training)
 
-        if training:
-            ffn_output = self.ffn_dropout.forward_pass(
-                ffn_output, training=True)
+        ffn_output = self.ffn_dropout.forward_pass(
+            ffn_output, training=training)
 
         output = self.ffn_norm.forward_pass((ffn_output, attn_output))
 
@@ -3686,13 +3706,13 @@ class TransformerEncoderLayer(Layer):
             'num_heads': self.num_heads,
             'd_ff': self.d_ff,
             'dropout_rate': self.dropout_rate,
-            'attention_dropout': self.attention_dropout,
+            'attention_dropout_rate': self.attention_dropout_rate,
             'activation': self.activation,
             'kernel_initializer': self.kernel_initializer,
             'bias_initializer': self.bias_initializer,
             'random_state': self.random_state
         }
-        
+
         config.update({
             'attention': self.attention.get_config(),
             'ffn': self.ffn.get_config(),
@@ -3701,17 +3721,19 @@ class TransformerEncoderLayer(Layer):
             'attention_norm': self.attention_norm.get_config(),
             'ffn_norm': self.ffn_norm.get_config()
         })
-        
+
         return config
 
     @staticmethod
     def from_config(config: dict) -> "TransformerEncoderLayer":
+        # 'attention_dropout' holds the configuration of the residual dropout layer, not the dropout rate
+        attention_dropout_rate = config.get('attention_dropout_rate', config['attention'].get('dropout_rate', 0.0))
         layer = TransformerEncoderLayer(
             d_model=config['d_model'],
             num_heads=config['num_heads'],
             d_ff=config['d_ff'],
             dropout_rate=config['dropout_rate'],
-            attention_dropout=config['attention_dropout'],
+            attention_dropout=attention_dropout_rate,
             activation=config['activation'],
             kernel_initializer=config['kernel_initializer'],
             bias_initializer=config['bias_initializer'],
@@ -3761,13 +3783,14 @@ class TransformerDecoderLayer(Layer):
             random_state=random_state,
         )
 
+        # different seeds, otherwise both attentions (and the feed forward network) would start identical
         self.cross_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=d_model // num_heads,
             dropout_rate=attention_dropout,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state,
+            random_state=_offset_seed(random_state, 5),
         )
 
         self.ffn = FeedForward(
@@ -3777,12 +3800,13 @@ class TransformerDecoderLayer(Layer):
             activation=activation,
             kernel_initializer=kernel_initializer,
             bias_initializer=bias_initializer,
-            random_state=random_state
+            random_state=_offset_seed(random_state, 10)
         )
 
-        self.dropout1 = Dropout(dropout_rate, random_state=random_state)
-        self.dropout2 = Dropout(dropout_rate, random_state=random_state)
-        self.dropout3 = Dropout(dropout_rate, random_state=random_state)
+        # residual dropouts with their own seeds (the same seed would give the same masks)
+        self.dropout1 = Dropout(dropout_rate, random_state=_offset_seed(random_state, 20))
+        self.dropout2 = Dropout(dropout_rate, random_state=_offset_seed(random_state, 21))
+        self.dropout3 = Dropout(dropout_rate, random_state=_offset_seed(random_state, 22))
 
         self.norm1 = AddNorm(random_state=random_state)
         self.norm2 = AddNorm(random_state=random_state)
@@ -3792,6 +3816,14 @@ class TransformerDecoderLayer(Layer):
 
     def __str__(self) -> str:
         return f'TransformerDecoderLayer(d_model={self.d_model}, num_heads={self.num_heads})'
+
+    def get_trainable_parameters(self) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        return (_prefixed_parameters('self_attention', self.self_attention) +
+                _prefixed_parameters('cross_attention', self.cross_attention) +
+                _prefixed_parameters('ffn', self.ffn) +
+                _prefixed_parameters('norm1', self.norm1) +
+                _prefixed_parameters('norm2', self.norm2) +
+                _prefixed_parameters('norm3', self.norm3))
 
     def forward_pass(
         self,
@@ -3807,8 +3839,7 @@ class TransformerDecoderLayer(Layer):
         # Self attention
         attn1 = self.self_attention.forward_pass(
             x, mask=self_attention_mask, training=training)
-        if training:
-            attn1 = self.dropout1.forward_pass(attn1, training=True)
+        attn1 = self.dropout1.forward_pass(attn1, training=training)
         out1 = self.norm1.forward_pass((attn1, x))
         self.cache['attn1'] = attn1
         self.cache['out1'] = out1
@@ -3820,16 +3851,14 @@ class TransformerDecoderLayer(Layer):
             training=training
         )
 
-        if training:
-            attn2 = self.dropout2.forward_pass(attn2, training=True)
+        attn2 = self.dropout2.forward_pass(attn2, training=training)
         out2 = self.norm2.forward_pass((attn2, out1))
         self.cache['attn2'] = attn2
         self.cache['out2'] = out2
 
         # Feed forward
         ffn_out = self.ffn.forward_pass(out2, training=training)
-        if training:
-            ffn_out = self.dropout3.forward_pass(ffn_out, training=True)
+        ffn_out = self.dropout3.forward_pass(ffn_out, training=training)
         out3 = self.norm3.forward_pass((ffn_out, out2))
         self.cache['ffn_out'] = ffn_out
 

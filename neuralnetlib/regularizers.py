@@ -23,8 +23,8 @@ class Regularizer(ABC):
             'L1L2': L1L2,
             'OrthogonalRegularizer': OrthogonalRegularizer
         }
-        name = config.pop('name')
-        return regularizer_map[name](**config)
+        params = {k: v for k, v in config.items() if k != 'name'}
+        return regularizer_map[config['name']](**params)
 
 
 class L1(Regularizer):

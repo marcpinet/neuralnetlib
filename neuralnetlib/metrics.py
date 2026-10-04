@@ -1,3 +1,6 @@
+import inspect
+import math
+
 import numpy as np
 
 from collections import namedtuple
@@ -13,15 +16,25 @@ def _reshape_inputs(y_pred: np.ndarray, y_true: np.ndarray) -> tuple[np.ndarray,
     return y_pred, y_true
 
 
+def _trapezoid(y: np.ndarray, x: np.ndarray) -> float:
+    # np.trapz was removed from recent NumPy versions (replaced by np.trapezoid)
+    integrate = getattr(np, 'trapezoid', None) or getattr(np, 'trapz')
+    return float(integrate(y, x))
+
+
 class Metric:
     def __init__(self, name: str):
-        if isinstance(name, str):
+        if isinstance(name, Metric):
+            self.function = name.function
+            self.name = name.name
+        elif isinstance(name, str):
             self.function = self._get_function_by_name(name)
-            self.name = self._get_function_by_name(
-                name).__name__.split("_score")[0]
+            self.name = self.function.__name__.split("_score")[0]
         elif callable(name):
             self.function = name
-            self.name = name.__name__.split("_score")[0]
+            self.name = getattr(name, '__name__', type(name).__name__).split("_score")[0]
+        else:
+            raise ValueError(f"Metric {name} is not supported.")
 
     def _get_function_by_name(self, name: str):
         if name in ['accuracy', 'accuracy_score', 'accuracy-score', 'acc']:
@@ -70,23 +83,46 @@ class Metric:
             raise ValueError(f"Metric {name} is not supported.")
 
     def __call__(self, y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-        y_pred, y_true = _reshape_inputs(y_pred, y_true)
+        try:
+            y_pred, y_true = _reshape_inputs(y_pred, y_true)
+        except ValueError:
+            # ragged inputs (e.g. lists of tokens for the ROUGE scores) are given as is
+            pass
 
-        if y_pred.ndim == 1:
-            y_pred = y_pred.reshape(-1, 1)
+        # the threshold is only given to the metrics using one (it would be taken as another parameter otherwise,
+        # e.g. the n-gram size of ROUGE-N or the sigma of the MMD)
+        try:
+            parameters = inspect.signature(self.function).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if 'threshold' in parameters:
+            return self.function(y_pred, y_true, threshold=threshold)
+        return self.function(y_pred, y_true)
 
-        if y_true.ndim == 1:
-            y_true = y_true.reshape(-1, 1)
 
-        return self.function(y_pred, y_true, threshold)
+def _class_predictions(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+    """Predicted and true classes, whatever the format of the labels: binary probabilities, one-hot encoded labels,
+    or class indices (sparse labels). Sequences of predictions (batch_size, timesteps, n_classes) are supported."""
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true)
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+
+    if y_pred.shape[-1] == 1:
+        return (y_pred >= threshold).astype(int).reshape(-1), y_true.reshape(-1)
+
+    pred_classes = np.argmax(y_pred, axis=-1)
+    if y_true.shape == y_pred.shape:
+        true_classes = np.argmax(y_true, axis=-1)
+    else:
+        # class indices, possibly with a trailing axis of size 1
+        true_classes = y_true.reshape(pred_classes.shape)
+    return pred_classes.reshape(-1), true_classes.reshape(-1)
 
 
 def accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-    y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int)
-        return np.mean(y_pred_classes == y_true)
-    return np.mean(np.argmax(y_pred, axis=1) == np.argmax(y_true, axis=1))
+    y_pred_classes, y_true_classes = _class_predictions(y_pred, y_true, threshold)
+    return float(np.mean(y_pred_classes == y_true_classes))
 
 
 def sparse_categorical_accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
@@ -110,14 +146,12 @@ def sparse_categorical_accuracy_score(y_pred: np.ndarray, y_true: np.ndarray, th
 
 def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int)
-        true_positives = np.sum((y_pred_classes == 1) & (y_true == 1))
+    y_pred_classes, y_true_classes = _class_predictions(y_pred, y_true, threshold)
+    if y_pred.shape[-1] == 1:
+        true_positives = np.sum((y_pred_classes == 1) & (y_true_classes == 1))
         predicted_positives = np.sum(y_pred_classes == 1)
         return true_positives / predicted_positives if predicted_positives > 0 else 0.0
 
-    y_pred_classes = np.argmax(y_pred, axis=1)
-    y_true_classes = np.argmax(y_true, axis=1)
     precisions = [
         np.sum((y_pred_classes == cls) & (y_true_classes == cls)) /
         np.sum(y_pred_classes == cls)
@@ -128,14 +162,12 @@ def precision_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0
 
 def recall_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int)
-        true_positives = np.sum((y_pred_classes == 1) & (y_true == 1))
-        actual_positives = np.sum(y_true == 1)
+    y_pred_classes, y_true_classes = _class_predictions(y_pred, y_true, threshold)
+    if y_pred.shape[-1] == 1:
+        true_positives = np.sum((y_pred_classes == 1) & (y_true_classes == 1))
+        actual_positives = np.sum(y_true_classes == 1)
         return true_positives / actual_positives if actual_positives > 0 else 0.0
 
-    y_pred_classes = np.argmax(y_pred, axis=1)
-    y_true_classes = np.argmax(y_true, axis=1)
     recalls = [
         np.sum((y_pred_classes == cls) & (y_true_classes == cls)) /
         np.sum(y_true_classes == cls)
@@ -152,15 +184,12 @@ def f1_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> 
 
 def confusion_matrix(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
-    if y_pred.shape[1] == 1:
-        y_pred_classes = (y_pred >= threshold).astype(int).ravel()
-        y_true_classes = y_true.ravel()
-    else:
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true_classes = np.argmax(y_true, axis=1)
+    y_pred_classes, y_true_classes = _class_predictions(y_pred, y_true, threshold)
+    y_pred_classes = y_pred_classes.astype(int)
+    y_true_classes = y_true_classes.astype(int)
 
-    classes = np.unique(np.concatenate([y_true_classes, y_pred_classes]))
-    n_classes = len(classes)
+    # the classes are used as indices: the matrix must cover all of them, even the ones never seen in this data
+    n_classes = int(max(np.max(y_true_classes), np.max(y_pred_classes), y_pred.shape[-1] - 1, 1)) + 1
     cm = np.zeros((n_classes, n_classes), dtype=int)
 
     for i in range(len(y_true_classes)):
@@ -255,7 +284,7 @@ def roc_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5
     tpr = np.r_[0, tpr]
     fpr = np.r_[0, fpr]
 
-    return np.trapz(tpr, fpr)
+    return _trapezoid(tpr, fpr)
 
 
 def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
@@ -288,7 +317,7 @@ def pr_auc_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5)
     last_ind = precision.size
     sl = slice(0, last_ind)
 
-    return np.trapz(precision[sl], recall[sl])
+    return _trapezoid(precision[sl], recall[sl])
 
 
 def mean_squared_error(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
@@ -307,7 +336,7 @@ def mean_absolute_percentage_error(y_pred: np.ndarray, y_true: np.ndarray, thres
     return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
 
-def r2_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+def r2_score(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
     y_pred, y_true = _reshape_inputs(y_pred, y_true)
 
     if y_pred.shape[1] == 1:
@@ -412,6 +441,18 @@ def rouge_n_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n: int
     def get_ngrams(sequence, n):
         return [tuple(sequence[i:i + n]) for i in range(len(sequence) - n + 1)]
 
+    def count_matches(pred_ngrams, ref_ngrams):
+        # clipped counts: an n-gram of the prediction cannot match more times than it appears in the reference
+        ref_counts = {}
+        for ngram in ref_ngrams:
+            ref_counts[ngram] = ref_counts.get(ngram, 0) + 1
+        matches = 0
+        for ngram in pred_ngrams:
+            if ref_counts.get(ngram, 0) > 0:
+                ref_counts[ngram] -= 1
+                matches += 1
+        return matches
+
     recall_total = 0
     precision_total = 0
     for pred, refs in zip(y_pred, y_true):
@@ -420,13 +461,16 @@ def rouge_n_score(y_pred: list[list[str]], y_true: list[list[list[str]]], n: int
 
         pred_count = len(pred_ngrams)
         max_matches = 0
+        best_ref_count = 0
 
         for ref_ngrams in ref_ngrams_list:
-            ref_count = len(ref_ngrams)
-            matches = sum(1 for ngram in pred_ngrams if ngram in ref_ngrams)
-            max_matches = max(max_matches, matches)
+            matches = count_matches(pred_ngrams, ref_ngrams)
+            if matches > max_matches or (matches == max_matches and best_ref_count == 0):
+                max_matches = matches
+                best_ref_count = len(ref_ngrams)
 
-        recall_total += max_matches / ref_count if ref_count > 0 else 0
+        # the recall is computed with the reference giving the best match
+        recall_total += max_matches / best_ref_count if best_ref_count > 0 else 0
         precision_total += max_matches / pred_count if pred_count > 0 else 0
 
     recall_avg = recall_total / len(y_pred)
@@ -477,17 +521,17 @@ def rouge_l_score(y_pred: list[list[str]], y_true: list[list[list[str]]]) -> flo
 
 
 def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None, random_state: float = None) -> float:
-    def normalize(x):
-        x_min = x.min()
-        x_max = x.max()
-        return 2 * (x - x_min) / (x_max - x_min + 1e-8) - 1
-    
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = y_pred.reshape(len(y_pred), -1)
     y_true = y_true.reshape(len(y_true), -1)
-    
-    y_pred = normalize(y_pred)
-    y_true = normalize(y_true)
-    
+
+    # both sets are scaled to [-1, 1] with the same range: normalizing them independently would hide their differences
+    x_min = min(y_pred.min(), y_true.min())
+    x_max = max(y_pred.max(), y_true.max())
+    y_pred = 2 * (y_pred - x_min) / (x_max - x_min + 1e-8) - 1
+    y_true = 2 * (y_true - x_min) / (x_max - x_min + 1e-8) - 1
+
     def gaussian_kernel(x: np.ndarray, y: np.ndarray, sigma: float) -> np.ndarray:
         x_squared = np.sum(x**2, axis=1, keepdims=True)
         y_squared = np.sum(y**2, axis=1, keepdims=True).T
@@ -495,14 +539,17 @@ def mmd_score(y_pred: np.ndarray, y_true: np.ndarray, sigma: float = None, rando
         dist_matrix = x_squared + y_squared - 2 * xy
         dist_matrix = np.clip(dist_matrix, 0, None)
         return np.exp(-dist_matrix / (2 * sigma**2))
-    
+
     if sigma is None:
-        n_samples = min(1000, len(y_pred))
+        # median heuristic on the pooled samples
+        pooled = np.concatenate([y_pred, y_true])
+        n_samples = min(1000, len(pooled))
         rng = np.random.default_rng(random_state)
-        indices = rng.choice(len(y_pred), n_samples, replace=False)
-        subset = y_pred[indices]
+        indices = rng.choice(len(pooled), n_samples, replace=False)
+        subset = pooled[indices]
         dists = np.linalg.norm(subset[:, np.newaxis] - subset, axis=2)
-        sigma = np.median(dists[dists > 0])
+        positive_dists = dists[dists > 0]
+        sigma = np.median(positive_dists) if positive_dists.size > 0 else 1.0
         if sigma < 1e-10:
             sigma = 1.0
     
@@ -549,30 +596,56 @@ def pearsonr(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     df = n - 2
     t_stat = r * np.sqrt(df / (1 - r**2))
 
+    # two-sided p-value of the Student's t-test: P(|T| >= |t|) = I_x(df / 2, 1 / 2) with x = df / (df + t^2)
     x_beta = df / (df + t_stat**2)
-    p_value = 2 * regularized_incomplete_beta(df / 2, 0.5, x_beta)
+    p_value = regularized_incomplete_beta(df / 2, 0.5, x_beta)
 
     return np.array(r), np.array(p_value)
 
 
+def _beta_continued_fraction(a: float, b: float, x: float, max_iter: int = 300, eps: float = 3e-16) -> float:
+    """Continued fraction of the incomplete beta function (modified Lentz's method, Numerical Recipes)."""
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, max_iter + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            break
+    return h
+
+
 def regularized_incomplete_beta(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta function I_x(a, b)."""
     if x <= 0.0:
         return 0.0
     if x >= 1.0:
         return 1.0
 
-    ln_term = a * np.log(x) + b * np.log(1 - x)
-    sum_term = 1.0
-    term = 1.0
+    log_front = (math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) +
+                 a * math.log(x) + b * math.log(1 - x))
+    front = math.exp(log_front)
 
-    for k in range(1, 100):
-        term *= (a + k - 1) * x / (k * (b + k - 1))
-        sum_term += term
-        if term < 1e-15:
-            break
-
-    result = np.exp(ln_term) * sum_term / a
-    return result
+    # the continued fraction converges quickly for x < (a + 1) / (a + b + 2), the symmetry relation is used otherwise
+    if x < (a + 1) / (a + b + 2):
+        return front * _beta_continued_fraction(a, b, x) / a
+    return 1.0 - front * _beta_continued_fraction(b, a, 1 - x) / b
 
 
 def kurtosis(x: np.ndarray, fisher: bool = True) -> float:
@@ -589,12 +662,13 @@ def kurtosis(x: np.ndarray, fisher: bool = True) -> float:
 
     if m2 <= 1e-15:
         return np.nan
-    
-    kurt = (n * m4) / (m2**2)
-    
+
+    # m2 and m4 are already averaged over the n samples
+    kurt = m4 / (m2**2)
+
     if fisher:
         kurt -= 3
-    
+
     return kurt
 
 
@@ -613,7 +687,8 @@ def skew(x: np.ndarray) -> float:
     if m2 <= 1e-15:
         return np.nan
 
-    skewness = (n * m3) / (m2**1.5)
+    # m2 and m3 are already averaged over the n samples
+    skewness = m3 / (m2**1.5)
     return skewness
 
 
@@ -647,22 +722,25 @@ def subset_accuracy(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0
 
 
 def jaccard_similarity(y_pred: np.ndarray, y_true: np.ndarray, threshold: float = 0.5) -> float:
-    predictions = (y_pred >= threshold).astype(int)
-    
+    predictions = np.asarray(y_pred) >= threshold
+    y_true = np.asarray(y_true).astype(bool)
+
     intersection = np.sum(predictions & y_true, axis=1)
     union = np.sum(predictions | y_true, axis=1)
-    
+
     return np.mean(intersection / (union + 1e-15))
 
 
-def precision_at_k(y_pred: np.ndarray, y_true: np.ndarray, k: int) -> float:
-    batch_size = y_true.shape[0]
-    topk_pred = np.zeros_like(y_pred)
-    
-    for i in range(batch_size):
-        top_k_indices = np.argsort(y_pred[i])[-k:]
-        topk_pred[i, top_k_indices] = 1
-        
+def precision_at_k(y_pred: np.ndarray, y_true: np.ndarray, k: int = 5) -> float:
+    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(y_true).astype(bool)
+    k = int(min(k, y_pred.shape[1]))
+
+    # the k labels with the highest scores of each sample are predicted
+    topk_pred = np.zeros(y_pred.shape, dtype=bool)
+    top_k_indices = np.argsort(y_pred, axis=1)[:, -k:]
+    np.put_along_axis(topk_pred, top_k_indices, True, axis=1)
+
     true_positives = np.sum(topk_pred & y_true, axis=1)
     return np.mean(true_positives / k)
 
@@ -740,39 +818,49 @@ def adjusted_mutual_info_score(y_pred: np.ndarray, y_true: np.ndarray) -> float:
         
     if np.array_equal(y_true, y_pred):
         return 1.0
-        
-    classes = np.unique(y_true)
-    clusters = np.unique(y_pred)
+
+    classes, class_indices = np.unique(y_true, return_inverse=True)
+    clusters, cluster_indices = np.unique(y_pred, return_inverse=True)
+
+    # a single cluster in both labelings (or one cluster per sample in both) is a perfect match
+    if len(classes) == len(clusters) == 1 or len(classes) == len(clusters) == len(y_true):
+        return 1.0
+
     contingency = np.zeros((len(classes), len(clusters)), dtype=np.int64)
-    
-    for i in range(len(y_true)):
-        contingency[np.nonzero(classes == y_true[i])[0][0],
-                   np.nonzero(clusters == y_pred[i])[0][0]] += 1
-                   
-    contingency = contingency.astype(np.float64)
-    
+    np.add.at(contingency, (class_indices, cluster_indices), 1)
+
     a = np.sum(contingency, axis=1)
     b = np.sum(contingency, axis=0)
-    n = np.sum(contingency)
-    
+    n = int(np.sum(contingency))
+
     eps = np.finfo(float).eps
-    h_true = -np.sum((a[a > 0] / n) * np.log(a[a > 0] / n))
-    h_pred = -np.sum((b[b > 0] / n) * np.log(b[b > 0] / n))
-    
-    MI = 0.0
-    for i in range(len(classes)):
-        for j in range(len(clusters)):
-            if contingency[i, j] > 0:
-                MI += (contingency[i, j] / n) * \
-                      np.log((contingency[i, j] * n) / (a[i] * b[j]))
-                      
-    if h_true == 0 or h_pred == 0:
-        return 0.0
-        
-    denominator = (h_true + h_pred) / 2
-    if denominator < eps:
-        return 0.0
-        
-    nmi = MI / denominator
-    
-    return float(np.clip(nmi, 0.0, 1.0))
+    h_true = -np.sum((a / n) * np.log(a / n))
+    h_pred = -np.sum((b / n) * np.log(b / n))
+
+    nonzero = contingency > 0
+    outer = np.outer(a, b).astype(np.float64)
+    MI = np.sum((contingency[nonzero] / n) * np.log(contingency[nonzero] * n / outer[nonzero]))
+
+    # expected mutual information under the hypergeometric model of randomness (Vinh et al., 2009)
+    log_factorials = np.zeros(n + 1)
+    log_factorials[1:] = np.cumsum(np.log(np.arange(1, n + 1)))
+    expected_MI = 0.0
+    for a_i in a:
+        for b_j in b:
+            n_ij = np.arange(max(1, a_i + b_j - n), min(a_i, b_j) + 1)
+            if n_ij.size == 0:
+                continue
+            log_probability = (log_factorials[a_i] + log_factorials[b_j] + log_factorials[n - a_i] +
+                               log_factorials[n - b_j] - log_factorials[n] - log_factorials[n_ij] -
+                               log_factorials[a_i - n_ij] - log_factorials[b_j - n_ij] -
+                               log_factorials[n - a_i - b_j + n_ij])
+            expected_MI += np.sum((n_ij / n) * np.log(n * n_ij / (a_i * b_j)) * np.exp(log_probability))
+
+    normalizer = (h_true + h_pred) / 2
+    denominator = normalizer - expected_MI
+    if denominator < 0:
+        denominator = min(denominator, -eps)
+    else:
+        denominator = max(denominator, eps)
+
+    return float((MI - expected_MI) / denominator)

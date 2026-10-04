@@ -20,14 +20,25 @@ class ActivationFunction:
         if not name:
             raise ValueError('Config must contain "name" field')
 
-        constructor_params = {k: v for k, v in config.items() 
-                            if k not in ['name', 'config']}
+        constructor_params = {k: v for k, v in config.items()
+                              if k not in ['name', 'config']}
+        # Activation layers store the activation config under a nested "config" key
+        nested_config = config.get('config') or {}
+        constructor_params.update({k: v for k, v in nested_config.items() if k != 'name'})
 
         for activation_class in ActivationFunction.__subclasses__():
             if activation_class.__name__ == name:
                 return activation_class(**constructor_params)
 
         raise ValueError(f'Unknown activation function: {name}')
+
+    @staticmethod
+    def from_name(name: str) -> "ActivationFunction":
+        normalized_name = name.lower().replace("_", "").replace("-", "")
+        for activation_class in ActivationFunction.__subclasses__():
+            if activation_class.__name__.lower() == normalized_name:
+                return activation_class()
+        raise ValueError(f"No activation function found for the name: {name}")
 
 
 class Sigmoid(ActivationFunction):
@@ -67,12 +78,16 @@ class Tanh(ActivationFunction):
 
 class Softmax(ActivationFunction):
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        exps = np.exp(x - np.max(x, axis=1, keepdims=True))
-        return exps / np.sum(exps, axis=1, keepdims=True)
+        exps = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        return exps / np.sum(exps, axis=-1, keepdims=True)
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         raise NotImplementedError(
-            "Derivative of Softmax is not implemented. It is not needed for backpropagation.")
+            "The derivative of Softmax is a Jacobian, use Softmax.backward (the Activation layer does it for you).")
+
+    def backward(self, output: np.ndarray, output_error: np.ndarray) -> np.ndarray:
+        """Jacobian-vector product of the softmax, computed from its output."""
+        return output * (output_error - np.sum(output_error * output, axis=-1, keepdims=True))
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
@@ -94,7 +109,7 @@ class LeakyReLU(ActivationFunction):
         self.alpha = alpha
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        return np.maximum(x, x * self.alpha)
+        return np.where(x > 0, x, x * self.alpha)
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
         return np.where(x > 0, 1.0, self.alpha)
@@ -111,10 +126,10 @@ class LeakyReLU(ActivationFunction):
 
 class ELU(ActivationFunction):
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        return np.where(x > 0, x, np.exp(x) - 1)
+        return np.where(x > 0, x, np.expm1(np.minimum(x, 0)))
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
-        return np.where(x > 0, 1.0, np.exp(x))
+        return np.where(x > 0, 1.0, np.exp(np.minimum(x, 0)))
 
     def get_config(self) -> dict:
         return {"name": self.__class__.__name__}
@@ -133,10 +148,10 @@ class SELU(ActivationFunction):
         self.scale = scale if scale is not None else SELU.DEFAULT_SCALE
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        return self.scale * np.where(x > 0, x, self.alpha * (np.exp(x) - 1))
+        return self.scale * np.where(x > 0, x, self.alpha * np.expm1(np.minimum(x, 0)))
 
     def derivative(self, x: np.ndarray) -> np.ndarray:
-        return self.scale * np.where(x > 0, 1, self.alpha * np.exp(x))
+        return self.scale * np.where(x > 0, 1, self.alpha * np.exp(np.minimum(x, 0)))
 
     def get_config(self) -> dict:
         return {
