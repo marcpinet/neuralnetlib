@@ -36,6 +36,8 @@ You can install the library using pip:
 pip install neuralnetlib
 ```
 
+The only dependency is NumPy (Python 3.10+). The plotting features (`plot_decision_boundary`, `plot_generated`) also need matplotlib (`pip install matplotlib`).
+
 ## 💡 How to use
 
 ## Basic usage

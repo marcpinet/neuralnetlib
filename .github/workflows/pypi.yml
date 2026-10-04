@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'setup.py'
+  workflow_dispatch:
 
 jobs:
   check-version-changed:
@@ -15,29 +16,20 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-      - name: Fetch all history for all tags and branches
-        run: git fetch --unshallow
-      - name: Check if version changed
+      - name: Check if the version is already on PyPI
         id: version-change
         run: |
-          # Get the latest commit on main before the merge
-          MAIN_COMMIT=$(git rev-parse origin/main^1)
+          VERSION=$(grep -Po "version='\K.*?(?=')" setup.py)
+          echo "Version: $VERSION"
 
-          # Get the version from the main branch before the merge
-          MAIN_VERSION=$(git show "$MAIN_COMMIT:setup.py" | grep -Po "version='\K.*?(?=')")
-
-          # Get the version from the latest commit on the incoming branch
-          HEAD_VERSION=$(grep -Po "version='\K.*?(?=')" setup.py)
-
-          echo "Main version: $MAIN_VERSION"
-          echo "Head version: $HEAD_VERSION"
-
-          # Compare versions
-          if [ "$MAIN_VERSION" != "$HEAD_VERSION" ]; then
-            echo "Version changed"
+          # The version is published when PyPI knows it. Comparing with the previous commit would miss the version
+          # bumps that are not the last commit of a push.
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/neuralnetlib/$VERSION/json")
+          if [ "$STATUS" = "404" ]; then
+            echo "Version $VERSION is not on PyPI yet"
             echo "version_changed=true" >> $GITHUB_OUTPUT
           else
-            echo "Version not changed"
+            echo "Version $VERSION is already on PyPI (HTTP status $STATUS)"
             echo "version_changed=false" >> $GITHUB_OUTPUT
           fi
 
@@ -55,11 +47,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+          pip install build twine
+          pip install -r requirements.txt
+      - name: Run Unit Tests
+        run: |
+          python -m unittest discover tests
       - name: Build and publish
         env:
           TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
         run: |
-          python setup.py sdist bdist_wheel
+          python -m build
+          twine check dist/*
           twine upload dist/*

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'setup.py'
+  workflow_dispatch:
 
 jobs:
   check-version-changed:
@@ -15,30 +16,20 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-      - name: Fetch all history for all tags and branches
-        run: git fetch --unshallow
-      - name: Check if version changed
+      - name: Check if the version is already released
         id: version-change
         run: |
-          # Get the latest commit on main before the merge
-          MAIN_COMMIT=$(git rev-parse origin/main^1)
+          VERSION=$(grep -Po "version='\K.*?(?=')" setup.py)
+          echo "Version: $VERSION"
 
-          # Get the version from the main branch before the merge
-          MAIN_VERSION=$(git show "$MAIN_COMMIT:setup.py" | grep -Po "version='\K.*?(?=')")
-
-          # Get the version from the latest commit on the incoming branch
-          HEAD_VERSION=$(grep -Po "version='\K.*?(?=')" setup.py)
-
-          echo "Main version: $MAIN_VERSION"
-          echo "Head version: $HEAD_VERSION"
-
-          # Compare versions
-          if [ "$MAIN_VERSION" != "$HEAD_VERSION" ]; then
-            echo "Version changed"
-            echo "version_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "Version not changed"
+          # The version is released when its tag exists. Comparing with the previous commit would miss the version
+          # bumps that are not the last commit of a push.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "Tag v$VERSION already exists"
             echo "version_changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "No tag v$VERSION yet"
+            echo "version_changed=true" >> $GITHUB_OUTPUT
           fi
 
   release:
@@ -58,10 +49,6 @@ jobs:
         id: get_version
         run: |
           echo "VERSION=$(python setup.py --version)" >> $GITHUB_OUTPUT
-      - name: Get last tag
-        id: get_last_tag
-        run: |
-          echo "LAST_TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
       - name: Create and Push Tag
         run: |
           git config --local user.email "action@github.com"
@@ -70,20 +57,28 @@ jobs:
           git tag $NEW_TAG
           git push origin $NEW_TAG
       - name: Generate Release Notes
-        id: generate_release_notes
         run: |
-          NEW_TAG="v${{ steps.get_version.outputs.VERSION }}"
-          LAST_TAG=$(git describe --tags --abbrev=0 $NEW_TAG^)
-          # Ensure release notes do not cause format errors
-          RELEASE_NOTES=$(git log $LAST_TAG...$NEW_TAG --pretty=format:"- %s" --reverse | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          NEW_TAG="v$VERSION"
+
+          # The section of the version in CHANGELOG.md ("## [x.y.z] ..." up to the next "## " heading)
+          awk -v version="$VERSION" '
+            /^## / { if (found) exit; if (index($0, "[" version "]")) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release_notes.md 2> /dev/null || true
+
+          # Otherwise, the commit messages since the previous tag
+          if [ -z "$(tr -d '[:space:]' < release_notes.md)" ]; then
+            LAST_TAG=$(git describe --tags --abbrev=0 "$NEW_TAG^")
+            git log "$LAST_TAG...$NEW_TAG" --pretty=format:"- %s" --reverse > release_notes.md
+          fi
+
+          cat release_notes.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           name: "neuralnetlib ${{ steps.get_version.outputs.VERSION }}"
           tag_name: v${{ steps.get_version.outputs.VERSION }}
-          body: ${{ steps.generate_release_notes.outputs.RELEASE_NOTES }}
+          body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

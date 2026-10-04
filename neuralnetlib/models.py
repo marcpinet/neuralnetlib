@@ -3,8 +3,6 @@ import inspect
 import json
 import time
 import logging
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 from abc import ABC, abstractmethod
 from functools import lru_cache
@@ -408,6 +406,9 @@ class Sequential(BaseModel):
 
         if plot_decision_boundary and not is_interactive() and not is_display_available():
             raise ValueError("Cannot display the plot. Please run the script in an environment with a display.")
+        if plot_decision_boundary:
+            # matplotlib is only needed for the plots
+            import matplotlib.pyplot as plt
 
         x_train = np.array(x_train) if not isinstance(x_train, np.ndarray) else x_train
         y_train = np.array(y_train) if not isinstance(y_train, np.ndarray) else y_train
@@ -810,6 +811,9 @@ class Sequential(BaseModel):
         return model
 
     def __update_plot(self, epoch: int, x_train: np.ndarray, y_train: np.ndarray, random_state: int | None) -> None:
+        import matplotlib
+        import matplotlib.pyplot as plt
+
         if not plt.fignum_exists(1):
             if matplotlib.get_backend() != "TkAgg":
                 matplotlib.use("TkAgg")
@@ -3038,6 +3042,8 @@ class GAN(BaseModel):
 
     def _plot_samples(self, noise: np.ndarray, epoch: int, labels: np.ndarray | None = None,
                     grid_size: tuple[int, int] = (8, 8)):
+        import matplotlib.pyplot as plt
+
         n_rows, n_cols = grid_size
         n_samples = n_rows * n_cols
 
