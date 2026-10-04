@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='neuralnetlib',
-    version='4.4.0',
+    version='5.0.0',
     author='Marc Pinet',
     description='A flexible deep learning framework built from scratch using only NumPy',
     long_description=open('README.md', encoding="utf-8").read(),
@@ -13,7 +13,7 @@ setup(
         'numpy',
     ],
     classifiers=[
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Education',
         'Intended Audience :: Developers',
         'Intended Audience :: Science/Research',
