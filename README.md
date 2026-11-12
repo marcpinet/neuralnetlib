@@ -1,5 +1,7 @@
 # Neuralnetlib
 
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/neuralnetlib?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLUE&right_color=ORANGE&left_text=downloads)](https://pepy.tech/projects/neuralnetlib)
+
 ## 📝 Description
 
 This is a handmade machine and deep learning framework library, made in python, **using numpy as its only external dependency**.
